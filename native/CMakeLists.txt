@@ -1,0 +1,39 @@
+cmake_minimum_required(VERSION 3.24)
+project(G1RMCPNative LANGUAGES C CXX)
+
+if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "G1R MCP требует Windows x64")
+endif()
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+add_compile_definitions(WIN32_LEAN_AND_MEAN NOMINMAX)
+include(FetchContent)
+set(JSON_BuildTests OFF CACHE INTERNAL "")
+FetchContent_Declare(json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.12.0 GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(json)
+FetchContent_Declare(minhook
+    GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
+    GIT_TAG 8af6b4acae5a9388fd742b56fa79ece89d96f823)
+FetchContent_MakeAvailable(minhook)
+
+add_library(g1r_mcp_transport STATIC src/transport.cpp)
+target_include_directories(g1r_mcp_transport PUBLIC include)
+target_link_libraries(g1r_mcp_transport PUBLIC nlohmann_json::nlohmann_json ws2_32)
+target_compile_options(g1r_mcp_transport PRIVATE /utf-8 /W4)
+
+add_library(g1r_mcp_native SHARED src/entry.cpp src/game_access.cpp)
+target_include_directories(g1r_mcp_native PRIVATE include)
+target_link_libraries(g1r_mcp_native PRIVATE g1r_mcp_transport minhook bcrypt)
+target_compile_options(g1r_mcp_native PRIVATE /utf-8 /W4 /EHsc)
+set_target_properties(g1r_mcp_native PROPERTIES OUTPUT_NAME "G1R_MCP")
+
+enable_testing()
+add_executable(native_transport_tests tests/transport_tests.cpp)
+target_link_libraries(native_transport_tests PRIVATE g1r_mcp_transport)
+target_compile_options(native_transport_tests PRIVATE /utf-8 /W4)
+add_test(NAME native_transport COMMAND native_transport_tests)
+
+add_executable(g1r_mcp_loader tools/load_bridge.cpp)
+target_compile_options(g1r_mcp_loader PRIVATE /utf-8 /W4 /EHsc)

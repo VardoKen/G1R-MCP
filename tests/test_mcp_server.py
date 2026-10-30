@@ -45,8 +45,9 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(initialized.server_info.version, __version__)
                     tools = (await client.list_tools()).tools
                     names = {tool.name for tool in tools}
-                    self.assertEqual(len(names), 7)
-                    self.assertTrue(all(tool.annotations.read_only_hint for tool in tools))
+                    self.assertEqual(len(names), 13)
+                    self.assertTrue(all(tool.annotations.read_only_hint for tool in tools if tool.name not in {"g1r_invoke", "g1r_native_enable"}))
+                    self.assertFalse(next(tool for tool in tools if tool.name == "g1r_invoke").annotations.read_only_hint)
 
                     status = await client.call_tool("g1r_status", {})
                     self.assertFalse(status.is_error)

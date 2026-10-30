@@ -1,0 +1,308 @@
+#include "g1r_mcp/game_access.hpp"
+#include "g1r_mcp/transport.hpp"
+#include <MinHook.h>
+#include <bcrypt.h>
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cmath>
+#include <cstring>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
+#include <vector>
+
+namespace g1r_mcp {
+using json = nlohmann::json;
+namespace {
+void diagnostic(const char* text) {
+    HMODULE self{};GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        reinterpret_cast<LPCWSTR>(&diagnostic),&self);
+    wchar_t path[32768]{};GetModuleFileNameW(self,path,32768);std::wstring file(path);file=file.substr(0,file.find_last_of(L"\\/"))+L"\\native-tick.log";
+    std::ofstream output(file,std::ios::app);output<<text<<"\n";
+}
+constexpr uintptr_t kObjects = 0x9e9fbd0;
+constexpr uintptr_t kNames = 0x9de8d80;
+constexpr uintptr_t kTick = 0x3fbced0;
+constexpr uintptr_t kProcessEvent = 0x13a6ad0;
+constexpr uintptr_t kFree = 0x1081690;
+constexpr const char* kHash = "0e369f64ba50aeb85925119ded60e0449dbc4917e38b46cf7251e533d422820b";
+constexpr uint8_t kTickBytes[] = {0x4c,0x8b,0xdc,0x55,0x57,0x41,0x54,0x49,0x8d,0xab,0x08,0xfc,0xff,0xff,0x48,0x81,0xec,0xe0,0x04,0x00,0x00};
+constexpr uint8_t kEventBytes[] = {0x40,0x55,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x81,0xec,0x70,0x01,0x00,0x00,0x48,0x8d,0x6c,0x24,0x30};
+
+bool copy_memory(void* destination, const void* source, size_t count) {
+    if (!source || count > 1048576) return false;
+    __try { std::memcpy(destination, source, count); return true; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+template<class T> T read(uintptr_t address) {
+    T value{};
+    if (!copy_memory(&value, reinterpret_cast<void*>(address), sizeof(T)))
+        throw HandlerError("invalid_memory", "Память объекта недоступна");
+    return value;
+}
+bool call_event(void* function, void* object, void* event, void* params) {
+    __try { reinterpret_cast<void(__fastcall*)(void*,void*,void*)>(function)(object,event,params); return true; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+void free_string(uintptr_t free_address, void* memory) {
+    if (!memory) return;
+    __try { reinterpret_cast<void(__fastcall*)(void*)>(free_address)(memory); }
+    __except(EXCEPTION_EXECUTE_HANDLER) { }
+}
+std::string utf8(const wchar_t* value, int length) {
+    if (length <= 0) return {};
+    int count = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value,length,nullptr,0,nullptr,nullptr);
+    if (!count) throw HandlerError("invalid_string", "Некорректная строка UTF-16");
+    std::string result(count,'\0');
+    WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,value,length,result.data(),count,nullptr,nullptr);
+    return result;
+}
+std::string file_hash() {
+    wchar_t path[32768]{};
+    if (!GetModuleFileNameW(nullptr,path,32768)) return {};
+    std::ifstream file(path,std::ios::binary);
+    if (!file) return {};
+    BCRYPT_ALG_HANDLE algorithm{}; BCRYPT_HASH_HANDLE hash{};
+    if (BCryptOpenAlgorithmProvider(&algorithm,BCRYPT_SHA256_ALGORITHM,nullptr,0)<0) return {};
+    DWORD object_size{}, digest_size{}, received{};
+    BCryptGetProperty(algorithm,BCRYPT_OBJECT_LENGTH,reinterpret_cast<PUCHAR>(&object_size),sizeof(object_size),&received,0);
+    BCryptGetProperty(algorithm,BCRYPT_HASH_LENGTH,reinterpret_cast<PUCHAR>(&digest_size),sizeof(digest_size),&received,0);
+    std::vector<unsigned char> object(object_size),digest(digest_size);
+    if (BCryptCreateHash(algorithm,&hash,object.data(),object_size,nullptr,0,0)<0) {BCryptCloseAlgorithmProvider(algorithm,0);return {};}
+    std::array<char,65536> buffer{};
+    while(file) {file.read(buffer.data(),buffer.size()); auto count=file.gcount(); if(count) BCryptHashData(hash,reinterpret_cast<PUCHAR>(buffer.data()),static_cast<ULONG>(count),0);}
+    BCryptFinishHash(hash,digest.data(),digest_size,0); BCryptDestroyHash(hash); BCryptCloseAlgorithmProvider(algorithm,0);
+    std::ostringstream output; output<<std::hex<<std::setfill('0'); for(auto byte:digest) output<<std::setw(2)<<static_cast<unsigned>(byte);
+    return output.str();
+}
+int limit_of(const json& params,int default_value=50) {
+    int value=params.value("limit",default_value);
+    if(value<1 || value>200) throw HandlerError("invalid_limit","Предел должен быть от 1 до 200");
+    return value;
+}
+bool contains(const std::string& value,const std::string& query) {
+    std::string a=value,b=query;
+    std::transform(a.begin(),a.end(),a.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
+    std::transform(b.begin(),b.end(),b.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
+    return a.find(b)!=std::string::npos;
+}
+std::string field_type(uintptr_t field, const std::function<std::string(uint64_t)>& get_name) {
+    auto type=read<uintptr_t>(field+8); return get_name(read<uint64_t>(type));
+}
+json scalar(uintptr_t address,const std::string& type,int size,uintptr_t field) {
+    if(type=="BoolProperty") {auto offset=read<uint8_t>(field+0x71),mask=read<uint8_t>(field+0x73);return (read<uint8_t>(address+offset)&mask)!=0;}
+    if(type=="IntProperty" && size==4) return read<int32_t>(address);
+    if(type=="Int64Property" && size==8) return read<int64_t>(address);
+    if(type=="UInt32Property" && size==4) return read<uint32_t>(address);
+    if(type=="UInt64Property" && size==8) return read<uint64_t>(address);
+    if(type=="ByteProperty" && size==1) return read<uint8_t>(address);
+    if(type=="FloatProperty" && size==4) {auto v=read<float>(address); return std::isfinite(v)?json(v):json(nullptr);}
+    if(type=="DoubleProperty" && size==8) {auto v=read<double>(address);return std::isfinite(v)?json(v):json(nullptr);}
+    if(type=="StrProperty" && size==16) {
+        auto pointer=read<uintptr_t>(address);auto count=read<int32_t>(address+8),max=read<int32_t>(address+12);
+        if(!pointer && !count) return "";
+        if(count<0 || count>32768 || max<count) throw HandlerError("invalid_string","Некорректный FString");
+        std::vector<wchar_t> text(count);
+        if(count && !copy_memory(text.data(),reinterpret_cast<void*>(pointer),count*2ull)) throw HandlerError("invalid_memory","Строка недоступна");
+        if(count && text.back()==0) text.pop_back();return utf8(text.data(),static_cast<int>(text.size()));
+    }
+    return nullptr;
+}
+}
+
+GameAccess* GameAccess::active_{};
+bool GameAccess::start() {
+    if(enabled_) return true;
+    if(file_hash()!=kHash) {startup_error_="exe_hash_mismatch";return false;}
+    base_=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    uint8_t tick[sizeof(kTickBytes)]{},event[sizeof(kEventBytes)]{};
+    if(!copy_memory(tick,reinterpret_cast<void*>(base_+kTick),sizeof(tick)) ||
+       !copy_memory(event,reinterpret_cast<void*>(base_+kProcessEvent),sizeof(event)) ||
+       std::memcmp(tick,kTickBytes,sizeof(tick)) || std::memcmp(event,kEventBytes,sizeof(event))) {
+        startup_error_="signature_mismatch";return false;
+    }
+    auto initialized=MH_Initialize();
+    if(initialized!=MH_OK && initialized!=MH_ERROR_ALREADY_INITIALIZED) {startup_error_="hook_initialize_failed";return false;}
+    active_=this;process_event_=reinterpret_cast<ProcessEventFn>(base_+kProcessEvent);
+    diagnostic("hook_create_enter");
+    if(MH_CreateHook(reinterpret_cast<void*>(base_+kTick),reinterpret_cast<void*>(&hooked_tick),reinterpret_cast<void**>(&original_tick_))!=MH_OK ||
+       MH_EnableHook(reinterpret_cast<void*>(base_+kTick))!=MH_OK) {startup_error_="tick_hook_failed";return false;}
+    diagnostic("hook_enabled");enabled_=true;return true;
+}
+void __fastcall GameAccess::hooked_tick(void* loop) {
+    static std::atomic<int> reports{0};auto count=reports.fetch_add(1);
+    if(count<2)diagnostic("tick_enter");
+    auto self=active_; if(!self) return;
+    self->original_tick_(loop);
+    if(count<2)diagnostic("tick_original_return");
+    if(self->enabled_) self->pump();
+    if(count<2)diagnostic("tick_pump_return");
+}
+json GameAccess::status() const {
+    return {{"version","1.0.0-dev.2"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+            {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&ticks_.load()>0},
+            {"build_hash",kHash},{"startup_error",startup_error_},
+            {"limitations",{"Экспериментальная привязка к одному EXE","Serial UObject не подтверждён: handle проверяет слот, указатель, класс и имя","Одно активное соединение; ссылки принадлежат его сессии","Без выгрузки DLL: завершение через закрытие игры"}}};
+}
+json GameAccess::request(const json& envelope) {
+    if(envelope.at("op")=="status") return status();
+    if(!enabled_) throw HandlerError("native_not_ready","Перехват игры не установлен: "+startup_error_);
+    auto job=std::make_shared<Job>();job->request=envelope;auto future=job->result.get_future();
+    {std::lock_guard lock(queue_mutex_);if(queue_.size()>=8)throw HandlerError("queue_full","Очередь игрового потока заполнена");queue_.push_back(job);}
+    if(future.wait_for(std::chrono::milliseconds(2500))!=std::future_status::ready) {
+        int queued=0;
+        if(job->state.compare_exchange_strong(queued,2)) throw HandlerError("game_not_pumping","Запрос отменён до начала: игровой Tick не обслужил очередь");
+        throw HandlerError("game_timeout","Ожидание закончено; принятый вызов мог выполниться");
+    }
+    return future.get();
+}
+void GameAccess::pump() {
+    if(!game_thread_.load()) game_thread_=GetCurrentThreadId();
+    if(game_thread_.load()!=GetCurrentThreadId()) return;
+    ++ticks_;
+    std::shared_ptr<Job> job;
+    {std::lock_guard lock(queue_mutex_);if(queue_.empty())return;job=queue_.front();queue_.pop_front();}
+    int queued=0;if(!job->state.compare_exchange_strong(queued,1)) return;
+    try {job->result.set_value(execute(job->request));}catch(...) {job->result.set_exception(std::current_exception());}
+    job->state=3;
+}
+
+std::string GameAccess::name(uint64_t fname) const {
+    uint32_t index=static_cast<uint32_t>(fname),number=static_cast<uint32_t>(fname>>32);
+    uint32_t block=index>>16;
+    auto current=read<uint32_t>(base_+kNames+8);
+    if(block>current || block>=8192) throw HandlerError("invalid_name","Недействительное имя");
+    auto data=read<uintptr_t>(base_+kNames+0x10+block*8ull)+(index&65535)*2ull;
+    auto header=read<uint16_t>(data);int length=header>>6;
+    if(length<1 || length>1023 || (index&65535)*2ull+2+length*((header&1)?2:1)>0x20000) throw HandlerError("invalid_name","Недействительная запись имени");
+    std::string result;
+    if(header&1) {std::vector<wchar_t> text(length);if(!copy_memory(text.data(),reinterpret_cast<void*>(data+2),length*2ull))throw HandlerError("invalid_memory","Имя недоступно");result=utf8(text.data(),length);}
+    else {std::string bytes(length,'\0');if(!copy_memory(bytes.data(),reinterpret_cast<void*>(data+2),length))throw HandlerError("invalid_memory","Имя недоступно");
+        std::wstring text; for(unsigned char byte:bytes)text.push_back(static_cast<wchar_t>(byte));result=utf8(text.data(),static_cast<int>(text.size()));}
+    if(number) result+="_"+std::to_string(number-1);return result;
+}
+std::string GameAccess::object_name(void* object) const {return name(read<uint64_t>(reinterpret_cast<uintptr_t>(object)+0x18));}
+std::string GameAccess::object_path(void* object) const {
+    std::string result;auto ptr=reinterpret_cast<uintptr_t>(object);
+    for(int depth=0;ptr && depth<32;++depth) {auto part=object_name(reinterpret_cast<void*>(ptr));result=result.empty()?part:part+"."+result;ptr=read<uintptr_t>(ptr+0x20);}return result;
+}
+void* GameAccess::slot(int index) const {
+    auto count=read<int32_t>(base_+kObjects+0x14);auto chunks=read<uintptr_t>(base_+kObjects);
+    if(count<0 || count>4000000 || index<0 || index>=count)return nullptr;
+    auto chunk_count=read<int32_t>(base_+kObjects+0x1c);
+    if((index>>16)>=chunk_count || chunk_count<1 || chunk_count>64)return nullptr;
+    auto chunk=read<uintptr_t>(chunks+(index>>16)*8ull);
+    return reinterpret_cast<void*>(read<uintptr_t>(chunk+(index&65535)*24ull));
+}
+std::string GameAccess::handle_for(void* object,int index) {
+    auto id="obj-"+std::to_string(++next_handle_);
+    auto ptr=reinterpret_cast<uintptr_t>(object);
+    handles_[id]={object,reinterpret_cast<void*>(read<uintptr_t>(ptr+0x10)),index,read<uint64_t>(ptr+0x18)};return id;
+}
+void* GameAccess::resolve(const std::string& id) {
+    auto found=handles_.find(id);if(found==handles_.end())throw HandlerError("stale_handle","Ссылка неизвестна или истекла");
+    auto& h=found->second;auto ptr=reinterpret_cast<uintptr_t>(h.object);
+    if(slot(h.index)!=h.object || read<int32_t>(ptr+0xc)!=h.index || read<uintptr_t>(ptr+0x10)!=reinterpret_cast<uintptr_t>(h.object_class) || read<uint64_t>(ptr+0x18)!=h.name)
+        throw HandlerError("stale_handle","Объект ссылки изменился");
+    if(read<uint32_t>(ptr+8)&0x18000)throw HandlerError("object_destroying","Объект начал или завершил уничтожение");
+    return h.object;
+}
+json GameAccess::object_info(void* object,int index) {
+    auto ptr=reinterpret_cast<uintptr_t>(object);return {{"handle",handle_for(object,index)},{"index",index},{"name",object_name(object)},
+        {"path",object_path(object)},{"class",object_name(reinterpret_cast<void*>(read<uintptr_t>(ptr+0x10)))},{"flags",read<uint32_t>(ptr+8)}};
+}
+json GameAccess::properties(void* object,int limit) {
+    json items=json::array();auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);bool truncated=false;
+    for(int depth=0;klass && depth<64;klass=read<uintptr_t>(klass+0x40),++depth) {
+        auto field=read<uintptr_t>(klass+0x50);auto class_size=read<int32_t>(klass+0x58);
+        for(int count=0;field && count<4096;field=read<uintptr_t>(field+0x18),++count) {
+            if(items.size()>=static_cast<size_t>(limit)){truncated=true;break;}
+            auto type=field_type(field,[this](auto f){return name(f);});auto offset=read<int32_t>(field+0x44),size=read<int32_t>(field+0x34);
+            json item={{"name",name(read<uint64_t>(field+0x20))},{"type",type},{"offset",offset},{"element_size",size},{"array_dim",read<int32_t>(field+0x30)}};
+            if(offset>=0 && size>0 && offset<=class_size-size && item["array_dim"]==1) {
+                auto value=scalar(reinterpret_cast<uintptr_t>(object)+offset,type,size,field);item["value"]=value;item["supported"]=!value.is_null();
+            } else {item["supported"]=false;}
+            items.push_back(item);
+        } if(truncated)break;
+    }
+    return {{"items",items},{"truncated",truncated},{"validation","game_thread_memory_read"}};
+}
+json GameAccess::functions(void* object,int limit) {
+    json items=json::array();auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);bool truncated=false;
+    for(int depth=0;klass && depth<64;klass=read<uintptr_t>(klass+0x40),++depth) {
+        auto field=read<uintptr_t>(klass+0x48);
+        for(int count=0;field && count<4096;field=read<uintptr_t>(field+0x28),++count) {
+            auto fieldclass=read<uintptr_t>(field+0x10);if(!contains(object_name(reinterpret_cast<void*>(fieldclass)),"Function"))continue;
+            if(items.size()>=static_cast<size_t>(limit)){truncated=true;break;}
+            json parameters=json::array();auto parameter=read<uintptr_t>(field+0x50);
+            for(int pc=0;parameter && pc<128;parameter=read<uintptr_t>(parameter+0x18),++pc) {
+                auto pf=read<uint64_t>(parameter+0x38);if(!(pf&0x80))continue;
+                parameters.push_back({{"name",name(read<uint64_t>(parameter+0x20))},
+                    {"type",field_type(parameter,[this](auto f){return name(f);})},
+                    {"offset",read<int32_t>(parameter+0x44)},{"element_size",read<int32_t>(parameter+0x34)},
+                    {"return",(pf&0x400)!=0},{"out",(pf&0x100)!=0},{"reference",(pf&0x800)!=0}});
+            }
+            items.push_back({{"name",object_name(reinterpret_cast<void*>(field))},{"owner",object_name(reinterpret_cast<void*>(klass))},
+                {"flags",read<uint32_t>(field+0xb0)},{"parameter_count",read<uint8_t>(field+0xb4)},
+                {"parameter_size",read<uint16_t>(field+0xb6)},{"return_offset",read<uint16_t>(field+0xb8)},{"parameters",parameters}});
+        } if(truncated)break;
+    }
+    return {{"items",items},{"truncated",truncated}};
+}
+json GameAccess::invoke(void* object,const std::string& function_name,const json& arguments) {
+    auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);uintptr_t function=0;
+    for(int depth=0;klass && depth<64 && !function;klass=read<uintptr_t>(klass+0x40),++depth) {
+        auto field=read<uintptr_t>(klass+0x48);
+        for(int count=0;field && count<4096;field=read<uintptr_t>(field+0x28),++count)
+            if(object_name(reinterpret_cast<void*>(field))==function_name && contains(object_name(reinterpret_cast<void*>(read<uintptr_t>(field+0x10))),"Function")){function=field;break;}
+    }
+    if(!function)throw HandlerError("function_not_found","Отражённая функция не найдена");
+    auto bytes=read<uint16_t>(function+0xb6);if(bytes>4096)throw HandlerError("unsupported_signature","Слишком большой буфер параметров");
+    std::vector<uint64_t> aligned((bytes+7)/8+1,0);auto buffer=reinterpret_cast<unsigned char*>(aligned.data());
+    uintptr_t return_field{};std::string return_type;int return_size{};int return_offset{};size_t input_count{};
+    auto field=read<uintptr_t>(function+0x50);
+    for(int count=0;field && count<128;field=read<uintptr_t>(field+0x18),++count) {
+        auto flags=read<uint64_t>(field+0x38);if(!(flags&0x80))continue;
+        auto type=field_type(field,[this](auto f){return name(f);});int offset=read<int32_t>(field+0x44),size=read<int32_t>(field+0x34);
+        if(offset<0 || size<1 || offset>bytes-size || read<int32_t>(field+0x30)!=1)throw HandlerError("unsupported_signature","Некорректные отражённые параметры");
+        if(flags&0x400){return_field=field;return_type=type;return_size=size;return_offset=offset;if((type=="StrProperty" && size!=16) || (type!="StrProperty" && scalar(reinterpret_cast<uintptr_t>(buffer+offset),type,size,field).is_null()))throw HandlerError("unsupported_signature","Тип результата пока не поддержан");continue;}
+        if(flags&(0x100|0x800))throw HandlerError("unsupported_signature","Out/ref параметры пока не поддержаны");
+        auto key=name(read<uint64_t>(field+0x20));if(!arguments.contains(key))throw HandlerError("missing_argument","Не задан аргумент "+key);auto v=arguments.at(key);++input_count;
+        if(type=="BoolProperty" && v.is_boolean()){auto bo=read<uint8_t>(field+0x71),mask=read<uint8_t>(field+0x73);buffer[offset+bo]=v.get<bool>()?mask:0;}
+        else if(type=="IntProperty" && size==4 && v.is_number_integer()){auto n=v.get<int64_t>();if(n<INT32_MIN||n>INT32_MAX)throw HandlerError("invalid_argument","Аргумент вне int32");*reinterpret_cast<int32_t*>(buffer+offset)=static_cast<int32_t>(n);}
+        else if(type=="FloatProperty" && size==4 && v.is_number()){*reinterpret_cast<float*>(buffer+offset)=v.get<float>();}
+        else if(type=="DoubleProperty" && size==8 && v.is_number()){*reinterpret_cast<double*>(buffer+offset)=v.get<double>();}
+        else throw HandlerError("unsupported_signature","Тип аргумента пока не поддержан: "+type);
+    }
+    if(arguments.size()!=input_count)throw HandlerError("unknown_argument","Переданы лишние аргументы");
+    if(!call_event(reinterpret_cast<void*>(process_event_),object,reinterpret_cast<void*>(function),buffer))throw HandlerError("game_call_fault","Игровой вызов вызвал native exception; эффект неизвестен");
+    json result;
+    try {result=return_field?scalar(reinterpret_cast<uintptr_t>(buffer+return_offset),return_type,return_size,return_field):json(nullptr);}
+    catch(...) {if(return_type=="StrProperty")free_string(base_+kFree,*reinterpret_cast<void**>(buffer+return_offset));throw;}
+    if(return_type=="StrProperty")free_string(base_+kFree,*reinterpret_cast<void**>(buffer+return_offset));
+    return {{"function",function_name},{"return_type",return_type},{"result",result},{"executed",true},{"thread_id",GetCurrentThreadId()}};
+}
+json GameAccess::execute(const json& request) {
+    auto op=request.at("op").get<std::string>();auto params=request.at("params");
+    auto session=request.at("session_id").get<std::string>();
+    if(session!=handle_session_){handles_.clear();handle_session_=session;}
+    if(op!="objects" && op!="properties" && op!="functions" && op!="invoke")throw HandlerError("unknown_operation","Операция не поддержана");
+    if(op=="objects") {
+        auto query=params.value("query",std::string{}),class_query=params.value("class_query",std::string{});int limit=limit_of(params);if(query.size()>256||class_query.size()>256)throw HandlerError("invalid_query","Запрос слишком длинный");
+        if(handles_.size()+limit>4096)handles_.clear();
+        auto count=read<int32_t>(base_+kObjects+0x14);if(count<0||count>4000000)throw HandlerError("invalid_registry","Некорректный реестр объектов");
+        json items=json::array();int scanned=0,skipped=0;
+        for(int index=0;index<count;++index){++scanned;auto object=slot(index);if(!object)continue;
+            try {auto ptr=reinterpret_cast<uintptr_t>(object);if(read<int32_t>(ptr+0xc)!=index)continue;auto n=object_name(object),c=object_name(reinterpret_cast<void*>(read<uintptr_t>(ptr+0x10)));if(!contains(n,query)||!contains(c,class_query))continue;items.push_back(object_info(object,index));if(items.size()>=static_cast<size_t>(limit))break;}
+            catch(const HandlerError&){++skipped;}
+        }
+        return {{"items",items},{"total_slots",count},{"scanned_slots",scanned},{"skipped",skipped},{"truncated",scanned<count},{"thread_id",GetCurrentThreadId()}};
+    }
+    auto object=resolve(params.at("handle").get<std::string>());
+    if(op=="properties")return properties(object,limit_of(params));
+    if(op=="functions")return functions(object,limit_of(params));
+    if(op=="invoke")return invoke(object,params.at("function").get<std::string>(),params.value("arguments",json::object()));
+    throw HandlerError("unknown_operation","Операция не поддержана");
+}
+}

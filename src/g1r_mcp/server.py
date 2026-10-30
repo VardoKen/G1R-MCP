@@ -14,6 +14,7 @@ from mcp.types import ToolAnnotations
 from . import __version__
 from .packages import PackageError, validate_package
 from .sources import SourceCatalog, SourceError
+from .native_client import NativeClient, NativeError
 
 
 LOCAL_TOOLS = (
@@ -25,13 +26,21 @@ LOCAL_TOOLS = (
     ("g1r_list_source_types", "Лексический поиск объявлений типов"),
     ("g1r_validate_package", "Структурная проверка официального пакета"),
 )
+NATIVE_TOOLS = (
+    ("g1r_native_status", "Живое состояние экспериментального нативного канала"),
+    ("g1r_native_enable", "Включить очередь игрового Tick в уже загруженной DLL"),
+    ("g1r_find_objects", "Поиск объектов текущего процесса игры"),
+    ("g1r_object_properties", "Чтение отражённых скалярных свойств"),
+    ("g1r_object_functions", "Список отражённых функций объекта"),
+    ("g1r_invoke", "Один явный вызов отражённой функции"),
+)
 
 
 def _tool_failure(error: SourceError | PackageError) -> ToolError:
     return ToolError(json.dumps({"code": error.code, "message": str(error)}, ensure_ascii=False))
 
 
-def create_server(modkit_root: Path, workspace_root: Path, source_revision: str | None = None) -> MCPServer:
+def create_server(modkit_root: Path, workspace_root: Path, source_revision: str | None = None, native_port: int = 27123) -> MCPServer:
     """Создать сервер с двумя явно заданными read-only корнями."""
     if source_revision is not None and not re.fullmatch(r"[0-9a-fA-F]{40}", source_revision):
         raise ValueError("Ревизия источников должна быть полным Git SHA либо отсутствовать")
@@ -43,12 +52,15 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             raise ValueError("Рабочий каталог содержит ссылку или junction")
     workspace_root = workspace_root.resolve(strict=True)
     sources = SourceCatalog(modkit_root, revision=source_revision)
+    native = NativeClient(port=native_port)
     server = MCPServer(
         "G1R MCP", version=__version__, log_level="WARNING",
         instructions=(
             "Локальные инструменты разработки официальных AngelScript-модов. "
             "Поиск и проверка пакета не являются компиляцией или игровым вызовом. "
-            "Игровой канал не реализован. Не выводите работоспособность API из наличия исходника."
+            "Игровые операции используют экспериментальную DLL только при подключении. "
+            "Вызовы g1r_invoke могут менять игру; не повторяйте их после таймаута. "
+            "Не выводите работоспособность API из наличия исходника."
         ),
     )
     read_only = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
@@ -61,9 +73,9 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             "sources": {"kind": "official_modkit_static", "revision": source_revision,
                         "revision_source": "caller_label", "validation": "source_only"},
             "game": {
-                "backend_implemented": False, "connected": False, "ready": False,
-                "reason_code": "game_channel_not_implemented",
-                "reason": "Официальный игровой канал не подтверждён; локальные инструменты доступны независимо от игры",
+                "backend_implemented": True, "connection_checked": False, "ready": False,
+                "reason_code": "use_native_status_for_live_state",
+                "reason": "Для текущего состояния DLL вызовите g1r_native_status; локальные инструменты независимы",
                 "last_research": {
                     "date": "2026-10-30", "buildid": "26295476", "live_status": "not_checked_by_this_tool",
                     "source": "https://github.com/AlkimiaInteractive/G1R-Modkit/issues/1#issuecomment-6520702135",
@@ -82,10 +94,12 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                  "available": True, "effects": "read_only", "validation": "local_only"}
                 for name, description in LOCAL_TOOLS
             ],
+            "native_tools": [{"name": name, "description": description, "implemented": True,
+                              "availability": "requires_live_native_status"} for name, description in NATIVE_TOOLS],
             "game_groups": [
                 {"name": group, "implemented": False, "available": False,
                  "reason_code": "game_channel_not_implemented"}
-                for group in ("state", "objects", "observations", "actions", "compile_diagnostics", "hot_reload")
+                for group in ("observations", "compile_diagnostics", "hot_reload", "arbitrary_angelscript")
             ],
             "limitations": [
                 "Исходники не покрывают все нативные bindings и не подтверждают вызовы в текущей игре",
@@ -134,6 +148,43 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
         except PackageError as error:
             raise _tool_failure(error) from None
 
+    def native_request(operation: str, params: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return native.request(operation, params)
+        except NativeError as error:
+            raise ToolError(json.dumps({"code": error.code, "message": str(error),
+                "may_have_executed": error.may_have_executed, "request_id": error.request_id}, ensure_ascii=False)) from None
+
+    @server.tool(annotations=read_only)
+    def g1r_native_status() -> dict[str, Any]:
+        """Проверить DLL в текущей игре; не запускает игру или загрузчик."""
+        return native_request("status", {})
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+    def g1r_native_enable() -> dict[str, Any]:
+        """Установить перехват Tick в уже загруженной DLL; выполнять после появления главного меню."""
+        return native_request("enable_game", {})
+
+    @server.tool(annotations=read_only)
+    def g1r_find_objects(query: str = "", class_query: str = "", limit: int = 50) -> dict[str, Any]:
+        """Найти UObject по части имени/класса на игровом Tick; вернуть непрозрачные ссылки."""
+        return native_request("objects", {"query": query, "class_query": class_query, "limit": limit})
+
+    @server.tool(annotations=read_only)
+    def g1r_object_properties(handle: str, limit: int = 50) -> dict[str, Any]:
+        """Читать поддержанные скалярные свойства проверенной ссылки объекта."""
+        return native_request("properties", {"handle": handle, "limit": limit})
+
+    @server.tool(annotations=read_only)
+    def g1r_object_functions(handle: str, limit: int = 50) -> dict[str, Any]:
+        """Получить отражённые UFunction объекта и размеры их параметров."""
+        return native_request("functions", {"handle": handle, "limit": limit})
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
+    def g1r_invoke(handle: str, function: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Явно вызвать UFunction со скалярными параметрами; эффект зависит от функции, повтор запрещён."""
+        return native_request("invoke", {"handle": handle, "function": function, "arguments": arguments or {}})
+
     return server
 
 
@@ -150,10 +201,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--modkit-root", type=Path, required=True, help="Корень официального Modkit")
     parser.add_argument("--workspace-root", type=Path, required=True, help="Корень разрабатываемых пакетов")
     parser.add_argument("--source-revision", help="Полный Git SHA Modkit; при отсутствии ревизия неизвестна")
+    parser.add_argument("--native-port", type=int, default=27123, help="Порт localhost экспериментальной DLL")
     args = parser.parse_args(argv)
     try:
-        server = create_server(args.modkit_root, args.workspace_root, args.source_revision)
-    except (ValueError, OSError, SourceError) as error:
+        server = create_server(args.modkit_root, args.workspace_root, args.source_revision, args.native_port)
+    except (ValueError, OSError, SourceError, NativeError) as error:
         print(f"Не удалось создать G1R MCP: {error}", file=sys.stderr)
         return 2
     server.run(transport="stdio")
