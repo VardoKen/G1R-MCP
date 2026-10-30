@@ -22,6 +22,14 @@
 
 История отказа прежнего моста от файлового mailbox: [рабочий журнал, запись 11.09.2026](../../../../../docs/mods/G1R_UE4SS_LUA_Bridge_to_MCP/work-log.md) и [текущая архитектура](../../../../../docs/mods/G1R_UE4SS_LUA_Bridge_to_MCP/architecture.md). Это факт истории старой реализации, а не доказательство невозможности файлового API в Modkit.
 
+Для подготовки PLAN-001 дополнительно сверены материалы той же ревизии Modkit:
+
+- [Структура пакета и разовые параметры `-Mods` / `-ModsDirectory`](../../../../../G1R-Modkit/Documentation/getting-started/mod-package.md).
+- [Режим разработки и ограничения горячей перезагрузки](../../../../../G1R-Modkit/Documentation/getting-started/angelscript-setup.md): тела функций могут перезагружаться; изменение defaults, `UPROPERTY` и добавление `UCLASS` требует перезапуска.
+- [Справочник параметров запуска](../../../../../G1R-Modkit/Documentation/reference/commandline-reference.md).
+- [Пример WorldSubsystem с `HandleReadyForPlay` и проверкой объекта](../../../../../G1R-Modkit/Examples/Example-Settings/Script/Example-Settings/Settings.as). Пример не доказывает полный жизненный цикл, поток исполнения или пригодность `Tick` для моста.
+- [Inheritance Injection](../../../../../G1R-Modkit/Documentation/scripting/script-hooking.md): документированный механизм замены наследования. Его использование в G1R MCP не выбрано и не считается необходимым для связи.
+
 ## Официальные источники
 
 | Источник | Что подтверждено чтением | Что не подтверждено |
