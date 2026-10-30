@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "g1r-mcp"
+version = "1.0.0-dev.1"
+description = "Инструменты разработки модов Gothic 1 Remake через MCP"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["mcp==2.3.0"]
+
+[project.scripts]
+g1r-mcp = "g1r_mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/g1r_mcp"]

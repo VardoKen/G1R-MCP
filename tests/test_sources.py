@@ -1,0 +1,183 @@
+"""Изолированные проверки чтения и границ статического каталога Modkit."""
+
+import io
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from g1r_mcp.sources import MAX_FILE_BYTES, MAX_READ_BYTES, SourceCatalog, SourceError
+
+
+class SourceCatalogTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name) / "Modkit"
+        (self.root / "Script").mkdir(parents=True)
+
+    def write(self, relative, text):
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(text if isinstance(text, bytes) else text.encode("utf-8"))
+        return path
+
+    def catalog(self):
+        return SourceCatalog(self.root, revision="source-revision")
+
+    def test_allowlist_and_file_search_are_complete_and_bounded(self):
+        self.write("Script/Z.as", "class Z {}")
+        self.write("Script/A.as", "class A {}")
+        self.write("Examples/Sample/Script/A.as", "class Sample {}")
+        self.write("Examples/Sample/Content/A.as", "class Forbidden {}")
+        self.write("Other/A.as", "class Forbidden {}")
+        self.write("Script/A.txt", "class Forbidden {}")
+        result = self.catalog().search_files(".as", 2)
+        self.assertEqual(result["total_matches"], 3)
+        self.assertEqual(result["scanned_files"], 3)
+        self.assertTrue(result["truncated"])
+        self.assertTrue(result["scan_complete"])
+        self.assertEqual([item["path"] for item in result["items"]], ["Examples/Sample/Script/A.as", "Script/A.as"])
+        self.assertEqual(result["validation"], "source_only")
+        self.assertEqual(result["revision_source"], "caller_label")
+
+    def test_text_search_is_literal_unicode_and_has_real_line_numbers(self):
+        self.write("Script/Test.as", "// Мир\nstring pattern = \"a+b.*[x]\";\n// МИР\n")
+        result = self.catalog().search_text("a+b.*[x]", 20)
+        self.assertEqual(result["total_matches"], 1)
+        self.assertEqual(result["items"][0]["line"], 2)
+        self.assertEqual(self.catalog().search_text("мир", 1)["total_matches"], 2)
+        self.assertEqual(self.catalog().search_text("Мир", 20, True)["total_matches"], 1)
+
+    def test_read_slice_bom_end_and_partial_metadata(self):
+        self.write("Script/Test.as", b"\xef\xbb\xbfline1\nline2\nline3\n")
+        catalog = self.catalog()
+        result = catalog.read_file("Script/Test.as", 2, 1)
+        self.assertEqual(result["text"], "line2")
+        self.assertEqual(result["total_lines"], 3)
+        self.assertTrue(result["content_truncated"])
+        self.assertEqual(result["truncation_scope"], "items")
+        self.assertEqual(catalog.read_file("Script/Test.as", 4)["text"], "")
+        self.assertFalse(catalog.read_file("Script/Test.as")["content_truncated"])
+        self.write("Examples/Sample/Script/Test.as", "example")
+        self.assertEqual(catalog.read_file("Examples/Sample/Script/Test.as")["root_kind"], "example_script")
+
+    def test_path_traversal_absolute_and_non_allowlisted_rejected(self):
+        self.write("Script/Test.as", "test")
+        self.write("Other/Test.as", "private")
+        catalog = self.catalog()
+        for path in ("../Test.as", "/Script/Test.as", "C:/private.as", "C:private.as", "//host/private.as", "Script/../Test.as", "Script\\Test.as"):
+            with self.subTest(path=path), self.assertRaises(SourceError) as captured:
+                catalog.read_file(path)
+            self.assertEqual(captured.exception.code, "unsafe_path")
+            self.assertNotIn(str(self.root), str(captured.exception))
+        with self.assertRaises(SourceError) as captured:
+            catalog.read_file("Other/Test.as")
+        self.assertEqual(captured.exception.code, "source_not_found")
+
+    def test_links_never_supply_external_content(self):
+        self.write("Script/Local.as", "local")
+        outside = self.root.parent / "outside.as"
+        outside.write_text("private", encoding="utf-8")
+        try:
+            (self.root / "Script/Link.as").symlink_to(outside)
+        except OSError:
+            self.skipTest("Система не разрешает изолированную проверку symlink")
+        with self.assertRaises(SourceError) as captured:
+            self.catalog().search_text("private")
+        self.assertEqual(captured.exception.code, "unsafe_path")
+
+    def test_dangling_example_script_link_is_not_silently_omitted(self):
+        self.write("Script/Local.as", "local")
+        example = self.root / "Examples/Sample"
+        example.mkdir(parents=True)
+        try:
+            (example / "Script").symlink_to(self.root.parent / "missing", target_is_directory=True)
+        except OSError:
+            self.skipTest("Система не разрешает изолированную проверку symlink")
+        with self.assertRaises(SourceError) as captured:
+            self.catalog().search_files("Local")
+        self.assertEqual(captured.exception.code, "unsafe_path")
+
+    def test_encoding_and_file_size_failures_are_explicit(self):
+        bad = self.write("Script/Test.as", b"\xffprivate")
+        with self.assertRaises(SourceError) as captured:
+            self.catalog().read_file("Script/Test.as")
+        self.assertEqual(captured.exception.code, "invalid_encoding")
+        self.assertNotIn("private", str(captured.exception))
+        bad.write_bytes(b" " * MAX_FILE_BYTES)
+        self.assertEqual(self.catalog().read_file("Script/Test.as")["total_lines"], 1)
+        bad.write_bytes(b" " * (MAX_FILE_BYTES + 1))
+        with self.assertRaises(SourceError) as captured:
+            self.catalog().read_file("Script/Test.as")
+        self.assertEqual(captured.exception.code, "file_too_large")
+
+    def test_partial_scans_report_skipped_files_and_lower_bound(self):
+        self.write("Script/Good.as", "class Good {}")
+        self.write("Script/Bad.as", b"\xffprivate")
+        self.write("Script/Large.as", b" " * (MAX_FILE_BYTES + 1))
+        for result in (self.catalog().search_text("Good"), self.catalog().list_types("Good")):
+            self.assertFalse(result["scan_complete"])
+            self.assertIsNone(result["total_matches"])
+            self.assertEqual(result["total_matches_lower_bound"], 1)
+            self.assertEqual(result["skipped_count"], 2)
+            self.assertEqual({item["error_code"] for item in result["skipped_files"]}, {"invalid_encoding", "file_too_large"})
+            self.assertEqual(result["items"][0]["path"], "Script/Good.as")
+
+    def test_long_unicode_line_is_bounded_without_invalid_text(self):
+        self.write("Script/Long.as", "М" * MAX_READ_BYTES + "\nsecond")
+        result = self.catalog().read_file("Script/Long.as")
+        self.assertEqual(result["returned_utf8_bytes"], MAX_READ_BYTES)
+        self.assertTrue(result["content_truncated"])
+        self.assertTrue(result["last_line_truncated"])
+        self.assertEqual(result["returned_lines"], 1)
+        self.assertEqual(result["end_line"], 1)
+        self.assertEqual(result["text"], "М" * (MAX_READ_BYTES // 2))
+
+    def test_types_mask_comments_strings_and_track_nested_namespaces(self):
+        self.write("Script/Types.as", '''// class Wrong {}
+namespace A {
+namespace B::C {
+UCLASS() class UReal : UBase { string S = "enum Wrong {}"; }
+/* struct Wrong {} */
+struct Data {}
+enum State { Ready }
+}}
+class Outside {}
+''')
+        result = self.catalog().list_types()
+        self.assertEqual([item["qualified_name"] for item in result["items"]], ["A::B::C::UReal", "A::B::C::Data", "A::B::C::State", "Outside"])
+        self.assertEqual(result["items"][0]["line"], 4)
+        self.assertEqual(result["parser_kind"], "lexical")
+        self.assertEqual(self.catalog().list_types("data")["total_matches"], 1)
+
+    def test_invalid_arguments_and_empty_source_do_not_fake_success(self):
+        with self.assertRaises(SourceError) as captured:
+            self.catalog().search_files("x")
+        self.assertEqual(captured.exception.code, "no_sources")
+        self.write("Script/Test.as", "test")
+        catalog = self.catalog()
+        for operation in (lambda: catalog.search_files(""), lambda: catalog.search_text("x", 0), lambda: catalog.list_types("", 201), lambda: catalog.read_file("Script/Test.as", 0), lambda: catalog.read_file("Script/Test.as", 1, 401), lambda: catalog.search_files("x", True)):
+            with self.assertRaises(SourceError):
+                operation()
+
+    def test_file_changes_during_read_are_not_reported_as_current(self):
+        path = self.write("Script/Test.as", "old")
+        real_open = Path.open
+        class ChangingStream(io.BytesIO):
+            def __exit__(self, *args):
+                path.write_text("changed-longer", encoding="utf-8")
+                return super().__exit__(*args)
+        def opened(file, *args, **kwargs):
+            if file == path and args and args[0] == "rb":
+                return ChangingStream(b"old")
+            return real_open(file, *args, **kwargs)
+        with patch.object(Path, "open", opened), self.assertRaises(SourceError) as captured:
+            self.catalog().read_file("Script/Test.as")
+        self.assertEqual(captured.exception.code, "source_changed")
+
+
+if __name__ == "__main__":
+    unittest.main()
