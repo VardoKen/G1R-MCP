@@ -2,7 +2,9 @@
 #include "g1r_mcp/transport.hpp"
 #include "g1r_mcp/scalar_arguments.hpp"
 #include "g1r_mcp/object_arguments.hpp"
+#include "g1r_mcp/class_arguments.hpp"
 #include "g1r_mcp/object_query.hpp"
+#include "g1r_mcp/function_query.hpp"
 #include "g1r_mcp/enum_values.hpp"
 #include <MinHook.h>
 #include <bcrypt.h>
@@ -145,7 +147,7 @@ void __fastcall GameAccess::hooked_tick(void* loop) {
     if(count<2)diagnostic("tick_pump_return");
 }
 json GameAccess::status() const {
-    return {{"version","1.0.0-dev.5"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.6"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&ticks_.load()>0},
             {"build_hash",kHash},{"startup_error",startup_error_},
             {"process_id",GetCurrentProcessId()},
@@ -306,6 +308,20 @@ bool GameAccess::is_compatible_object(void* object,void* expected_class) const {
             return parent;
         });
 }
+bool GameAccess::is_compatible_class(void* represented_class,void* property_class,void* meta_class) const {
+    validate_class(represented_class);
+    validate_class(property_class);
+    validate_class(meta_class);
+    const auto identity=validate_object(represented_class);
+    return compatible_class_argument(reinterpret_cast<uintptr_t>(represented_class),
+        reinterpret_cast<uintptr_t>(identity.object_class),reinterpret_cast<uintptr_t>(property_class),
+        reinterpret_cast<uintptr_t>(meta_class),[this](uintptr_t klass) {
+            validate_class(reinterpret_cast<void*>(klass));
+            const auto parent=read<uintptr_t>(klass+0x40);
+            if(parent)validate_class(reinterpret_cast<void*>(parent));
+            return parent;
+        });
+}
 json GameAccess::object_descriptor(void* object,void* expected_class) {
     validate_class(expected_class);
     if(!object)return nullptr;
@@ -323,8 +339,24 @@ json GameAccess::object_descriptor(void* object,void* expected_class) {
         throw HandlerError("stale_handle","Объектное значение изменилось при копировании");
     return result;
 }
+json GameAccess::class_descriptor(void* object,void* property_class,void* meta_class) {
+    validate_class(property_class);
+    validate_class(meta_class);
+    if(!object)return nullptr;
+    validate_class(object);
+    if(!is_compatible_class(object,property_class,meta_class))
+        throw HandlerError("incompatible_class_result","UClass не соответствует PropertyClass или MetaClass");
+    auto result=object_descriptor(object,property_class);
+    if(!is_compatible_class(object,property_class,meta_class))
+        throw HandlerError("incompatible_class_result","Классовое значение изменилось при копировании");
+    return result;
+}
 json GameAccess::property_value(uintptr_t address,const std::string& type,int size,uintptr_t field) {
-    if(type=="ClassProperty")throw HandlerError("unsupported_property_type","ClassProperty пока не поддержан");
+    if(type=="ClassProperty") {
+        if(size!=8)throw HandlerError("unsupported_property_layout","ClassProperty требует указатель x64");
+        return class_descriptor(reinterpret_cast<void*>(read<uintptr_t>(address)),
+            reinterpret_cast<void*>(read<uintptr_t>(field+0x70)),reinterpret_cast<void*>(read<uintptr_t>(field+0x78)));
+    }
     if(type=="ObjectProperty") {
         if(size!=sizeof(uintptr_t))throw HandlerError("unsupported_property_layout","ObjectProperty требует указатель x64");
         const auto expected_class=reinterpret_cast<void*>(read<uintptr_t>(field+0x70));
@@ -439,7 +471,7 @@ json GameAccess::properties(void* object,int limit) {
                         const auto result=enum_property(reinterpret_cast<uintptr_t>(object)+offset,type,size,field);
                         value=result.at("value");if(result.contains("enum"))item["enum"]=result.at("enum");
                     } else value=property_value(reinterpret_cast<uintptr_t>(object)+offset,type,size,field);
-                    item["value"]=value;item["supported"]=type=="ObjectProperty" || !value.is_null();
+                    item["value"]=value;item["supported"]=type=="ObjectProperty" || type=="ClassProperty" || !value.is_null();
                 } catch(const HandlerError& error) {
                     item["supported"]=false;item["error"]={{"code",error.code()},{"message",error.what()}};
                 }
@@ -475,7 +507,7 @@ json GameAccess::selected_properties(void* object,const json& names) {
                     const auto result=enum_property(reinterpret_cast<uintptr_t>(object)+offset,type,size,field);
                     value=result.at("value");if(result.contains("enum"))item["enum"]=result.at("enum");
                 } else value=property_value(reinterpret_cast<uintptr_t>(object)+offset,type,size,field);
-                if(value.is_null() && type!="ObjectProperty")throw HandlerError("unsupported_property_type","Тип свойства не поддержан");
+                if(value.is_null() && type!="ObjectProperty" && type!="ClassProperty")throw HandlerError("unsupported_property_type","Тип свойства не поддержан");
                 if(value.dump().size()>16384)throw HandlerError("property_value_too_large","Значение превышает предел поля 16 КиБ");
                 item["value"]=std::move(value);item["supported"]=true;
             } catch(const HandlerError& error) {
@@ -542,27 +574,39 @@ json GameAccess::snapshot(const json& targets) {
     }
     return result;
 }
-json GameAccess::functions(void* object,int limit) {
-    json items=json::array();auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);bool truncated=false;
-    for(int depth=0;klass && depth<64;klass=read<uintptr_t>(klass+0x40),++depth) {
-        auto field=read<uintptr_t>(klass+0x48);
-        for(int count=0;field && count<4096;field=read<uintptr_t>(field+0x28),++count) {
-            auto fieldclass=read<uintptr_t>(field+0x10);if(!contains(object_name(reinterpret_cast<void*>(fieldclass)),"Function"))continue;
+json GameAccess::functions(void* object,int limit,const std::string& query) {
+    json items=json::array();auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);
+    bool truncated=false,scan_truncated=false;std::set<uintptr_t> visited_classes;
+    for(int depth=0;klass;klass=read<uintptr_t>(klass+0x40),++depth) {
+        if(depth>=64 || !visited_classes.insert(klass).second){scan_truncated=true;break;}
+        auto field=read<uintptr_t>(klass+0x48);std::set<uintptr_t> visited_fields;
+        for(;field;field=read<uintptr_t>(field+0x28)) {
+            if(visited_fields.size()>=4096 || !visited_fields.insert(field).second){scan_truncated=true;break;}
+            const auto fieldclass=read<uintptr_t>(field+0x10);
+            if(!contains(object_name(reinterpret_cast<void*>(fieldclass)),"Function"))continue;
+            const auto function_name=object_name(reinterpret_cast<void*>(field));
+            if(!function_query::name_matches(function_name,query))continue;
             if(items.size()>=static_cast<size_t>(limit)){truncated=true;break;}
             json parameters=json::array();auto parameter=read<uintptr_t>(field+0x50);
-            for(int pc=0;parameter && pc<128;parameter=read<uintptr_t>(parameter+0x18),++pc) {
-                auto pf=read<uint64_t>(parameter+0x38);if(!(pf&0x80))continue;
+            std::set<uintptr_t> visited_parameters;bool parameters_truncated=false;
+            for(;parameter;parameter=read<uintptr_t>(parameter+0x18)) {
+                if(visited_parameters.size()>=128 || !visited_parameters.insert(parameter).second){parameters_truncated=true;break;}
+                const auto pf=read<uint64_t>(parameter+0x38);if(!(pf&0x80))continue;
                 parameters.push_back({{"name",name(read<uint64_t>(parameter+0x20))},
                     {"type",field_type(parameter,[this](auto f){return name(f);})},
                     {"offset",read<int32_t>(parameter+0x44)},{"element_size",read<int32_t>(parameter+0x34)},
                     {"return",(pf&0x400)!=0},{"out",(pf&0x100)!=0},{"reference",(pf&0x800)!=0}});
             }
-            items.push_back({{"name",object_name(reinterpret_cast<void*>(field))},{"owner",object_name(reinterpret_cast<void*>(klass))},
+            items.push_back({{"name",function_name},{"owner",object_name(reinterpret_cast<void*>(klass))},
                 {"flags",read<uint32_t>(field+0xb0)},{"parameter_count",read<uint8_t>(field+0xb4)},
-                {"parameter_size",read<uint16_t>(field+0xb6)},{"return_offset",read<uint16_t>(field+0xb8)},{"parameters",parameters}});
-        } if(truncated)break;
+                {"parameter_size",read<uint16_t>(field+0xb6)},{"return_offset",read<uint16_t>(field+0xb8)},
+                {"parameters",parameters},{"parameters_truncated",parameters_truncated}});
+            if(parameters_truncated)scan_truncated=true;
+        }
+        if(truncated || scan_truncated)break;
     }
-    return {{"items",items},{"truncated",truncated}};
+    return {{"items",items},{"truncated",truncated || scan_truncated},{"scan_truncated",scan_truncated},
+            {"scan_complete",!truncated && !scan_truncated}};
 }
 json GameAccess::invoke(void* object,const std::string& function_name,const json& arguments) {
     auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);uintptr_t function=0;
@@ -589,6 +633,8 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     std::vector<uint64_t> aligned((extent+7)/8+1,0);auto buffer=reinterpret_cast<unsigned char*>(aligned.data());
     uintptr_t return_field{};std::string return_type;int return_size{};int return_offset{};size_t input_count{};
     std::vector<std::pair<std::string,void*>> object_arguments;
+    struct ClassArgument {std::string handle;void* property_class;void* meta_class;};
+    std::vector<ClassArgument> class_arguments;
     for(const auto field:parameter_fields) {
         auto flags=read<uint64_t>(field+0x38);if(!(flags&0x80))continue;
         auto type=field_type(field,[this](auto f){return name(f);});int offset=read<int32_t>(field+0x44),size=read<int32_t>(field+0x34);
@@ -597,9 +643,10 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             if(type=="NameProperty" || type=="EnumProperty" || type=="ByteProperty")
                 throw HandlerError("unsupported_signature","Возвраты Name/Enum/Byte пока не входят в разрешённый контракт вызова");
             return_field=field;return_type=type;return_size=size;return_offset=offset;
-            if(type=="ObjectProperty") {
+            if(type=="ObjectProperty" || type=="ClassProperty") {
                 if(size!=8)throw HandlerError("unsupported_signature","Размер объектного возврата не поддержан");
                 validate_class(reinterpret_cast<void*>(read<uintptr_t>(field+0x70)));
+                if(type=="ClassProperty")validate_class(reinterpret_cast<void*>(read<uintptr_t>(field+0x78)));
             } else if((type=="StrProperty" && size!=16)
                || (type!="StrProperty" && property_value(reinterpret_cast<uintptr_t>(buffer+offset),type,size,field).is_null()))
                 throw HandlerError("unsupported_signature","Тип результата пока не поддержан");
@@ -624,12 +671,35 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             }
             *reinterpret_cast<void**>(buffer+offset)=argument;
         }
+        else if(type=="ClassProperty" && size==8) {
+            const auto property_class=reinterpret_cast<void*>(read<uintptr_t>(field+0x70));
+            const auto meta_class=reinterpret_cast<void*>(read<uintptr_t>(field+0x78));
+            validate_class(property_class);validate_class(meta_class);
+            const auto handle=class_argument_handle(v);
+            void* argument=nullptr;
+            if(!handle.empty()) {
+                argument=resolve(handle);
+                try { validate_class(argument); }
+                catch(const HandlerError& error) {
+                    if(error.code()!="invalid_object_class")throw;
+                    throw HandlerError("invalid_class_argument","Ссылка указывает на UObject, не являющийся UClass");
+                }
+                if(!is_compatible_class(argument,property_class,meta_class))
+                    throw HandlerError("incompatible_class_argument","Представляемый класс не соответствует ограничению аргумента");
+                class_arguments.push_back({handle,property_class,meta_class});
+            }
+            *reinterpret_cast<void**>(buffer+offset)=argument;
+        }
         else throw HandlerError("unsupported_signature","Тип аргумента пока не поддержан: "+type);
     }
     if(arguments.size()!=input_count)throw HandlerError("unknown_argument","Переданы лишние аргументы");
     for(const auto& [handle,expected]:object_arguments) {
         if(!is_compatible_object(resolve(handle),expected))
             throw HandlerError("incompatible_object_argument","Аргумент изменился до вызова функции");
+    }
+    for(const auto& argument:class_arguments) {
+        if(!is_compatible_class(resolve(argument.handle),argument.property_class,argument.meta_class))
+            throw HandlerError("incompatible_class_argument","Классовый аргумент изменился до вызова функции");
     }
     validate_object(object);
     if(!call_event(reinterpret_cast<void*>(process_event_),object,reinterpret_cast<void*>(function),buffer))throw HandlerError("game_call_fault","Игровой вызов вызвал native exception; эффект неизвестен",
@@ -697,7 +767,13 @@ json GameAccess::execute(const json& request) {
     }
     auto object=resolve(params.at("handle").get<std::string>());
     if(op=="properties")return properties(object,limit_of(params));
-    if(op=="functions")return functions(object,limit_of(params));
+    if(op=="functions") {
+        if(params.contains("function_query") && !params.at("function_query").is_string())
+            throw HandlerError("invalid_query","function_query требует строку");
+        const auto query=params.value("function_query",std::string{});
+        if(!function_query::valid(query))throw HandlerError("invalid_query","function_query превышает 512 байт или содержит NUL");
+        return functions(object,limit_of(params),query);
+    }
     if(op=="invoke")return invoke(object,params.at("function").get<std::string>(),params.value("arguments",json::object()));
     throw HandlerError("unknown_operation","Операция не поддержана");
 }

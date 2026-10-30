@@ -193,7 +193,7 @@ class MCPObservationTests(unittest.IsolatedAsyncioTestCase):
                 async with ClientSession(incoming, outgoing) as client:
                     await client.initialize()
                     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-                    self.assertEqual(len(tools), 31)
+                    self.assertEqual(len(tools), 32)
                     for name in ("g1r_snapshot", "g1r_compare_snapshots", "g1r_watch_read"):
                         self.assertTrue(tools[name].annotations.read_only_hint)
                     self.assertFalse(tools["g1r_watch_start"].annotations.read_only_hint)
@@ -205,6 +205,9 @@ class MCPObservationTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(tools["g1r_build_script_patch"].annotations.read_only_hint)
                     self.assertTrue(tools["g1r_read_source_exact"].annotations.read_only_hint)
                     self.assertTrue(tools["g1r_read_package_file_exact"].annotations.read_only_hint)
+                    self.assertFalse(tools["g1r_create_package_directory"].annotations.read_only_hint)
+                    self.assertFalse(tools["g1r_create_package_directory"].annotations.destructive_hint)
+                    self.assertTrue(tools["g1r_create_package_directory"].annotations.idempotent_hint)
                     for name in ("g1r_development_start", "g1r_development_stop", "g1r_native_load"):
                         self.assertFalse(tools[name].annotations.read_only_hint)
                         self.assertTrue(tools[name].annotations.open_world_hint)
@@ -235,7 +238,7 @@ class MCPObservationTests(unittest.IsolatedAsyncioTestCase):
     async def test_lost_start_is_not_retried_and_old_owner_is_not_reassigned(self):
         start_params = {"handle": "obj-1", "properties": ["Enabled"], "duration_ms": 1000,
                         "interval_ms": 20, "capacity": 32}
-        status = {"version": "1.0.0-dev.5", "ready": True, "tick_count": 90,
+        status = {"version": "1.0.0-dev.6", "ready": True, "tick_count": 90,
                   "game_thread_id": 456, "native_route": "standalone_in_process"}
         unknown = {"code": "unknown_watch", "message": "Наблюдение отсутствует в этой сессии"}
         steps = [

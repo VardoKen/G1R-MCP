@@ -1,0 +1,7 @@
+{
+  "name": "G1RMCPClassProbe",
+  "title": "G1R MCP Class Probe",
+  "author": "G1R MCP",
+  "description": "Изолированные проверки аргументов, возвратов и свойств класса без игрового поведения.",
+  "modVersion": "1.0.0"
+}

@@ -291,8 +291,6 @@ class SnapshotComparisonTests(unittest.TestCase):
         del value["index"]
         self.assert_invalid(snapshot([prop("Target", value, "ObjectProperty")]))
         self.assert_invalid(snapshot([prop("Target", reference, "StructProperty")]))
-        self.assert_invalid(snapshot([prop("Target", reference, "ClassProperty")]))
-        self.assert_invalid(snapshot([prop("Target", None, "ClassProperty")]))
 
     def test_unicode_object_names_use_fname_compatible_byte_limits(self):
         value = {**object_reference(), "name": "ж" * 600, "class": "名" * 1000}
@@ -399,6 +397,53 @@ class SnapshotComparisonTests(unittest.TestCase):
             result = compare_snapshots(candidate, candidate)
             self.assertTrue(result["equal_selected_values"])
             self.assertEqual(result["metadata_annotation_count"], 0)
+
+    def test_class_property_accepts_native_and_angelscript_class_descriptors(self):
+        for kind, path in (("Class", "/Script/CoreUObject.Object"),
+                           ("AngelscriptClass", "/Script/Angelscript.CM_Attack")):
+            reference = {**object_reference(), "name": "CM_Attack", "path": path, "class": kind}
+            candidate = snapshot([prop("ActorClass", reference, "ClassProperty")])
+            result = compare_snapshots(candidate, candidate)
+            self.assertTrue(result["equal_selected_values"])
+            self.assertEqual(result["provenance"], "unverified")
+        null_candidate = snapshot([prop("ActorClass", None, "ClassProperty")])
+        self.assertTrue(compare_snapshots(null_candidate, null_candidate)["equal_selected_values"])
+
+    def test_class_property_transitions_preserve_declared_reference_type(self):
+        first = {**object_reference(), "name": "First", "path": "/Script/Angelscript.First", "class": "AngelscriptClass"}
+        second = {**object_reference("ref-2", 13), "name": "Second", "path": "/Script/Angelscript.Second", "class": "AngelscriptClass"}
+        null_candidate = snapshot([prop("ActorClass", None, "ClassProperty")])
+        first_candidate = snapshot([prop("ActorClass", first, "ClassProperty")])
+        second_candidate = snapshot([prop("ActorClass", second, "ClassProperty")])
+        for before, after in ((null_candidate, first_candidate), (first_candidate, null_candidate),
+                              (first_candidate, second_candidate)):
+            result = compare_snapshots(before, after)
+            self.assertEqual((result["type_changes"], result["value_changes"]), (0, 1))
+        object_candidate = snapshot([prop("ActorClass", first, "ObjectProperty")])
+        result = compare_snapshots(object_candidate, first_candidate)
+        self.assertEqual(result["type_changes"], 1)
+        self.assertEqual(result["items"][0]["after_value_kind"], "class_reference")
+        replaced = snapshot([prop("ActorClass", {**first, "handle": "replacement", "index": 14}, "ClassProperty")])
+        result = compare_snapshots(first_candidate, replaced)
+        self.assertEqual((result["type_changes"], result["value_changes"]), (0, 1))
+        changed_session = copy.deepcopy(first_candidate)
+        changed_session["session_id"] = "session-2"
+        changed_session["objects"][0]["properties"][0]["value"]["session_id"] = "session-2"
+        result = compare_snapshots(first_candidate, changed_session)
+        self.assertFalse(result["comparable"])
+        self.assertEqual(result["items"], [])
+
+    def test_class_property_reuses_strict_descriptor_checks_and_identity_guard(self):
+        reference = {**object_reference(), "name": "CM_Attack", "path": "/Script/Angelscript.CM_Attack", "class": "AngelscriptClass"}
+        before = snapshot([prop("ActorClass", reference, "ClassProperty")])
+        for key, value in (("index", 13), ("name", "Other"), ("path", "/Script/Angelscript.Other"), ("class", "Class")):
+            after = snapshot([prop("ActorClass", {**reference, key: value}, "ClassProperty")])
+            result = compare_snapshots(before, after)
+            self.assertEqual((result["value_changes"], result["unknown_count"]), (0, 1))
+            self.assertEqual(result["items"][0]["reason"], "object_reference_identity_mismatch")
+        for value in (True, 12, "ref-1", {**reference, "extra": True},
+                      {**reference, "session_id": "another-session"}, {**reference, "index": 4_000_000}):
+            self.assert_invalid(snapshot([prop("ActorClass", value, "ClassProperty")]))
 
 
 if __name__ == "__main__":

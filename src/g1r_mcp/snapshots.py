@@ -55,30 +55,32 @@ def _error(value: Any) -> None:
         _invalid("Сообщение ошибки должно быть строкой до 8192 символов")
 
 
-def _object_value(value: Any, session_id: str) -> None:
+def _object_value(value: Any, session_id: str, property_type: str) -> None:
     """Проверить копию непрозрачной ссылки, не разрешая её в игровой среде."""
     if value is None:
         return
     expected = {"handle", "index", "name", "path", "class", "session_id"}
     if not isinstance(value, dict) or set(value) != expected:
-        _invalid("ObjectProperty должен содержать null или точный дескриптор объекта")
-    _text(value["handle"], "Ссылка значения ObjectProperty")
+        _invalid(f"{property_type} должен содержать null или точный дескриптор объекта")
+    _text(value["handle"], f"Ссылка значения {property_type}")
     if len(value["handle"].encode("utf-8")) > 80:
-        _invalid("Ссылка значения ObjectProperty превышает предел 80 байт")
-    _integer(value["index"], "Индекс значения ObjectProperty")
+        _invalid(f"Ссылка значения {property_type} превышает предел 80 байт")
+    _integer(value["index"], f"Индекс значения {property_type}")
     if value["index"] >= MAX_OBJECT_INDEX:
-        _invalid("Индекс значения ObjectProperty превышает предел реестра")
+        _invalid(f"Индекс значения {property_type} превышает предел реестра")
     for key, bound in (("name", 4096), ("class", 4096), ("path", 8192)):
-        _text(value[key], f"ObjectProperty.{key}")
+        _text(value[key], f"{property_type}.{key}")
         if len(value[key].encode("utf-8")) > bound:
-            _invalid(f"ObjectProperty.{key}: строка превышает предел {bound} байт")
-    _text(value["session_id"], "Сессия значения ObjectProperty")
+            _invalid(f"{property_type}.{key}: строка превышает предел {bound} байт")
+    _text(value["session_id"], f"Сессия значения {property_type}")
     if value["session_id"] != session_id:
-        _invalid("Дескриптор ObjectProperty принадлежит другой сессии снимка")
+        _invalid(f"Дескриптор {property_type} принадлежит другой сессии снимка")
 
 
 def _value_kind(prop: dict[str, Any]) -> str:
-    return "object_reference" if prop["type"] == "ObjectProperty" else type(prop["value"]).__name__
+    if prop["type"] in {"ObjectProperty", "ClassProperty"}:
+        return "class_reference" if prop["type"] == "ClassProperty" else "object_reference"
+    return type(prop["value"]).__name__
 
 
 def _enum_metadata(metadata: Any, prop: dict[str, Any]) -> None:
@@ -202,10 +204,8 @@ def _snapshot(value: Any) -> dict[str, dict[str, Any]]:
             if prop["supported"]:
                 if "value" not in prop or "type" not in prop or "error" in prop:
                     _invalid("Поддержанное свойство должно иметь тип и значение без ошибки")
-                if prop["type"] == "ObjectProperty":
-                    _object_value(prop["value"], value["session_id"])
-                elif prop["type"] == "ClassProperty":
-                    _invalid("ClassProperty не поддержан контрактом копий снимков")
+                if prop["type"] in {"ObjectProperty", "ClassProperty"}:
+                    _object_value(prop["value"], value["session_id"], prop["type"])
                 elif type(prop["value"]) not in {bool, int, float, str}:
                     _invalid("Поддержанное значение должно быть скаляром")
             elif "value" in prop and prop["value"] is not None:
@@ -317,7 +317,7 @@ def compare_snapshots(before: dict[str, Any], after: dict[str, Any], limit: int 
                      reason="source_not_claimed_live_native" if not source_known else "property_not_readable",
                      before_error=a.get("error"), after_error=b.get("error"))
                 continue
-            if a["type"] == b["type"] == "ObjectProperty":
+            if a["type"] == b["type"] and a["type"] in {"ObjectProperty", "ClassProperty"}:
                 av, bv = a["value"], b["value"]
                 if av is not None and bv is not None and av["handle"] == bv["handle"] and av != bv:
                     emit("unknown", handle=handle, property=name, reason="object_reference_identity_mismatch")

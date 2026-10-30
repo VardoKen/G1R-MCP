@@ -287,6 +287,137 @@ class WorkspaceTests(unittest.TestCase):
         root_workspace = PackageWorkspace(self.root / "Example")
         self.assertEqual(root_workspace.read_package_file(".", "Script/a.as")["package_path"], ".")
 
+    def test_create_nested_source_directories_and_idempotency(self):
+        self.create()
+        result = self.workspace.create_package_directory("Example", "Script/Modules/Deep")
+        self.assertTrue(result["created"])
+        self.assertEqual(result["created_paths"], ["Script/Modules", "Script/Modules/Deep"])
+        self.assertEqual(result["created_count"], 2)
+        self.assertFalse(result["compiled"])
+        self.assertEqual(result["runtime_validation"], "not_performed")
+        repeated = self.workspace.create_package_directory("Example", "Script/Modules/Deep")
+        self.assertFalse(repeated["created"])
+        self.assertEqual(repeated["created_paths"], [])
+        self.assertEqual(repeated["created_count"], 0)
+        patches = self.workspace.create_package_directory("Example", "ScriptPatches")
+        self.assertEqual(patches["created_paths"], ["ScriptPatches"])
+        self.workspace.write_package_file("Example", "Script/Modules/Deep/A.as", "// fixture")
+        self.assertEqual(self.workspace.read_package_file_exact("Example", "Script/Modules/Deep/A.as")["text"], "// fixture")
+
+    def test_directory_allowlist_component_limit_and_file_conflict(self):
+        self.create()
+        self.workspace.write_package_file("Example", "Script/File.as", "preserve")
+        before = self.state()
+        for path in ("Content", "Config/New", "Story", "ScriptPatches/Nested", "Scripts/New", "GothicMod.json"):
+            self.assert_error("unsupported_directory", lambda: self.workspace.create_package_directory("Example", path))
+        for path in ("Script/../Other", "Script/CON", "/Script/New"):
+            self.assert_error("unsafe_path", lambda: self.workspace.create_package_directory("Example", path))
+        self.assert_error("conflict", lambda: self.workspace.create_package_directory("Example", "Script/File.as/Nested"))
+        self.assert_error("limit_exceeded", lambda: self.workspace.create_package_directory("Example", "Script/" + "/".join(["a"] * 32)))
+        self.assertEqual(self.state(), before)
+
+    def test_directory_creation_requires_existing_valid_package(self):
+        plain = self.root / "Plain"
+        plain.mkdir()
+        self.assert_error("access_error", lambda: self.workspace.create_package_directory("Plain", "Script/Nested"))
+        (plain / "GothicMod.json").write_text("{}", encoding="utf-8")
+        self.assert_error("invalid_descriptor", lambda: self.workspace.create_package_directory("Plain", "Script/Nested"))
+        self.assertEqual([path.name for path in plain.iterdir()], ["GothicMod.json"])
+
+    def test_missing_script_root_and_maximum_directory_depth(self):
+        self.create()
+        (self.root / "Example/Script").rmdir()
+        path = "Script/" + "/".join(["a"] * 31)
+        result = self.workspace.create_package_directory("Example", path)
+        self.assertEqual(result["created_count"], 32)
+        self.assertEqual(result["created_paths"][0], "Script")
+        self.assertTrue((self.root / "Example" / path).is_dir())
+
+    def test_component_root_occupied_by_file_reports_conflict(self):
+        self.create()
+        occupied = self.root / "Example/ScriptPatches"
+        occupied.write_text("preserve", encoding="utf-8")
+        self.assert_error("conflict", lambda: self.workspace.create_package_directory("Example", "ScriptPatches"))
+        self.assertEqual(occupied.read_text(encoding="utf-8"), "preserve")
+
+    def test_directory_creation_rollback_removes_only_own_empty_directories(self):
+        self.create()
+        before = self.state()
+        original_mkdir = Path.mkdir
+        def fail_deep(path, *args, **kwargs):
+            if path.name == "Deep":
+                raise OSError("fixture")
+            return original_mkdir(path, *args, **kwargs)
+        with patch.object(Path, "mkdir", fail_deep):
+            self.assert_error("access_error", lambda: self.workspace.create_package_directory("Example", "Script/New/Deep"))
+        self.assertEqual(self.state(), before)
+
+    def test_directory_rollback_preserves_foreign_file_created_during_failure(self):
+        self.create()
+        original_mkdir = Path.mkdir
+        def fail_deep(path, *args, **kwargs):
+            if path.name == "Deep":
+                (path.parent / "User.txt").write_text("preserve", encoding="utf-8")
+                raise OSError("fixture")
+            return original_mkdir(path, *args, **kwargs)
+        with patch.object(Path, "mkdir", fail_deep):
+            self.assert_error("access_error", lambda: self.workspace.create_package_directory("Example", "Script/New/Deep"))
+        foreign = self.root / "Example/Script/New/User.txt"
+        self.assertEqual(foreign.read_text(encoding="utf-8"), "preserve")
+        self.assertFalse((foreign.parent / "Deep").exists())
+
+    def test_directory_creation_protected_nested_root_refused_before_mkdir(self):
+        self.create()
+        protected = self.root / "Example/Script/Protected"
+        protected.mkdir()
+        workspace = PackageWorkspace(self.root, protected_roots=[protected])
+        before = self.state()
+        self.assert_error("unsafe_path", lambda: workspace.create_package_directory("Example", "Script/Protected/New"))
+        self.assertEqual(self.state(), before)
+
+    def test_directory_parent_symlink_injected_after_mkdir_preserves_external_target(self):
+        self.create()
+        with tempfile.TemporaryDirectory() as outside:
+            external = Path(outside)
+            (external / "Sentinel.txt").write_text("preserve", encoding="utf-8")
+            link = self.root / "Example/Script/New"
+            original_mkdir = Path.mkdir
+            substituted = []
+            def substitute(path, *args, **kwargs):
+                if path == link:
+                    try:
+                        path.symlink_to(external, target_is_directory=True)
+                    except OSError:
+                        self.skipTest("Система не разрешает изолированный symlink")
+                    substituted.append(path)
+                    return None
+                return original_mkdir(path, *args, **kwargs)
+            try:
+                with patch.object(Path, "mkdir", substitute):
+                    self.assert_error("unsafe_path", lambda: self.workspace.create_package_directory("Example", "Script/New/Deep"))
+                self.assertEqual((external / "Sentinel.txt").read_text(encoding="utf-8"), "preserve")
+                self.assertFalse((external / "Deep").exists())
+            finally:
+                for path in substituted:
+                    path.unlink()
+
+    def test_independent_directory_creators_serialize_and_preserve_same_path(self):
+        self.create()
+        other = PackageWorkspace(self.root)
+        barrier = threading.Barrier(2)
+        results = []
+        def create(workspace):
+            barrier.wait()
+            results.append(workspace.create_package_directory("Example", "Script/Same/Deep"))
+        threads = [threading.Thread(target=create, args=(workspace,)) for workspace in (self.workspace, other)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(len(results), 2)
+        self.assertEqual(sorted(result["created_count"] for result in results), [0, 2])
+        self.assertTrue((self.root / "Example/Script/Same/Deep").is_dir())
+
     def test_encoding_limits_and_read_truncation(self):
         self.create()
         before = self.state()

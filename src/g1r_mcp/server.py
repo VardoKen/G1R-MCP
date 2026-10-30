@@ -34,6 +34,7 @@ LOCAL_TOOLS = (
 )
 WORKSPACE_TOOLS = (
     ("g1r_create_package", "Создать официальный пакет в выбранной рабочей базе", "local_write"),
+    ("g1r_create_package_directory", "Создать каталоги Script или ScriptPatches внутри рабочего пакета", "local_write"),
     ("g1r_list_package_files", "Список дескриптора и исходников рабочего пакета", "read_only"),
     ("g1r_read_package_file", "Чтение рабочего файла с SHA-256 для проверки изменений", "read_only"),
     ("g1r_read_package_file_exact", "Точный текст рабочего файла для изменения без нормализации", "read_only"),
@@ -202,6 +203,15 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
         except WorkspaceError as error:
             raise _tool_failure(error) from None
 
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                                            idempotentHint=True, openWorldHint=False))
+    def g1r_create_package_directory(relative_path: str, directory_path: str) -> dict[str, Any]:
+        """Создать разрешённые каталоги Script внутри пакета; существующий каталог сохраняется."""
+        try:
+            return workspace.create_package_directory(relative_path, directory_path)
+        except WorkspaceError as error:
+            raise _tool_failure(error) from None
+
     @server.tool(annotations=read_only)
     def g1r_list_package_files(relative_path: str, limit: int = 100) -> dict[str, Any]:
         """Получить ограниченный список дескриптора, .as исходников и ScriptPatches/*.patch."""
@@ -329,9 +339,12 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
         return native_request("properties", {"handle": handle, "limit": limit})
 
     @server.tool(annotations=read_only)
-    def g1r_object_functions(handle: str, limit: int = 50) -> dict[str, Any]:
+    def g1r_object_functions(handle: str, limit: int = 50, function_query: str = "") -> dict[str, Any]:
         """Получить отражённые UFunction объекта и размеры их параметров."""
-        return native_request("functions", {"handle": handle, "limit": limit})
+        params = {"handle": handle, "limit": limit}
+        if function_query:
+            params["function_query"] = function_query
+        return native_request("functions", params)
 
     @server.tool(annotations=read_only)
     def g1r_snapshot(targets: list[dict[str, Any]]) -> dict[str, Any]:

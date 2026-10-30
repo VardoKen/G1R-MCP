@@ -58,7 +58,9 @@ private:
     Handle validate_object(void* object) const;
     void validate_class(void* object_class) const;
     bool is_compatible_object(void* object, void* expected_class) const;
+    bool is_compatible_class(void* represented_class, void* property_class, void* meta_class) const;
     nlohmann::json object_descriptor(void* object, void* expected_class);
+    nlohmann::json class_descriptor(void* object, void* property_class, void* meta_class);
     nlohmann::json property_value(uintptr_t address, const std::string& type, int size, uintptr_t field);
     nlohmann::json enum_property(uintptr_t address, const std::string& type, int size, uintptr_t field);
     nlohmann::json enum_metadata(void* object, const nlohmann::json& value, const std::string& underlying_type);
@@ -68,7 +70,7 @@ private:
     nlohmann::json properties(void* object, int limit);
     nlohmann::json selected_properties(void* object, const nlohmann::json& names);
     nlohmann::json snapshot(const nlohmann::json& targets);
-    nlohmann::json functions(void* object, int limit);
+    nlohmann::json functions(void* object, int limit, const std::string& function_query);
     nlohmann::json invoke(void* object, const std::string& function_name, const nlohmann::json& arguments);
     static void __fastcall hooked_tick(void* loop);
     static GameAccess* active_;

@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import ctypes
 import hashlib
 import json
@@ -25,6 +25,7 @@ MAX_READ_BYTES = 64 * 1024
 MAX_EXACT_READ_BYTES = 1024 * 1024
 MAX_FILES = 10_000
 MAX_CONTENT_BYTES = 2 * 1024 * 1024
+MAX_DIRECTORY_PARTS = 32
 _RESERVED = re.compile(r"^(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³])(?:\..*)?$", re.I)
 
 
@@ -268,6 +269,76 @@ class PackageWorkspace:
                            files=["GothicMod.json"], directories=["Script"],
                            sha256=hashlib.sha256(raw).hexdigest(), validation=report)
 
+    def create_package_directory(self, relative_path: str, directory_path: str) -> dict:
+        """Создать только каталоги исходников существующего официального пакета."""
+        parts = _parts(directory_path)
+        if len(parts) > MAX_DIRECTORY_PARTS:
+            raise WorkspaceError("limit_exceeded", "Путь каталога превышает предел 32 компонентов")
+        if parts[0] != "Script" and parts != ("ScriptPatches",):
+            raise WorkspaceError("unsupported_directory", "Разрешены Script[/подкаталоги] и ScriptPatches")
+        with self._lock:
+            package, name = self._package(relative_path)
+            created: list[tuple[Path, tuple[int, int]]] = []
+            with _destination_lock(package), _guard_directories(package, self.root):
+                descriptor = self._unprotected(_checked(package / "GothicMod.json", package))
+                if not descriptor.is_file():
+                    raise WorkspaceError("invalid_descriptor", "Пакет должен содержать обычный GothicMod.json")
+                # Проверить все назначения до первого mkdir, включая будущие отсутствующие.
+                current = package
+                targets: list[Path] = []
+                for component in parts:
+                    current = self._unprotected(current / component)
+                    if os.path.lexists(current):
+                        checked = self._unprotected(_checked(current, package))
+                        if not checked.is_dir():
+                            raise WorkspaceError("conflict", "Компонент пути уже занят файлом")
+                    targets.append(current)
+                try:
+                    report = validate_package(self.root, relative_path)
+                except PackageError as error:
+                    raise WorkspaceError(error.code, str(error)) from None
+                if not report["valid_structure"]:
+                    raise WorkspaceError("invalid_descriptor", "Структура существующего пакета не прошла проверку")
+                try:
+                    with ExitStack() as guards:
+                        for target in targets:
+                            guards.enter_context(_destination_lock(target))
+                            _checked(target.parent, package, directory=True)
+                            self._unprotected(target)
+                            if os.path.lexists(target):
+                                checked = self._unprotected(_checked(target, package))
+                                if not checked.is_dir():
+                                    raise WorkspaceError("conflict", "Компонент пути уже занят файлом")
+                            else:
+                                try:
+                                    target.mkdir()
+                                except FileExistsError:
+                                    checked = self._unprotected(_checked(target, package))
+                                    if not checked.is_dir():
+                                        raise WorkspaceError("conflict", "Компонент пути появился как файл") from None
+                                else:
+                                    info = target.lstat()
+                                    created.append((target, (info.st_dev, info.st_ino)))
+                            guards.enter_context(_guard_directories(target, self.root))
+                except BaseException as error:
+                    # Закрыть no-delete handles перед rmdir; затем проверить путь и владельца.
+                    for target, identity in reversed(created):
+                        try:
+                            with _guard_directories(target.parent, self.root):
+                                checked = self._unprotected(_checked(target, package, directory=True))
+                                info = checked.stat()
+                                if (info.st_dev, info.st_ino) == identity and not any(checked.iterdir()):
+                                    checked.rmdir()
+                        except (WorkspaceError, OSError):
+                            # Изменённый каталог или постороннее содержимое сохраняются.
+                            continue
+                    if isinstance(error, OSError):
+                        raise WorkspaceError("access_error", "Не удалось создать каталоги исходников") from None
+                    raise
+            paths = [path.relative_to(package).as_posix() for path, _ in created]
+            return _result(package_path=name, directory_path="/".join(parts), created=bool(paths),
+                           created_paths=paths, created_count=len(paths), exists=True)
+
     def list_package_files(self, relative_path: str, limit: int = 100) -> dict:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
             raise WorkspaceError("invalid_arguments", "Предел списка должен быть целым числом от 1 до 200")
@@ -382,7 +453,7 @@ class PackageWorkspace:
             target = self._unprotected(parent / parts[-1])
             if parts[0] == "ScriptPatches" and not os.path.lexists(parent) and expected_sha256 is not None:
                 raise WorkspaceError("conflict", "Файл для замены отсутствует")
-            with self._write_parent(package, parts), _destination_lock(target), _guard_directories(parent, self.root):
+            with _destination_lock(package), self._write_parent(package, parts), _destination_lock(target), _guard_directories(parent, self.root):
                 def verify_destination() -> None:
                     exists = os.path.lexists(target)
                     if expected_sha256 is None:
