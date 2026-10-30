@@ -1,0 +1,213 @@
+"""Скриптовый ZIP: точные байты, закрытый состав и отсутствие установки."""
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+import zipfile
+
+TOOL = Path(__file__).resolve().parents[1] / "tools" / "export_script_package.py"
+SPEC = importlib.util.spec_from_file_location("export_script_package", TOOL)
+export = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(export)
+
+
+class ScriptExportTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.workspace = self.root / "workspace"
+        (self.workspace / "artifacts").mkdir(parents=True)
+        self.modkit = self.root / "Modkit"
+        self.game = self.root / "Game"
+        self.modkit.mkdir(); self.game.mkdir()
+        self.package = self.workspace / "WorkingFolder"
+        (self.package / "Script" / "Nested").mkdir(parents=True)
+        (self.package / "ScriptPatches").mkdir()
+        self.source = b"\xef\xbb\xbf// Original\r\nclass UProbe {}\r\n"
+        (self.package / "Script" / "Nested" / "Probe.as").write_bytes(self.source)
+        (self.package / "ScriptPatches" / "Example.patch").write_bytes(b"--- a/Script/X.as\n+++ b/Script/X.as\n")
+        self.descriptor = json.dumps({"name": "ActualMod", "title": "Actual Mod", "author": "Test", "modVersion": "0.3.1"}).encode("utf-8")
+        (self.package / "GothicMod.json").write_bytes(self.descriptor)
+        self.target = self.workspace / "artifacts" / "export"
+
+    def prepare(self, target=None):
+        return export.export_package(self.workspace, "WorkingFolder", target or self.target,
+                                     modkit_root=self.modkit, game_root=self.game)
+
+    def test_exact_source_zip_root_and_determinism(self):
+        result = self.prepare()
+        self.assertFalse(result["compiled"])
+        self.assertFalse(result["installed"])
+        with zipfile.ZipFile(self.target / "ActualMod.zip") as archive:
+            self.assertEqual(archive.read("ActualMod/Script/Nested/Probe.as"), self.source)
+            self.assertEqual(archive.read("ActualMod/GothicMod.json"), self.descriptor)
+            self.assertTrue(all(entry.date_time == (1980, 1, 1, 0, 0, 0) for entry in archive.infolist()))
+        verified = export.verify_export(self.target)
+        self.assertEqual(verified["package_name"], "ActualMod")
+        self.assertEqual(verified["file_count"], 3)
+        second = self.workspace / "artifacts" / "second"
+        self.prepare(second)
+        self.assertEqual((self.target / "ActualMod.zip").read_bytes(), (second / "ActualMod.zip").read_bytes())
+        self.assertEqual((self.package / "Script/Nested/Probe.as").read_bytes(), self.source)
+
+    def test_unknown_components_and_non_source_files_refused(self):
+        for path in ("Content", "Config", "Story", "ScriptPatches/Nested"):
+            with self.subTest(path=path):
+                directory = self.package / path
+                directory.mkdir()
+                try:
+                    with self.assertRaises(export.ExportError) as captured:
+                        self.prepare()
+                    self.assertEqual(captured.exception.code, "unsupported_entry")
+                    self.assertFalse(self.target.exists())
+                finally:
+                    directory.rmdir()
+        unknown = self.package / "Script" / "Binds.Cache"
+        unknown.write_bytes(b"user cache")
+        with self.assertRaises(export.ExportError):
+            self.prepare()
+        self.assertEqual(unknown.read_bytes(), b"user cache")
+
+    def test_protected_roots_existing_target_and_redirects_refused(self):
+        self.prepare()
+        with self.assertRaises(export.ExportError) as captured:
+            self.prepare()
+        self.assertEqual(captured.exception.code, "already_exists")
+        with self.assertRaises(export.ExportError):
+            self.prepare(self.workspace / "outside")
+        protected = self.game / "WorkingFolder"
+        protected.mkdir()
+        (protected / "GothicMod.json").write_bytes(self.descriptor)
+        with self.assertRaises(export.WorkspaceError):
+            export.export_package(self.game, "WorkingFolder", self.game / "artifacts/export",
+                                  modkit_root=self.modkit, game_root=self.game)
+        outside = self.root / "outside.as"
+        outside.write_bytes(b"user outside")
+        linked = self.package / "Script" / "Linked.as"
+        try:
+            linked.symlink_to(outside)
+        except OSError:
+            self.skipTest("Система не разрешает isolated symlink")
+        with self.assertRaises((export.WorkspaceError, export.PackageError)):
+            self.prepare(self.workspace / "artifacts" / "redirected")
+        self.assertEqual(outside.read_bytes(), b"user outside")
+
+    def test_source_changed_between_reads_refused(self):
+        original = export._source_files
+        calls = 0
+
+        def mutate(*arguments):
+            nonlocal calls
+            result = original(*arguments)
+            calls += 1
+            if calls == 1:
+                (self.package / "Script" / "Foreign.as").write_bytes(b"foreign source")
+            return result
+
+        with patch.object(export, "_source_files", mutate):
+            with self.assertRaises(export.ExportError) as captured:
+                self.prepare()
+        self.assertEqual(captured.exception.code, "source_changed")
+        self.assertFalse(self.target.exists())
+
+    def test_verify_hash_paths_and_foreign_files(self):
+        self.prepare()
+        archive = self.target / "ActualMod.zip"
+        original = archive.read_bytes()
+        archive.write_bytes(original + b"tampered")
+        with self.assertRaises(export.ExportError) as captured:
+            export.verify_export(self.target)
+        self.assertEqual(captured.exception.code, "integrity_mismatch")
+        archive.write_bytes(original)
+        foreign = self.target / "Foreign.txt"
+        foreign.write_bytes(b"foreign output")
+        with self.assertRaises(export.ExportError):
+            export.verify_export(self.target)
+        foreign.unlink()
+        mf = self.target / "manifest.json"
+        manifest = json.loads(mf.read_text(encoding="utf-8"))
+        manifest["files"][0]["path"] = "../Escape.as"
+        mf.write_text(json.dumps(manifest), encoding="utf-8")
+        with self.assertRaises(export.WorkspaceError):
+            export.verify_export(self.target)
+
+    def test_partial_write_failure_cleans_own_output(self):
+        original = Path.open
+
+        class Failure:
+            def __init__(self, stream): self.stream = stream
+            def __enter__(self): return self
+            def __exit__(self, *args): self.stream.close()
+            def fileno(self): return self.stream.fileno()
+            def write(self, raw):
+                self.stream.write(raw[:10]); self.stream.flush()
+                raise OSError("isolated write failure")
+
+        def fail(path, mode="r", *args, **kwargs):
+            stream = original(path, mode, *args, **kwargs)
+            if mode == "xb" and path.name == "manifest.json" and ".g1r-script-export-" in str(path):
+                return Failure(stream)
+            return stream
+
+        with patch.object(Path, "open", fail):
+            with self.assertRaises(OSError):
+                self.prepare()
+        self.assertFalse(self.target.exists())
+        self.assertEqual(list((self.workspace / "artifacts").iterdir()), [])
+
+    def test_foreign_file_added_to_stage_preserved_not_published(self):
+        original = export.verify_export
+        injected = []
+
+        def add(root):
+            file = root / "Foreign.txt"
+            file.write_bytes(b"foreign user output")
+            injected.append(file)
+            return original(root)
+
+        with patch.object(export, "verify_export", add):
+            with self.assertRaises(export.ExportError):
+                self.prepare()
+        self.assertFalse(self.target.exists())
+        self.assertEqual(injected[0].read_bytes(), b"foreign user output")
+
+    def test_archive_verifier_refuses_duplicate_link_and_false_runtime_claims(self):
+        self.prepare()
+        root_manifest = json.loads((self.target / "manifest.json").read_text(encoding="utf-8"))
+        root_manifest["compiled"] = True
+        (self.target / "manifest.json").write_text(json.dumps(root_manifest), encoding="utf-8")
+        with self.assertRaises(export.ExportError) as captured:
+            export.verify_export(self.target)
+        self.assertEqual(captured.exception.code, "invalid_manifest")
+        root_manifest["compiled"] = False
+        archive_path = self.target / "ActualMod.zip"
+        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_STORED) as archive:
+            entry = zipfile.ZipInfo("ActualMod/GothicMod.json")
+            entry.create_system = 3
+            entry.external_attr = (0o120777 << 16)
+            archive.writestr(entry, self.descriptor)
+            archive.writestr("ActualMod/Script/Nested/Probe.as", self.source)
+            archive.writestr("ActualMod/ScriptPatches/Example.patch", b"--- a/Script/X.as\n+++ b/Script/X.as\n")
+        archive_raw = archive_path.read_bytes()
+        root_manifest["archive"]["bytes"] = len(archive_raw)
+        root_manifest["archive"]["sha256"] = hashlib.sha256(archive_raw).hexdigest()
+        (self.target / "manifest.json").write_text(json.dumps(root_manifest), encoding="utf-8")
+        with self.assertRaises(export.ExportError) as captured:
+            export.verify_export(self.target)
+        self.assertEqual(captured.exception.code, "unsafe_archive")
+
+    def test_descriptor_contract_rejects_duplicates_nonfinite_and_bad_dependencies(self):
+        for descriptor in (b'{"name":"A","name":"B"}',
+                           b'{"name":"A","title":"B","author":"C","modVersion":"1","loadOrder":false}',
+                           b'{"name":"A","title":"B","author":"C","modVersion":"1","dependencies":[{}]}',
+                           b'{"name":"A","title":"B","author":"C","modVersion":"1","unknown":NaN}'):
+            with self.subTest(descriptor=descriptor), self.assertRaises(export.ExportError):
+                export._descriptor_metadata(descriptor)
+
+
+if __name__ == "__main__":
+    unittest.main()

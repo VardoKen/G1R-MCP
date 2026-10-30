@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <nlohmann/json.hpp>
 #include "g1r_mcp/observations.hpp"
+#include "g1r_mcp/enum_values.hpp"
 
 namespace g1r_mcp {
 class GameAccess {
@@ -64,6 +65,10 @@ private:
     nlohmann::json property_value(uintptr_t address, const std::string& type, int size, uintptr_t field);
     nlohmann::json enum_property(uintptr_t address, const std::string& type, int size, uintptr_t field);
     nlohmann::json enum_metadata(void* object, const nlohmann::json& value, const std::string& underlying_type);
+    struct EnumLayout {std::string underlying_type;int size;void* object;};
+    struct EnumTable {Handle identity;std::string path;std::vector<g1r::enum_values::Entry> entries;};
+    EnumLayout enum_layout(const std::string& type, int size, uintptr_t field) const;
+    EnumTable enum_table(void* object) const;
     void* resolve(const std::string& id);
     void* slot(int index) const;
     nlohmann::json object_info(void* object, int index);
