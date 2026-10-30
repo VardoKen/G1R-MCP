@@ -14,6 +14,13 @@ MAX_OBJECTS = 16
 MAX_PROPERTIES = 32
 MAX_ITEMS = 200
 MAX_OBJECT_INDEX = 4_000_000
+ENUM_INTEGER_RANGES = {
+    "IntProperty": (-(2**31), 2**31 - 1),
+    "Int64Property": (-(2**63), 2**63 - 1),
+    "UInt32Property": (0, 2**32 - 1),
+    "UInt64Property": (0, 2**64 - 1),
+    "ByteProperty": (0, 255),
+}
 
 
 class SnapshotError(Exception):
@@ -72,6 +79,48 @@ def _object_value(value: Any, session_id: str) -> None:
 
 def _value_kind(prop: dict[str, Any]) -> str:
     return "object_reference" if prop["type"] == "ObjectProperty" else type(prop["value"]).__name__
+
+
+def _enum_metadata(metadata: Any, prop: dict[str, Any]) -> None:
+    expected = {"path", "underlying_type", "name_status", "value_name", "matched_count", "ambiguous", "reason"}
+    if not isinstance(metadata, dict) or set(metadata) != expected:
+        _invalid("Неверный набор метаданных enum")
+    if prop.get("type") not in {"EnumProperty", "ByteProperty"}:
+        _invalid("Метаданные enum допускаются только для EnumProperty или ByteProperty")
+    underlying = metadata["underlying_type"]
+    if not isinstance(underlying, str) or underlying not in ENUM_INTEGER_RANGES:
+        _invalid("Неизвестный числовой тип enum")
+    if prop["type"] == "ByteProperty" and underlying != "ByteProperty":
+        _invalid("ByteProperty требует соответствующий базовый тип enum")
+    if prop["supported"]:
+        minimum, maximum = ENUM_INTEGER_RANGES[underlying]
+        if type(prop.get("value")) is not int or not minimum <= prop["value"] <= maximum:
+            _invalid("Числовое значение enum не соответствует базовому типу")
+    for key, bound in (("path", 8192), ("value_name", 4096), ("reason", 128)):
+        if metadata[key] is not None:
+            _text(metadata[key], f"enum.{key}")
+            if len(metadata[key].encode("utf-8")) > bound or "\0" in metadata[key]:
+                _invalid(f"enum.{key}: строка превышает предел или содержит NUL")
+    count = metadata["matched_count"]
+    _integer(count, "Число совпадений enum")
+    if count > 4096 or type(metadata["ambiguous"]) is not bool or metadata["ambiguous"] != (count > 1):
+        _invalid("Неверные сведения о совпадениях enum")
+    status = metadata["name_status"]
+    if not isinstance(status, str) or status not in {"matched", "not_found", "unavailable", "value_unrepresentable"}:
+        _invalid("Неизвестный статус имени enum")
+    if status == "matched":
+        if count == 0 or metadata["value_name"] is None or metadata["path"] is None or metadata["reason"] is not None:
+            _invalid("matched требует имя, путь и совпадение без ошибки")
+    elif metadata["value_name"] is not None:
+        _invalid("Непрочитанное имя enum должно быть null")
+    if status in {"not_found", "value_unrepresentable"} and count != 0:
+        _invalid("Статус enum без совпадений требует matched_count=0")
+    if status == "not_found" and metadata["path"] is None:
+        _invalid("not_found требует известный путь enum")
+    if status == "value_unrepresentable" and (
+        underlying != "UInt64Property" or not prop["supported"] or prop["value"] <= 2**63 - 1
+    ):
+        _invalid("value_unrepresentable требует uint64 за пределом int64")
 
 
 def _encoded_size(value: Any) -> int:
@@ -138,7 +187,7 @@ def _snapshot(value: Any) -> dict[str, dict[str, Any]]:
             _invalid("Объект допускает не более 32 выбранных свойств")
         names: set[str] = set()
         for prop in properties:
-            if not isinstance(prop, dict) or not prop.keys() <= {"name", "type", "supported", "value", "error"}:
+            if not isinstance(prop, dict) or not prop.keys() <= {"name", "type", "supported", "value", "error", "enum"}:
                 _invalid("Неверная форма свойства в снимке")
             _text(prop.get("name"), "Имя свойства")
             if prop["name"] in names:
@@ -161,6 +210,18 @@ def _snapshot(value: Any) -> dict[str, dict[str, Any]]:
                     _invalid("Поддержанное значение должно быть скаляром")
             elif "value" in prop and prop["value"] is not None:
                 _invalid("Неподдержанное свойство не должно выдавать значение за прочитанное")
+            if "enum" in prop:
+                _enum_metadata(prop["enum"], prop)
+            elif prop.get("type") == "EnumProperty" and prop["supported"] and (
+                type(prop["value"]) is not int or not -(2**63) <= prop["value"] <= 2**64 - 1
+            ):
+                _invalid("Значение EnumProperty должно быть целым числом в пределах int64/uint64")
+            if prop.get("type") == "NameProperty" and prop["supported"] and not isinstance(prop["value"], str):
+                _invalid("Значение NameProperty должно быть строкой")
+            if prop.get("type") == "ByteProperty" and prop["supported"] and (
+                type(prop["value"]) is not int or not 0 <= prop["value"] <= 255
+            ):
+                _invalid("Значение ByteProperty должно быть целым числом от 0 до 255")
         result[obj["handle"]] = obj
     return result
 
@@ -177,6 +238,7 @@ def compare_snapshots(before: dict[str, Any], after: dict[str, Any], limit: int 
         "source": "copied_snapshots", "validation": "client_supplied_copies", "provenance": "unverified",
         "before_snapshot_id": before["snapshot_id"], "after_snapshot_id": after["snapshot_id"],
         "comparable": True, "reason": "same_session_process", "items": [], "total_items": 0,
+        "metadata_annotations": [], "metadata_annotation_count": 0,
         "value_changes": 0, "type_changes": 0, "unknown_count": 0, "coverage_changes": 0,
         "truncated": False, "equal_selected_values": None,
         "coverage": {"before_partial": before["partial"], "after_partial": after["partial"],
@@ -193,6 +255,19 @@ def compare_snapshots(before: dict[str, Any], after: dict[str, Any], limit: int 
             return result
 
     entries: list[dict[str, Any]] = []
+    annotations: list[dict[str, Any]] = []
+
+    def annotate(handle: str, name: str, a: dict[str, Any], b: dict[str, Any]) -> None:
+        left_enum, right_enum = a.get("enum"), b.get("enum")
+        if left_enum is None and right_enum is None:
+            return
+        unavailable = any(metadata is None or metadata["name_status"] != "matched"
+                          for metadata in (left_enum, right_enum))
+        if unavailable or left_enum != right_enum:
+            annotations.append({
+                "kind": "enum_metadata_unavailable" if unavailable else "enum_metadata_changed",
+                "handle": handle, "property": name, "before": left_enum, "after": right_enum,
+            })
 
     def emit(kind: str, **fields: Any) -> None:
         entries.append({"kind": kind, **fields})
@@ -236,6 +311,7 @@ def compare_snapshots(before: dict[str, Any], after: dict[str, Any], limit: int 
                 emit("unknown", handle=handle, property=name, reason="selected_property_coverage_changed")
                 continue
             a, b = left_props[name], right_props[name]
+            annotate(handle, name, a, b)
             if not source_known or not a["supported"] or not b["supported"]:
                 emit("unknown", handle=handle, property=name,
                      reason="source_not_claimed_live_native" if not source_known else "property_not_readable",
@@ -257,6 +333,7 @@ def compare_snapshots(before: dict[str, Any], after: dict[str, Any], limit: int 
                 emit("value_changed", handle=handle, property=name, before=a["value"], after=b["value"])
 
     result["total_items"] = len(entries)
+    result["metadata_annotation_count"] = len(annotations)
     result["coverage"]["complete"] &= not bool(result["unknown_count"] or result["coverage_changes"])
     result["equal_selected_values"] = (
         not bool(result["value_changes"] or result["type_changes"])
@@ -267,7 +344,14 @@ def compare_snapshots(before: dict[str, Any], after: dict[str, Any], limit: int 
         if _encoded_size(result) > MAX_DIFF_BYTES:
             result["items"].pop()
             break
-    result["truncated"] = len(result["items"]) < len(entries)
+    remaining = limit - len(result["items"])
+    for annotation in annotations[:remaining]:
+        result["metadata_annotations"].append(annotation)
+        if _encoded_size(result) > MAX_DIFF_BYTES:
+            result["metadata_annotations"].pop()
+            break
+    result["truncated"] = (len(result["items"]) < len(entries)
+                           or len(result["metadata_annotations"]) < len(annotations))
     # Все вложенные значения ответа копируются: вызывающий код не получает
     # изменяемые элементы входных снимков даже для записей об ошибках.
     return json.loads(json.dumps(result, ensure_ascii=False, allow_nan=False))

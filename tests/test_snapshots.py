@@ -27,6 +27,14 @@ def object_reference(handle="ref-1", index=12):
             "class": "Target", "session_id": "session-1"}
 
 
+def enum_property(value=0, *, status="matched", label="EProbe::None", count=1,
+                  underlying="IntProperty", path="/Script/Probe.EProbe", reason=None, kind="EnumProperty"):
+    return {"name": "Mode", "type": kind, "supported": True, "value": value, "enum": {
+        "path": path, "underlying_type": underlying, "name_status": status,
+        "value_name": label, "matched_count": count, "ambiguous": count > 1, "reason": reason,
+    }}
+
+
 class SnapshotComparisonTests(unittest.TestCase):
     def assert_invalid(self, candidate, code="invalid_snapshot"):
         with self.assertRaises(SnapshotError) as failure:
@@ -303,6 +311,94 @@ class SnapshotComparisonTests(unittest.TestCase):
         result = compare_snapshots(before, after)
         self.assertEqual((result["type_changes"], result["value_changes"]), (1, 1))
         self.assertEqual(result["items"][0]["before_value_kind"], "object_reference")
+
+    def test_enum_label_changes_are_metadata_while_number_compares(self):
+        before = snapshot([enum_property(7, label="EProbe::First")])
+        after = snapshot([enum_property(7, label="EProbe::Alias", count=2)])
+        result = compare_snapshots(before, after)
+        self.assertTrue(result["equal_selected_values"])
+        self.assertEqual((result["value_changes"], result["type_changes"], result["unknown_count"]), (0, 0, 0))
+        self.assertEqual(result["metadata_annotation_count"], 1)
+        self.assertEqual(result["metadata_annotations"][0]["kind"], "enum_metadata_changed")
+        result["metadata_annotations"][0]["after"]["path"] = "/ChangedOutput"
+        self.assertEqual(after["objects"][0]["properties"][0]["enum"]["path"], "/Script/Probe.EProbe")
+        after["objects"][0]["properties"][0]["value"] = 8
+        result = compare_snapshots(before, after)
+        self.assertEqual(result["value_changes"], 1)
+        self.assertFalse(result["equal_selected_values"])
+
+    def test_enum_unavailable_metadata_never_hides_numeric_value(self):
+        before = snapshot([enum_property(0)])
+        after = snapshot([enum_property(2, status="unavailable", label=None, count=0,
+                                       path=None, reason="invalid_enum_object")])
+        result = compare_snapshots(before, after)
+        self.assertEqual((result["value_changes"], result["unknown_count"]), (1, 0))
+        self.assertTrue(result["coverage"]["complete"])
+        self.assertEqual(result["metadata_annotations"][0]["kind"], "enum_metadata_unavailable")
+        equal = compare_snapshots(after, after)
+        self.assertTrue(equal["equal_selected_values"])
+        self.assertEqual(equal["metadata_annotation_count"], 1)
+        missing = snapshot([prop("Mode", 2, "EnumProperty")])
+        result = compare_snapshots(after, missing)
+        self.assertTrue(result["equal_selected_values"])
+        self.assertEqual(result["metadata_annotation_count"], 1)
+
+    def test_enum_actual_statuses_unsigned_and_unicode_labels(self):
+        cases = [enum_property(0), enum_property(99, status="not_found", label=None, count=0),
+                 enum_property(1, status="unavailable", label=None, count=2, reason="enum_name_decode_failed"),
+                 enum_property(2**64 - 1, status="value_unrepresentable", label=None, count=0,
+                               underlying="UInt64Property", reason="value_exceeds_int64"),
+                 enum_property(255, kind="ByteProperty", underlying="ByteProperty", label="Enum::最大"),
+                 enum_property(-2**63, underlying="Int64Property", label="Набор::Отрицательное"),
+                 enum_property(2**32 - 1, underlying="UInt32Property", label="Enum::Large")]
+        for candidate in cases:
+            with self.subTest(status=candidate["enum"]["name_status"]):
+                copied = snapshot([candidate])
+                self.assertTrue(compare_snapshots(copied, copied)["equal_selected_values"])
+        self.assertTrue(compare_snapshots(snapshot([prop("Socket", "spine_03", "NameProperty")]),
+                                          snapshot([prop("Socket", "spine_03", "NameProperty")]))["equal_selected_values"])
+
+    def test_enum_metadata_ranges_and_states_are_strict(self):
+        valid = enum_property()
+        malformed = [({"extra": True}, None), ({"underlying_type": "FloatProperty"}, None),
+                     ({"name_status": "unknown"}, None), ({"name_status": []}, None), ({"matched_count": True}, None),
+                     ({"matched_count": 4097}, None), ({"matched_count": 2}, None),
+                     ({"value_name": None}, None), ({"path": None}, None),
+                     ({"reason": "x" * 129}, None), ({"value_name": "x" * 4097}, None),
+                     ({"path": "x" * 8193}, None), ({"value_name": "Bad\0Name"}, None),
+                     ({"name_status": "not_found", "value_name": None}, None),
+                     ({"name_status": "value_unrepresentable", "value_name": None, "matched_count": 0}, None)]
+        for metadata, _ in malformed:
+            candidate = copy.deepcopy(valid)
+            candidate["enum"].update(metadata)
+            self.assert_invalid(snapshot([candidate]))
+        candidate = copy.deepcopy(valid)
+        del candidate["enum"]["ambiguous"]
+        self.assert_invalid(snapshot([candidate]))
+        for number in (True, 1.0, -2**31 - 1, 2**31):
+            self.assert_invalid(snapshot([enum_property(number)]))
+        self.assert_invalid(snapshot([enum_property(1, kind="IntProperty")]))
+        self.assert_invalid(snapshot([enum_property(1, kind="ByteProperty", underlying="IntProperty")]))
+        self.assert_invalid(snapshot([prop("Mode", 2**64, "EnumProperty")]))
+        self.assert_invalid(snapshot([prop("Socket", 17, "NameProperty")]))
+
+    def test_enum_metadata_annotations_share_result_limit_and_preserve_totals(self):
+        before = snapshot([enum_property(0)])
+        after = snapshot([enum_property(1, status="not_found", label=None, count=0)])
+        result = compare_snapshots(before, after, limit=1)
+        self.assertEqual((result["value_changes"], len(result["items"])), (1, 1))
+        self.assertEqual((result["metadata_annotation_count"], len(result["metadata_annotations"])), (1, 0))
+        self.assertTrue(result["truncated"])
+
+    def test_plain_byte_property_enforces_uint8_without_enum_metadata(self):
+        for value in (True, 1.5, "not-a-byte", -1, 256):
+            with self.subTest(value=repr(value)):
+                self.assert_invalid(snapshot([prop("Byte", value, "ByteProperty")]))
+        for value in (0, 255):
+            candidate = snapshot([prop("Byte", value, "ByteProperty")])
+            result = compare_snapshots(candidate, candidate)
+            self.assertTrue(result["equal_selected_values"])
+            self.assertEqual(result["metadata_annotation_count"], 0)
 
 
 if __name__ == "__main__":

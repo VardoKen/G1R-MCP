@@ -102,8 +102,8 @@ class GameProcessCommonTests(unittest.TestCase):
         with self._sleeper() as (child, identity):
             body = self._open(identity) + (
                 "try { $r=Stop-G1RCheckedProcess -Lease $lease -GraceMilliseconds 0 "
-                "-ForceWaitMilliseconds 5000 -AllowForce } finally {$lease.Dispose()}; "
-                "@{result=$r; disposed=$lease.IsDisposed} | ConvertTo-Json -Depth 6 -Compress"
+                "-ForceWaitMilliseconds 5000 -AllowForce; $exitTime=$lease.GetExitTime() } finally {$lease.Dispose()}; "
+                "@{result=$r; exit_time=$exitTime; disposed=$lease.IsDisposed} | ConvertTo-Json -Depth 6 -Compress"
             )
             result = self._powershell(body)
             self.assertEqual(result["result"]["state"], "stopped")
@@ -111,6 +111,8 @@ class GameProcessCommonTests(unittest.TestCase):
             self.assertEqual(result["result"]["process"], identity)
             self.assertTrue(result["disposed"])
             self.assertFalse(result["result"]["outcome_unknown"])
+            self.assertRegex(result["exit_time"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{7}Z$")
+            self.assertGreaterEqual(result["exit_time"], identity["creation_time"])
             child.wait(timeout=5)
 
     def test_readonly_handle_rejects_force_and_disposal_rejects_wait(self):
@@ -121,6 +123,12 @@ class GameProcessCommonTests(unittest.TestCase):
             )
             result = self._powershell(body)
             self.assertEqual(result["code"], "termination_not_enabled")
+            self.assertIsNone(child.poll())
+            body = self._open(identity, terminate=False) + (
+                "try {$lease.GetExitTime()} catch { " + self._catch_code() + " } finally {$lease.Dispose()}"
+            )
+            result = self._powershell(body)
+            self.assertEqual(result["code"], "process_still_running")
             self.assertIsNone(child.poll())
             body = self._open(identity, terminate=False) + (
                 "$lease.Dispose(); try {$lease.Wait(0)} catch { " + self._catch_code() + " }"

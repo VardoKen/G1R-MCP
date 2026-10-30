@@ -141,6 +141,54 @@ class DevelopmentCycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sum(name == "g1r_native_enable" for name, _ in fake.calls), 1)
         self.assertGreater(status_calls[0], 2)
 
+    async def test_bootstrap_only_timeout_stops_captured_outer_once(self):
+        fake = FakeMCP()
+        outer = {**fake.process, "pid": 42, "executable": "E:/Game/G1R-Win64-Shipping.exe"}
+        elapsed = [0.0]
+        async def sleep(seconds):
+            elapsed[0] += seconds
+        async def call(name, args):
+            if name == "g1r_development_processes" and fake.started and not fake.stopped:
+                fake.calls.append((name, copy.deepcopy(args)))
+                return {"processes": [dict(outer)]}
+            if name == "g1r_development_stop":
+                fake.calls.append((name, copy.deepcopy(args)))
+                fake.stopped = True
+                return {"state": "stop_result", "process": dict(outer), "tool_result": {"state": "stopped"}}
+            return await fake.call(name, args)
+        with self.assertRaises(probe.ProbeError) as captured:
+            await probe.development_cycle(call, "artifacts/probe", 2, startup_timeout=1,
+                                           clock=lambda: elapsed[0], sleep=sleep)
+        self.assertEqual(captured.exception.code, "game_start_timeout")
+        stops = [args for name, args in fake.calls if name == "g1r_development_stop"]
+        self.assertEqual(stops, [{"expected_process": outer}])
+        self.assertNotIn("g1r_native_load", [name for name, _ in fake.calls])
+
+    async def test_replaced_bootstrap_cleanup_does_not_retarget_new_pid(self):
+        fake = FakeMCP()
+        outer = {**fake.process, "pid": 42, "executable": "E:/Game/G1R-Win64-Shipping.exe"}
+        replacement = {**outer, "pid": 43}
+        seen = [0]
+        elapsed = [0.0]
+        async def sleep(seconds):
+            elapsed[0] += seconds
+        async def call(name, args):
+            if name == "g1r_development_processes" and fake.started:
+                fake.calls.append((name, copy.deepcopy(args)))
+                seen[0] += 1
+                return {"processes": [dict(outer if seen[0] == 1 else replacement)]}
+            if name == "g1r_development_stop":
+                fake.calls.append((name, copy.deepcopy(args)))
+                raise probe.ProbeError("process_changed", "Исходный PID уже отсутствует")
+            return await fake.call(name, args)
+        with self.assertRaises(probe.ProbeError) as captured:
+            await probe.development_cycle(call, "artifacts/probe", 2,
+                                           clock=lambda: elapsed[0], sleep=sleep)
+        self.assertEqual(captured.exception.code, "cleanup_failed")
+        stops = [args for name, args in fake.calls if name == "g1r_development_stop"]
+        self.assertEqual(stops, [{"expected_process": outer}])
+        self.assertNotIn({"expected_process": replacement}, stops)
+
     def test_inner_selection_ignores_bootstrap_and_preserves_timestamp(self):
         fake = FakeMCP()
         bootstrap = {**fake.process, "pid": 41, "executable": "E:/Game/G1R.exe"}

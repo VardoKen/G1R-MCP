@@ -27,6 +27,8 @@ param(
     [string]$AppId = '1297900',
     [string]$ModsDirectory,
     [string[]]$Mods,
+    [string]$ScriptDirectory,
+    [switch]$ShowScriptErrors,
     [uint32]$ExpectedPid,
     [string]$ExpectedCreationTime,
     [switch]$Json,
@@ -118,6 +120,15 @@ if ([System.IO.Path]::GetFileName($resolvedSteamExe) -ine 'steam.exe') {
 }
 
 $packageOptions = @()
+$scriptOptions = @()
+if (-not [string]::IsNullOrWhiteSpace($ScriptDirectory)) {
+    if ($ScriptDirectory -notmatch '^(?:[A-Za-z]:[\\/]|\\\\[^\\]+\\[^\\]+)' -or $ScriptDirectory -match '["\x00-\x1f]' -or $ScriptDirectory.Substring(2).Contains(':')) {
+        throw 'ScriptDirectory должен быть абсолютным путём без кавычек и управляющих символов.'
+    }
+    $resolvedScriptDirectory = Get-RequiredPath -Path $ScriptDirectory -Label 'Основная Script-база' -Directory
+    Assert-NoPathRedirect -Path $resolvedScriptDirectory
+    $scriptOptions = @(('-ScriptDirectory="' + $resolvedScriptDirectory.Replace('\', '/') + '"'))
+}
 $selectedMods = @($Mods | Where-Object { $null -ne $_ })
 if (-not [string]::IsNullOrWhiteSpace($ModsDirectory) -or $selectedMods.Count -gt 0) {
     if ([string]::IsNullOrWhiteSpace($ModsDirectory) -or $selectedMods.Count -eq 0) {
@@ -156,9 +167,10 @@ $steamArguments = @(
     '-applaunch', $AppId,
     '-FromModManagementUI',
     '-as-development-mode',
-    '-as-ignore-precompiled-data',
-    '-as-exit-on-error'
-) + $packageOptions
+    '-as-ignore-precompiled-data'
+)
+if (-not $ShowScriptErrors) { $steamArguments += '-as-exit-on-error' }
+$steamArguments += $packageOptions + $scriptOptions
 $operation = if ($runningProcesses.Count -gt 0) {
     'Штатно закрыть игру и запустить режим разработки через Steam'
 }

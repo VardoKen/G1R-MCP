@@ -60,6 +60,8 @@ private:
     bool is_compatible_object(void* object, void* expected_class) const;
     nlohmann::json object_descriptor(void* object, void* expected_class);
     nlohmann::json property_value(uintptr_t address, const std::string& type, int size, uintptr_t field);
+    nlohmann::json enum_property(uintptr_t address, const std::string& type, int size, uintptr_t field);
+    nlohmann::json enum_metadata(void* object, const nlohmann::json& value, const std::string& underlying_type);
     void* resolve(const std::string& id);
     void* slot(int index) const;
     nlohmann::json object_info(void* object, int index);

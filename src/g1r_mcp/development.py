@@ -289,10 +289,13 @@ class DevelopmentService:
                 "diagnostics_available": False, "dedicated_compile_command": False,
                 "compiled": False, "runtime_validation": "not_performed"}
 
-    def _expected_process(self, expected_process: dict, state: dict) -> dict:
+    def _expected_process(self, expected_process: dict, state: dict, *, allow_bootstrap: bool = False) -> dict:
         expected = _identity(expected_process)
-        if os.path.normcase(expected["executable"]) != os.path.normcase(str(self.inner_executable)):
-            raise DevelopmentError("process_path_mismatch", "Ожидаемый процесс должен быть внутренним EXE выбранной игры")
+        allowed = {os.path.normcase(str(self.inner_executable))}
+        if allow_bootstrap:
+            allowed.add(os.path.normcase(str(self.bootstrap_executable)))
+        if os.path.normcase(expected["executable"]) not in allowed:
+            raise DevelopmentError("process_path_mismatch", "Ожидаемый процесс имеет неподтверждённый EXE выбранной игры")
         matches = [item for item in state["processes"] if item == expected]
         if len(matches) != 1:
             raise DevelopmentError("process_changed", "PID, время создания или путь игры изменились")
@@ -328,7 +331,7 @@ class DevelopmentService:
                 "game_ready": False, "outcome_unknown": False}
 
     def stop(self, expected_process: dict) -> dict:
-        expected = self._expected_process(expected_process, self.process_state())
+        expected = self._expected_process(expected_process, self.process_state(), allow_bootstrap=True)
         response = self._command("stop_g1r_development.ps1", ["-GameRoot", str(self.game),
                                  "-ExpectedPid", str(expected["pid"]),
                                  "-ExpectedCreationTime", expected["creation_time"]], mutating=True)

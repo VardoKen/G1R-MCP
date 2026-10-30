@@ -162,6 +162,20 @@ namespace G1RMCP.ProcessControl {
 
         public bool IsRunning() { return !Wait(0); }
 
+        public string GetExitTime() {
+            AssertOpen();
+            if (!Wait(0))
+                throw Failure("process_still_running", "Время завершения ещё работающего процесса недоступно", false);
+            Native.FileTime created, exited, kernel, user;
+            if (!Native.GetProcessTimes(handle, out created, out exited, out kernel, out user))
+                throw Failure("process_identity_unavailable", "Не удалось прочитать время завершения исходного процесса", false);
+            ulong ticks = ((ulong)exited.High << 32) | exited.Low;
+            if (ticks == 0 || ticks > Int64.MaxValue)
+                throw Failure("process_identity_unavailable", "Неверное время завершения исходного процесса", false);
+            return DateTime.FromFileTimeUtc((long)ticks).ToString(
+                "yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'", CultureInfo.InvariantCulture);
+        }
+
         private int RequestGracefulClose(Stopwatch elapsed, int budget) {
             var windows = new List<IntPtr>();
             Native.EnumWindowsCallback callback = delegate(IntPtr window, IntPtr parameter) {

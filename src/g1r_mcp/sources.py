@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
+import hashlib
 import os
+import stat
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 
@@ -18,6 +20,7 @@ MAX_FILE_BYTES = 2 * 1024 * 1024
 MAX_FILES = 100_000
 MAX_QUERY_CHARS = 512
 MAX_READ_BYTES = 64 * 1024
+MAX_EXACT_READ_BYTES = 1024 * 1024
 
 
 class SourceError(Exception):
@@ -40,8 +43,10 @@ def _check_path(path: Path, boundary: Path | None = None, *, directory: bool = F
         absolute = Path(os.path.abspath(path))
         parts = (absolute, *absolute.parents)
         for part in parts:
-            if part.is_symlink() or (hasattr(part, "is_junction") and part.is_junction()):
-                raise SourceError("unsafe_path", "Путь источника содержит символическую ссылку или junction")
+            info = part.lstat()
+            if (part.is_symlink() or (hasattr(part, "is_junction") and part.is_junction())
+                    or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+                raise SourceError("unsafe_path", "Путь источника содержит ссылку или reparse point")
             if boundary is not None and part == boundary:
                 break
         resolved = absolute.resolve(strict=True)
@@ -58,34 +63,46 @@ def _check_path(path: Path, boundary: Path | None = None, *, directory: bool = F
         raise SourceError("source_unavailable", "Источник отсутствует или недоступен") from None
 
 
-def _read_text(file: SourceFile, boundary: Path) -> str:
+def _read_source_bytes(file: SourceFile, boundary: Path, maximum: int = MAX_FILE_BYTES) -> bytes:
     try:
         path = _check_path(file.path, boundary)
         before = path.stat()
-        if before.st_size > MAX_FILE_BYTES:
-            raise SourceError("file_too_large", "Исходник превышает предел 2 МиБ")
+        if before.st_size > maximum:
+            raise SourceError("file_too_large", "Исходник превышает предел выбранного режима чтения")
         with path.open("rb") as stream:
-            raw = stream.read(MAX_FILE_BYTES + 1)
-        if len(raw) > MAX_FILE_BYTES:
-            raise SourceError("file_too_large", "Исходник превышает предел 2 МиБ")
+            raw = stream.read(maximum + 1)
+        if len(raw) > maximum:
+            raise SourceError("file_too_large", "Исходник превышает предел выбранного режима чтения")
         _check_path(path, boundary)
         after = path.stat()
         if (before.st_size, before.st_mtime_ns, before.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
             raise SourceError("source_changed", "Исходник изменился во время чтения; повторите запрос")
-        return raw.decode("utf-8-sig", errors="strict")
+        return raw
     except SourceError:
         raise
-    except UnicodeDecodeError:
-        raise SourceError("invalid_encoding", "Исходник не является корректным UTF-8") from None
     except (OSError, ValueError):
         raise SourceError("source_unavailable", "Источник отсутствует или недоступен") from None
+
+
+def _read_source(file: SourceFile, boundary: Path) -> tuple[str, str]:
+    raw = _read_source_bytes(file, boundary)
+    try:
+        return raw.decode("utf-8-sig", errors="strict"), hashlib.sha256(raw).hexdigest()
+    except UnicodeDecodeError:
+        raise SourceError("invalid_encoding", "Исходник не является корректным UTF-8") from None
+
+
+def _read_text(file: SourceFile, boundary: Path) -> str:
+    return _read_source(file, boundary)[0]
 
 
 def _discovered_file(path: Path, boundary: Path) -> Path:
     """Проверить файл в уже проверенном os.walk-каталоге без обхода предков."""
     try:
-        if path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()):
-            raise SourceError("unsafe_path", "Источник содержит символическую ссылку или junction")
+        info = path.lstat()
+        if (path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction())
+                or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+            raise SourceError("unsafe_path", "Источник содержит ссылку или reparse point")
         if not path.is_relative_to(boundary):
             raise SourceError("unsafe_path", "Источник выходит за разрешённый каталог")
         if not path.is_file():
@@ -247,16 +264,14 @@ class SourceCatalog:
                         items.append(self._item(file, line=line_number, text=line[:4096], text_truncated=len(line) > 4096))
         return self._scan_result(items, total, files, skipped, query_kind="literal")
 
-    def read_file(self, relative_path: str, start_line: int = 1, line_count: int = 100) -> dict:
-        if not isinstance(relative_path, str) or not relative_path or "\\" in relative_path or "\0" in relative_path:
+    def _source_file(self, relative_path: str) -> SourceFile:
+        if (not isinstance(relative_path, str) or not relative_path or "\\" in relative_path
+                or "\0" in relative_path or ":" in relative_path):
             raise SourceError("unsafe_path", "Нужен относительный путь с прямыми разделителями")
         path = PurePosixPath(relative_path)
         winpath = PureWindowsPath(relative_path)
         if path.is_absolute() or winpath.drive or winpath.root or any(part in (".", "..") for part in relative_path.split("/")):
             raise SourceError("unsafe_path", "Абсолютный путь или выход за каталог исходников запрещён")
-        if isinstance(start_line, bool) or not isinstance(start_line, int) or start_line < 1:
-            raise SourceError("invalid_arguments", "Номер первой строки должен быть положительным целым числом")
-        _limit(line_count, 400)
         normalized = path.as_posix()
         parts = path.parts
         game_script = len(parts) >= 2 and parts[0] == "Script"
@@ -270,8 +285,29 @@ class SourceCatalog:
             if error.code == "source_unavailable":
                 raise SourceError("source_not_found", "Файл отсутствует в разрешённом каталоге AngelScript") from None
             raise
-        file = SourceFile(source_path, normalized, "game_script" if game_script else "example_script")
-        lines = _read_text(file, self.root).splitlines()
+        return SourceFile(source_path, normalized, "game_script" if game_script else "example_script")
+
+    def read_file_exact(self, relative_path: str) -> dict:
+        """Прочитать полный UTF-8 исходник без изменения BOM, переводов строк и конца файла."""
+        file = self._source_file(relative_path)
+        raw = _read_source_bytes(file, self.root, MAX_EXACT_READ_BYTES)
+        try:
+            text = raw.decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            raise SourceError("invalid_encoding", "Исходник не является корректным UTF-8") from None
+        item = self._item(file, text=text, sha256=hashlib.sha256(raw).hexdigest(),
+                          bytes=len(raw), encoding="UTF-8", text_mode="exact",
+                          contains_bom=raw.startswith(b"\xef\xbb\xbf"), content_truncated=False,
+                          max_text_bytes=MAX_EXACT_READ_BYTES)
+        return self._result([item], 1, 1, **item)
+
+    def read_file(self, relative_path: str, start_line: int = 1, line_count: int = 100) -> dict:
+        file = self._source_file(relative_path)
+        if isinstance(start_line, bool) or not isinstance(start_line, int) or start_line < 1:
+            raise SourceError("invalid_arguments", "Номер первой строки должен быть положительным целым числом")
+        _limit(line_count, 400)
+        source_text, source_sha256 = _read_source(file, self.root)
+        lines = source_text.splitlines()
         selected = lines[start_line - 1:start_line - 1 + line_count]
         returned = []
         remaining = MAX_READ_BYTES
@@ -290,7 +326,9 @@ class SourceCatalog:
             returned.append(line)
             remaining -= len(encoded) + separator_bytes
         text = "\n".join(returned)
-        item = self._item(file, start_line=start_line, end_line=start_line + len(returned) - 1 if returned else None,
+        item = self._item(file, sha256=source_sha256, text_mode="display_lines",
+                          exact_replacement_available=True, exact_max_text_bytes=MAX_EXACT_READ_BYTES,
+                          start_line=start_line, end_line=start_line + len(returned) - 1 if returned else None,
                           total_lines=len(lines), text=text, returned_lines=len(returned),
                           returned_utf8_bytes=len(text.encode("utf-8")), max_text_bytes=MAX_READ_BYTES,
                           last_line_truncated=last_line_truncated,

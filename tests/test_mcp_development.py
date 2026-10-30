@@ -159,6 +159,49 @@ class MCPDevelopmentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(explicit["state"], "launch_requested")
         self.assertEqual(len(self.mutation_calls()), 3)
 
+    async def test_early_bootstrap_process_can_stop_but_never_receive_native_dll(self):
+        bootstrap = {"pid": 321, "creation_time": "2026-10-31T00:04:05.7654321Z",
+                     "executable": str(self.service.bootstrap_executable)}
+        self.processes = [bootstrap]
+        recipe = await self.tool("g1r_development_recipe", {"relative_package": "Nested/Probe"})
+        self.assertTrue(recipe["process_state"]["running"])
+        self.assertEqual(recipe["process_state"]["processes"], [bootstrap])
+        # Bootstrap поддерживается только остановкой: DLL требует внутренний EXE.
+        await self.error("g1r_native_load", {"expected_process": bootstrap,
+                         "expected_dll_sha256": self.dll_sha256}, "process_path_mismatch")
+        self.assertEqual(self.mutation_calls(), [])
+        self.responses["stop_g1r_development.ps1"] = CommandResult(0, json.dumps({
+            "state": "stopped", "process": bootstrap}))
+        stopped = await self.tool("g1r_development_stop", {"expected_process": bootstrap})
+        self.assertEqual(stopped["process"], bootstrap)
+        self.assertFalse(stopped["outcome_unknown"])
+        mutations = self.mutation_calls()
+        self.assertEqual(len(mutations), 1)
+        args, timeout = mutations[0]
+        self.assertEqual(Path(args[args.index("-File") + 1]).name, "stop_g1r_development.ps1")
+        self.assertEqual(args[args.index("-ExpectedPid") + 1], "321")
+        self.assertEqual(args[args.index("-ExpectedCreationTime") + 1], bootstrap["creation_time"])
+        self.assertEqual(timeout, 30)
+
+    async def test_bootstrap_stop_rejects_stale_identity_and_does_not_repeat_unknown_effect(self):
+        bootstrap = {"pid": 321, "creation_time": "2026-10-31T00:04:05.7654321Z",
+                     "executable": str(self.service.bootstrap_executable)}
+        self.processes = [bootstrap]
+        foreign_time = {**bootstrap, "creation_time": "2026-10-31T00:04:05.0000000Z"}
+        await self.error("g1r_development_stop", {"expected_process": foreign_time}, "process_changed")
+        foreign_path = {**bootstrap, "executable": str(self.game / "unrelated.exe")}
+        await self.error("g1r_development_stop", {"expected_process": foreign_path}, "process_path_mismatch")
+        self.assertEqual(self.mutation_calls(), [])
+        self.responses["stop_g1r_development.ps1"] = CommandResult(1, "", "isolated failure after dispatch")
+        await self.error("g1r_development_stop", {"expected_process": bootstrap}, "tool_failed", unknown=True)
+        self.assertEqual(len(self.mutation_calls()), 1)
+        await self.tool("g1r_development_processes")
+        self.assertEqual(len(self.mutation_calls()), 1)
+        # Процесс уже ушёл: следующий явный запрос не вызывает Stop helper.
+        self.processes = []
+        await self.error("g1r_development_stop", {"expected_process": bootstrap}, "process_changed")
+        self.assertEqual(len(self.mutation_calls()), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,7 @@
 #include "g1r_mcp/scalar_arguments.hpp"
 #include "g1r_mcp/object_arguments.hpp"
 #include "g1r_mcp/object_query.hpp"
+#include "g1r_mcp/enum_values.hpp"
 #include <MinHook.h>
 #include <bcrypt.h>
 #include <algorithm>
@@ -144,7 +145,7 @@ void __fastcall GameAccess::hooked_tick(void* loop) {
     if(count<2)diagnostic("tick_pump_return");
 }
 json GameAccess::status() const {
-    return {{"version","1.0.0-dev.4"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.5"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&ticks_.load()>0},
             {"build_hash",kHash},{"startup_error",startup_error_},
             {"process_id",GetCurrentProcessId()},
@@ -329,7 +330,86 @@ json GameAccess::property_value(uintptr_t address,const std::string& type,int si
         const auto expected_class=reinterpret_cast<void*>(read<uintptr_t>(field+0x70));
         return object_descriptor(reinterpret_cast<void*>(read<uintptr_t>(address)),expected_class);
     }
+    if(type=="NameProperty") {
+        if(size!=8)throw HandlerError("unsupported_property_layout","NameProperty требует FName размером 8 байт");
+        return name(read<uint64_t>(address));
+    }
+    if(type=="EnumProperty" || type=="ByteProperty")return enum_property(address,type,size,field).at("value");
     return scalar(address,type,size,field);
+}
+json GameAccess::enum_metadata(void* object,const json& value,const std::string& underlying_type) {
+    json metadata={{"path",nullptr},{"underlying_type",underlying_type},{"name_status","unavailable"},
+        {"value_name",nullptr},{"matched_count",0},{"ambiguous",false},{"reason","enum_unavailable"}};
+    if(!object){metadata["reason"]="enum_pointer_null";return metadata;}
+    try {
+        const auto identity=validate_object(object);
+        const auto enum_class=reinterpret_cast<uintptr_t>(identity.object_class);
+        validate_class(identity.object_class);
+        // Root read-only probe 31.10.2026 подтвердил /Script/CoreUObject.Enum:
+        // index 19, name Enum, class Class; UserDefinedEnum принимает наследование.
+        bool valid_enum=false;
+        std::set<uintptr_t> visited;
+        auto current=enum_class;
+        for(int depth=0;current && depth<64;++depth) {
+            if(!visited.insert(current).second)throw HandlerError("invalid_enum_class","Цикл класса UEnum");
+            validate_class(reinterpret_cast<void*>(current));
+            if(object_path(reinterpret_cast<void*>(current))=="/Script/CoreUObject.Enum"){valid_enum=true;break;}
+            current=read<uintptr_t>(current+0x40);
+        }
+        if(!valid_enum)throw HandlerError("invalid_enum_class","Объявление enum не является UEnum");
+        const auto path=object_path(object);
+        if(path.size()>8192)throw HandlerError("enum_path_too_large","Путь enum превышает 8 КиБ");
+        metadata["path"]=path;
+        const auto ptr=reinterpret_cast<uintptr_t>(object);
+        const auto data=read<uintptr_t>(ptr+0x40);
+        const auto count=read<int32_t>(ptr+0x48),capacity=read<int32_t>(ptr+0x4c);
+        const auto bytes=g1r::enum_values::table_byte_size(count,capacity,data!=0);
+        std::vector<std::byte> copied(bytes);
+        if(bytes && !copy_memory(copied.data(),reinterpret_cast<void*>(data),bytes))
+            throw HandlerError("invalid_enum_table","Таблица enum недоступна");
+        if(read<uintptr_t>(ptr+0x40)!=data || read<int32_t>(ptr+0x48)!=count
+           || read<int32_t>(ptr+0x4c)!=capacity)
+            throw HandlerError("enum_table_changed","Таблица enum изменилась при копировании");
+        const auto after=validate_object(object);
+        if(!same_object_identity({reinterpret_cast<uintptr_t>(identity.object),enum_class,identity.index,identity.name},
+            {reinterpret_cast<uintptr_t>(after.object),reinterpret_cast<uintptr_t>(after.object_class),after.index,after.name}))
+            throw HandlerError("stale_handle","Enum изменился при копировании");
+        const auto entries=g1r::enum_values::decode_entries(copied,count,capacity);
+        const g1r::enum_values::Integer number=value.is_number_unsigned()
+            ?g1r::enum_values::Integer(value.get<uint64_t>()):g1r::enum_values::Integer(value.get<int64_t>());
+        const auto match=g1r::enum_values::find_label(number,entries,[this](uint64_t fname){return name(fname);});
+        metadata["name_status"]=match.status;
+        metadata["value_name"]=match.name.empty()?json(nullptr):json(match.name);
+        metadata["matched_count"]=match.matched_count;metadata["ambiguous"]=match.ambiguous;
+        metadata["reason"]=match.reason.empty()?json(nullptr):json(match.reason);
+    } catch(const HandlerError& error) {metadata["reason"]=error.code();}
+      catch(const std::invalid_argument& error) {metadata["reason"]=error.what();}
+    return metadata;
+}
+json GameAccess::enum_property(uintptr_t address,const std::string& type,int size,uintptr_t field) {
+    namespace ev=g1r::enum_values;
+    try {
+        std::string underlying_type="ByteProperty";
+        uintptr_t enum_ptr=0;
+        if(type=="EnumProperty") {
+            const auto underlying=read<uintptr_t>(field+0x70);
+            if(!underlying)throw HandlerError("unsupported_enum_underlying_layout","UnderlyingProp отсутствует");
+            underlying_type=field_type(underlying,[this](auto f){return name(f);});
+            if(read<int32_t>(underlying+0x30)!=1 || read<int32_t>(underlying+0x34)!=size)
+                throw HandlerError("unsupported_enum_underlying_layout","Размер/массив UnderlyingProp не совпадает");
+            enum_ptr=read<uintptr_t>(field+0x78);
+        } else enum_ptr=read<uintptr_t>(field+0x70);
+        const auto layout=ev::integer_layout(underlying_type,size);
+        std::array<std::byte,8> copied{};
+        if(!copy_memory(copied.data(),reinterpret_cast<void*>(address),layout.bytes))throw HandlerError("invalid_memory","Число enum недоступно");
+        const auto integer=ev::decode_integer(underlying_type,size,std::span(copied).first(layout.bytes));
+        auto value=std::visit([](auto number){return json(number);},integer);
+        json result={{"value",value}};
+        if(type=="EnumProperty" || enum_ptr)result["enum"]=enum_metadata(reinterpret_cast<void*>(enum_ptr),value,underlying_type);
+        return result;
+    } catch(const std::invalid_argument& error) {
+        throw HandlerError(error.what(),"Неподдерживаемая раскладка enum");
+    }
 }
 void* GameAccess::resolve(const std::string& id) {
     auto found=handles_.find(id);if(found==handles_.end())throw HandlerError("stale_handle","Ссылка неизвестна или истекла");
@@ -354,7 +434,12 @@ json GameAccess::properties(void* object,int limit) {
             json item={{"name",name(read<uint64_t>(field+0x20))},{"type",type},{"offset",offset},{"element_size",size},{"array_dim",read<int32_t>(field+0x30)}};
             if(offset>=0 && size>0 && offset<=class_size-size && item["array_dim"]==1) {
                 try {
-                    auto value=property_value(reinterpret_cast<uintptr_t>(object)+offset,type,size,field);item["value"]=value;item["supported"]=type=="ObjectProperty" || !value.is_null();
+                    json value;
+                    if(type=="EnumProperty" || type=="ByteProperty") {
+                        const auto result=enum_property(reinterpret_cast<uintptr_t>(object)+offset,type,size,field);
+                        value=result.at("value");if(result.contains("enum"))item["enum"]=result.at("enum");
+                    } else value=property_value(reinterpret_cast<uintptr_t>(object)+offset,type,size,field);
+                    item["value"]=value;item["supported"]=type=="ObjectProperty" || !value.is_null();
                 } catch(const HandlerError& error) {
                     item["supported"]=false;item["error"]={{"code",error.code()},{"message",error.what()}};
                 }
@@ -385,7 +470,11 @@ json GameAccess::selected_properties(void* object,const json& names) {
                 if(offset<0 || size<=0 || size>class_size || offset>class_size-size
                    || read<int32_t>(field+0x30)!=1)
                     throw HandlerError("unsupported_property_layout","Неподдерживаемая раскладка свойства");
-                auto value=property_value(reinterpret_cast<uintptr_t>(object)+offset,type,size,field);
+                json value;
+                if(type=="EnumProperty" || type=="ByteProperty") {
+                    const auto result=enum_property(reinterpret_cast<uintptr_t>(object)+offset,type,size,field);
+                    value=result.at("value");if(result.contains("enum"))item["enum"]=result.at("enum");
+                } else value=property_value(reinterpret_cast<uintptr_t>(object)+offset,type,size,field);
                 if(value.is_null() && type!="ObjectProperty")throw HandlerError("unsupported_property_type","Тип свойства не поддержан");
                 if(value.dump().size()>16384)throw HandlerError("property_value_too_large","Значение превышает предел поля 16 КиБ");
                 item["value"]=std::move(value);item["supported"]=true;
@@ -505,6 +594,8 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         auto type=field_type(field,[this](auto f){return name(f);});int offset=read<int32_t>(field+0x44),size=read<int32_t>(field+0x34);
         parameter_extent(extent,offset,size,read<int32_t>(field+0x30));
         if(flags&0x400){
+            if(type=="NameProperty" || type=="EnumProperty" || type=="ByteProperty")
+                throw HandlerError("unsupported_signature","Возвраты Name/Enum/Byte пока не входят в разрешённый контракт вызова");
             return_field=field;return_type=type;return_size=size;return_offset=offset;
             if(type=="ObjectProperty") {
                 if(size!=8)throw HandlerError("unsupported_signature","Размер объектного возврата не поддержан");

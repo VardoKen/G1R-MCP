@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from g1r_mcp.workspace import MAX_CONTENT_BYTES, PackageWorkspace, WorkspaceError
+from g1r_mcp.workspace import MAX_CONTENT_BYTES, MAX_EXACT_READ_BYTES, PackageWorkspace, WorkspaceError
 
 
 class WorkspaceTests(unittest.TestCase):
@@ -303,6 +303,83 @@ class WorkspaceTests(unittest.TestCase):
         self.assertTrue(result["truncated"])
         self.assertLessEqual(len(result["text"].encode("utf-8")), 64 * 1024)
         self.assertEqual(result["sha256"], hashlib.sha256(target.read_bytes()).hexdigest())
+
+    def test_exact_text_round_trip_preserves_line_endings_bom_and_eof(self):
+        self.create()
+        cases = (b"line\nnext\n", b"line\r\nnext\r\n", b"line\r\nnext\nend",
+                 b"\xef\xbb\xbfline\r\nnext", b"no final newline", b"")
+        for file_path in ("Script/Exact.as", "ScriptPatches/Exact.patch"):
+            previous = None
+            for raw in cases:
+                with self.subTest(file_path=file_path, raw=raw):
+                    written = self.workspace.write_package_file("Example", file_path, raw.decode("utf-8"), previous)
+                    exact = self.workspace.read_package_file_exact("Example", file_path)
+                    self.assertEqual(exact["text"].encode("utf-8"), raw)
+                    self.assertEqual(exact["sha256"], hashlib.sha256(raw).hexdigest())
+                    self.assertEqual(exact["sha256"], written["sha256"])
+                    self.assertEqual(exact["bytes"], len(raw))
+                    self.assertEqual(exact["text_mode"], "exact")
+                    self.assertFalse(exact["truncated"])
+                    self.assertFalse(exact["compiled"])
+                    unchanged = self.workspace.write_package_file("Example", file_path, exact["text"], exact["sha256"])
+                    self.assertEqual(unchanged["sha256"], exact["sha256"])
+                    previous = unchanged["sha256"]
+        descriptor = self.root / "Example/GothicMod.json"
+        raw = b"\xef\xbb\xbf" + descriptor.read_bytes().replace(b"\n", b"\r\n")
+        descriptor.write_bytes(raw)
+        exact = self.workspace.read_package_file_exact("Example", "GothicMod.json")
+        self.assertEqual(exact["text"].encode("utf-8"), raw)
+        self.workspace.write_package_file("Example", "GothicMod.json", exact["text"], exact["sha256"])
+        self.assertEqual(descriptor.read_bytes(), raw)
+
+    def test_exact_text_size_limit_is_explicit_and_never_truncates(self):
+        self.create()
+        file = self.root / "Example/Script/Exact.as"
+        raw = "я" * (MAX_EXACT_READ_BYTES // 2)
+        file.write_bytes(raw.encode("utf-8"))
+        exact = self.workspace.read_package_file_exact("Example", "Script/Exact.as")
+        self.assertEqual(exact["bytes"], MAX_EXACT_READ_BYTES)
+        self.assertEqual(exact["text"], raw)
+        self.assertFalse(exact["truncated"])
+        file.write_bytes(b"a" * (MAX_EXACT_READ_BYTES + 1))
+        self.assert_error("file_too_large", lambda: self.workspace.read_package_file_exact("Example", "Script/Exact.as"))
+        descriptor = self.root / "Example/GothicMod.json"
+        descriptor.write_bytes(b"a" * (256 * 1024 + 1))
+        self.assert_error("file_too_large", lambda: self.workspace.read_package_file_exact("Example", "GothicMod.json"))
+
+    def test_exact_read_uses_allowlist_protected_roots_and_utf8(self):
+        self.create()
+        self.assert_error("unsupported_file", lambda: self.workspace.read_package_file_exact("Example", "Content/private.txt"))
+        self.assert_error("unsafe_path", lambda: self.workspace.read_package_file_exact("Example", "Script/../private.as"))
+        protected = PackageWorkspace(self.root, protected_roots=[self.root / "Example"])
+        self.assert_error("unsafe_path", lambda: protected.read_package_file_exact("Example", "GothicMod.json"))
+        invalid = self.root / "Example/Script/Invalid.as"
+        invalid.write_bytes(b"\xff")
+        self.assert_error("invalid_encoding", lambda: self.workspace.read_package_file_exact("Example", "Script/Invalid.as"))
+
+    def test_exact_read_refuses_symlink_without_returning_external_content(self):
+        self.create()
+        with tempfile.TemporaryDirectory() as outside:
+            external = Path(outside) / "Private.as"
+            external.write_text("private", encoding="utf-8")
+            link = self.root / "Example/Script/Linked.as"
+            try:
+                link.symlink_to(external)
+            except OSError:
+                self.skipTest("Система не разрешает изолированный symlink")
+            try:
+                self.assert_error("unsafe_path", lambda: self.workspace.read_package_file_exact("Example", "Script/Linked.as"))
+            finally:
+                link.unlink()
+
+    def test_paged_read_explicitly_identifies_display_text(self):
+        self.create()
+        raw = b"\xef\xbb\xbfline\r\nnext"
+        self.workspace.write_package_file("Example", "Script/Display.as", raw.decode("utf-8"))
+        display = self.workspace.read_package_file("Example", "Script/Display.as")
+        self.assertEqual(display["text_mode"], "display_lines")
+        self.assertEqual(display["text"], "line\nnext")
+        self.assertEqual(display["sha256"], hashlib.sha256(raw).hexdigest())
 
     def test_invalid_arguments(self):
         self.create()

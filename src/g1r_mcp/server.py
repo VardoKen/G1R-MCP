@@ -18,6 +18,7 @@ from .native_client import NativeClient, NativeError
 from .workspace import PackageWorkspace, WorkspaceError
 from .snapshots import SnapshotError, compare_snapshots
 from .development import DevelopmentError, DevelopmentService
+from .patches import PatchError, ScriptPatchBuilder
 
 
 LOCAL_TOOLS = (
@@ -26,13 +27,16 @@ LOCAL_TOOLS = (
     ("g1r_find_source_files", "Поиск файлов официального Modkit"),
     ("g1r_search_source", "Буквальный поиск строк AngelScript"),
     ("g1r_read_source", "Ограниченное чтение исходника Modkit"),
+    ("g1r_read_source_exact", "Полный текст исходника с сохранением BOM, переводов строк и SHA-256"),
     ("g1r_list_source_types", "Лексический поиск объявлений типов"),
     ("g1r_validate_package", "Структурная проверка официального пакета"),
+    ("g1r_build_script_patch", "Unified diff из проверенных байтов Modkit без изменения файлов"),
 )
 WORKSPACE_TOOLS = (
     ("g1r_create_package", "Создать официальный пакет в выбранной рабочей базе", "local_write"),
     ("g1r_list_package_files", "Список дескриптора и исходников рабочего пакета", "read_only"),
     ("g1r_read_package_file", "Чтение рабочего файла с SHA-256 для проверки изменений", "read_only"),
+    ("g1r_read_package_file_exact", "Точный текст рабочего файла для изменения без нормализации", "read_only"),
     ("g1r_write_package_file", "Запись исходника или дескриптора с проверкой конфликта", "local_write"),
 )
 NATIVE_TOOLS = (
@@ -50,7 +54,7 @@ NATIVE_TOOLS = (
 )
 
 
-def _tool_failure(error: SourceError | PackageError | WorkspaceError | SnapshotError) -> ToolError:
+def _tool_failure(error: SourceError | PackageError | WorkspaceError | SnapshotError | PatchError) -> ToolError:
     return ToolError(json.dumps({"code": error.code, "message": str(error)}, ensure_ascii=False))
 
 
@@ -67,6 +71,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             raise ValueError("Рабочий каталог содержит ссылку или junction")
     workspace_root = workspace_root.resolve(strict=True)
     sources = SourceCatalog(modkit_root, revision=source_revision)
+    patch_builder = ScriptPatchBuilder(modkit_root, revision=source_revision)
     workspace = PackageWorkspace(workspace_root, protected_roots=[modkit_root])
     native = NativeClient(port=native_port)
     development = None
@@ -119,6 +124,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                 for name, description in LOCAL_TOOLS
             ],
             "native_tools": [{"name": name, "description": description, "implemented": True,
+                              "read_only_hint": name in {"g1r_native_status", "g1r_find_objects", "g1r_object_properties", "g1r_object_functions", "g1r_snapshot", "g1r_watch_read"},
                               "availability": "requires_live_native_status"} for name, description in NATIVE_TOOLS],
             "workspace_tools": [
                 {"name": name, "description": description, "implemented": True,
@@ -220,6 +226,32 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
         """Записать рабочий файл: замена требует SHA-256, без хеша создаётся только новый файл."""
         try:
             return workspace.write_package_file(relative_path, file_path, content, expected_sha256)
+        except WorkspaceError as error:
+            raise _tool_failure(error) from None
+
+    @server.tool(annotations=read_only)
+    def g1r_build_script_patch(source_path: str, replacement_content: str,
+                                expected_source_sha256: str, context_lines: int = 3) -> dict[str, Any]:
+        """Создать unified diff из проверенных исходных байтов Modkit без изменения файлов."""
+        try:
+            return patch_builder.build_script_patch(source_path, replacement_content,
+                                                    expected_source_sha256, context_lines)
+        except PatchError as error:
+            raise _tool_failure(error) from None
+
+    @server.tool(annotations=read_only)
+    def g1r_read_source_exact(relative_path: str) -> dict[str, Any]:
+        """Прочитать полный UTF-8 исходник до 1 МиБ для редактуры; сохраняет BOM, CRLF и EOF."""
+        try:
+            return sources.read_file_exact(relative_path)
+        except SourceError as error:
+            raise _tool_failure(error) from None
+
+    @server.tool(annotations=read_only)
+    def g1r_read_package_file_exact(relative_path: str, file_path: str) -> dict[str, Any]:
+        """Прочитать рабочий файл целиком без изменения байтов при decode/encode UTF-8."""
+        try:
+            return workspace.read_package_file_exact(relative_path, file_path)
         except WorkspaceError as error:
             raise _tool_failure(error) from None
 

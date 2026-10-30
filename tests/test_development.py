@@ -140,6 +140,35 @@ class DevelopmentTests(unittest.TestCase):
             self.service.stop(self.identity)
         self.assertEqual(captured.exception.code, "process_changed")
 
+    def test_bootstrap_stop_accepted_but_load_and_restart_rejected(self):
+        bootstrap = {**self.identity, "executable": str(self.service.bootstrap_executable)}
+        self.processes = [bootstrap]
+        self.responses["stop_g1r_development.ps1"] = CommandResult(0, json.dumps({
+            "state": "stopped", "process": bootstrap, "cleanup": [], "outcome_unknown": False}))
+        result = self.service.stop(bootstrap)
+        self.assertEqual(result["process"], bootstrap)
+        self.assertEqual(result["state"], "stop_result")
+        self.assertEqual(self.calls[-1][0][self.calls[-1][0].index("-ExpectedPid") + 1], str(bootstrap["pid"]))
+        with self.assertRaises(DevelopmentError) as captured:
+            self.service.load_native(bootstrap, "0" * 64)
+        self.assertEqual(captured.exception.code, "process_path_mismatch")
+        self.assertFalse(any("load_native.ps1" in argument for call, _ in self.calls for argument in call))
+        recipe = self.recipe()
+        with self.assertRaises(DevelopmentError) as captured:
+            self.service.start("Nested/Probe", recipe["manifest"]["manifest_sha256"],
+                               restart=True, expected_process=bootstrap)
+        self.assertEqual(captured.exception.code, "process_path_mismatch")
+
+    def test_bootstrap_stop_rejects_changed_identity_before_dispatch(self):
+        bootstrap = {**self.identity, "executable": str(self.service.bootstrap_executable)}
+        self.processes = [bootstrap]
+        for wrong in ({**bootstrap, "pid": 999},
+                      {**bootstrap, "creation_time": "2026-10-30T01:02:03.0000000Z"},
+                      {**bootstrap, "executable": str(self.game / "unrelated.exe")}):
+            with self.subTest(expected=wrong), self.assertRaises(DevelopmentError):
+                self.service.stop(wrong)
+        self.assertFalse(any("stop_g1r_development.ps1" in argument for call, _ in self.calls for argument in call))
+
     def test_protocol_failure_after_mutation_does_not_repeat_and_marks_unknown(self):
         self.responses["start_g1r_development.ps1"] = CommandResult(0, "not-json")
         recipe = self.recipe()

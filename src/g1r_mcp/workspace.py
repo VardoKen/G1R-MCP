@@ -22,6 +22,7 @@ from .packages import MAX_DESCRIPTOR_BYTES, PackageError, validate_package
 
 MAX_FILE_BYTES = 2 * 1024 * 1024
 MAX_READ_BYTES = 64 * 1024
+MAX_EXACT_READ_BYTES = 1024 * 1024
 MAX_FILES = 10_000
 MAX_CONTENT_BYTES = 2 * 1024 * 1024
 _RESERVED = re.compile(r"^(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³])(?:\..*)?$", re.I)
@@ -338,7 +339,27 @@ class PackageWorkspace:
             return _result(package_path=name, file_path="/".join(parts), sha256=hashlib.sha256(raw).hexdigest(),
                            bytes=len(raw), total_lines=len(lines), start_line=start_line,
                            returned_lines=len(limited.splitlines()), text=limited, truncated=truncated,
+                           text_mode="display_lines",
                            has_more=truncated or start_line - 1 + len(selected) < len(lines))
+
+    def read_package_file_exact(self, relative_path: str, file_path: str) -> dict:
+        """Вернуть полный редактируемый UTF-8 текст без изменения BOM, строк и EOF."""
+        parts = self._file_parts(file_path)
+        with self._lock:
+            package, name = self._package(relative_path)
+            path = self._unprotected(_checked(package.joinpath(*parts), package))
+            maximum = MAX_DESCRIPTOR_BYTES if len(parts) == 1 else MAX_EXACT_READ_BYTES
+            with _guard_directories(path.parent, self.root):
+                if path.stat().st_size > maximum:
+                    raise WorkspaceError("file_too_large", "Файл превышает предел полного текстового чтения")
+                raw = _read_bytes(path, package, maximum)
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                raise WorkspaceError("invalid_encoding", "Файл должен быть корректным UTF-8") from None
+            return _result(package_path=name, file_path="/".join(parts), sha256=hashlib.sha256(raw).hexdigest(),
+                           bytes=len(raw), text=text, text_mode="exact", truncated=False,
+                           max_read_bytes=maximum)
 
     def write_package_file(self, relative_path: str, file_path: str, content: str,
                            expected_sha256: str | None = None) -> dict:

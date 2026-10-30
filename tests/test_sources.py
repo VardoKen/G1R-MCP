@@ -1,6 +1,7 @@
 """Изолированные проверки чтения и границ статического каталога Modkit."""
 
 import io
+import hashlib
 from pathlib import Path
 import sys
 import tempfile
@@ -8,10 +9,75 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from g1r_mcp.sources import MAX_FILE_BYTES, MAX_READ_BYTES, SourceCatalog, SourceError
+from g1r_mcp.sources import MAX_EXACT_READ_BYTES, MAX_FILE_BYTES, MAX_READ_BYTES, SourceCatalog, SourceError
 
 
 class SourceCatalogTests(unittest.TestCase):
+    def test_exact_source_preserves_full_utf8_bytes_and_display_mode_is_explicit(self):
+        variants = (b"int A = 1;\nint B = 2;\n", b"int A = 1;\r\nint B = 2;\r\n",
+                    b"\xef\xbb\xbfint A = 1;\nint B = 2;\n", b"int A = 1;\nint B = 2;")
+        for raw in variants:
+            with self.subTest(raw=raw):
+                self.write("Script/Exact.as", raw)
+                result = self.catalog().read_file_exact("Script/Exact.as")
+                self.assertEqual(result["text"].encode("utf-8"), raw)
+                self.assertEqual(result["sha256"], hashlib.sha256(raw).hexdigest())
+                self.assertEqual(result["bytes"], len(raw))
+                self.assertEqual(result["contains_bom"], raw.startswith(b"\xef\xbb\xbf"))
+                self.assertEqual(result["text_mode"], "exact")
+                self.assertFalse(result["content_truncated"])
+                self.assertEqual(result["revision_source"], "caller_label")
+                display = self.catalog().read_file("Script/Exact.as")
+                self.assertEqual(display["text_mode"], "display_lines")
+                self.assertTrue(display["exact_replacement_available"])
+
+    def test_exact_source_limits_are_all_or_nothing_and_examples_share_allowlist(self):
+        raw = b"x" * MAX_EXACT_READ_BYTES
+        path = self.write("Examples/Sample/Script/Exact.as", raw)
+        result = self.catalog().read_file_exact("Examples/Sample/Script/Exact.as")
+        self.assertEqual(result["bytes"], MAX_EXACT_READ_BYTES)
+        self.assertEqual(result["root_kind"], "example_script")
+        path.write_bytes(raw + b"x")
+        with self.assertRaises(SourceError) as captured:
+            self.catalog().read_file_exact("Examples/Sample/Script/Exact.as")
+        self.assertEqual(captured.exception.code, "file_too_large")
+        self.assertEqual(self.catalog().read_file("Examples/Sample/Script/Exact.as")["total_lines"], 1)
+        for value in ("../private.as", "Other/Exact.as", "Script\\Exact.as", "C:/private.as"):
+            with self.subTest(path=value), self.assertRaises(SourceError):
+                self.catalog().read_file_exact(value)
+
+    def test_exact_source_preserves_minimal_patch_lines(self):
+        from g1r_mcp.patches import ScriptPatchBuilder
+        variants = (b"int A = 1;\nint B = 2;\n", b"int A = 1;\r\nint B = 2;\r\n",
+                    b"\xef\xbb\xbfint A = 1;\nint B = 2;\n", b"int A = 1;\nint B = 2;")
+        for raw in variants:
+            with self.subTest(raw=raw):
+                self.write("Script/Patch.as", raw)
+                result = self.catalog().read_file_exact("Script/Patch.as")
+                replacement = result["text"].replace("A = 1", "A = 3")
+                patch_result = ScriptPatchBuilder(self.root).build_script_patch(
+                    "Script/Patch.as", replacement, result["sha256"])
+                self.assertEqual(patch_result["replacement_sha256"],
+                                 hashlib.sha256(raw.replace(b"A = 1", b"A = 3")).hexdigest())
+                self.assertNotIn("-int B", patch_result["patch_text"])
+                self.assertNotIn("+int B", patch_result["patch_text"])
+
+    def test_source_readers_reject_windows_alternate_data_stream_path(self):
+        self.write("Script/Host.txt", "Обычный файл")
+        catalog = self.catalog()
+        for reader in (catalog.read_file, catalog.read_file_exact):
+            with self.subTest(reader=reader.__name__), self.assertRaises(SourceError) as captured:
+                reader("Script/Host.txt:Hidden.as")
+            self.assertEqual(captured.exception.code, "unsafe_path")
+
+    def test_source_hash_uses_complete_raw_bytes_while_text_is_paged(self):
+        raw = b"\xef\xbb\xbf" + "первая\r\nвторая\r\n".encode("utf-8")
+        self.write("Script/Hash.as", raw)
+        result = self.catalog().read_file("Script/Hash.as", 2, 1)
+        self.assertEqual(result["sha256"], hashlib.sha256(raw).hexdigest())
+        self.assertEqual(result["text"], "вторая")
+        self.assertTrue(result["content_truncated"])
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)

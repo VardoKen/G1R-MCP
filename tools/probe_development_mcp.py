@@ -37,10 +37,11 @@ def checked_identity(value: object) -> dict[str, Any]:
     return dict(value)
 
 
-def select_inner(state: object, game_root: str) -> dict[str, Any] | None:
+def select_process(state: object, game_root: str, *, bootstrap: bool = False) -> dict[str, Any] | None:
     if not isinstance(state, dict) or not isinstance(state.get("processes"), list):
         raise ProbeError("invalid_process_state", "Неверный ответ списка игровых процессов")
-    expected = ntpath.normcase(ntpath.join(game_root, "G1R", "Binaries", "Win64", "G1R-Win64-Shipping.exe"))
+    expected = ntpath.normcase(ntpath.join(game_root, *(('G1R-Win64-Shipping.exe',) if bootstrap else
+                              ('G1R', 'Binaries', 'Win64', 'G1R-Win64-Shipping.exe'))))
     identities = [checked_identity(item) for item in state["processes"]]
     if len(identities) > 2:
         raise ProbeError("ambiguous_process", "Слишком много игровых процессов")
@@ -48,6 +49,10 @@ def select_inner(state: object, game_root: str) -> dict[str, Any] | None:
     if len(inner) > 1:
         raise ProbeError("ambiguous_process", "Внутренний игровой процесс найден неоднозначно")
     return inner[0] if inner else None
+
+
+def select_inner(state: object, game_root: str) -> dict[str, Any] | None:
+    return select_process(state, game_root)
 
 
 async def development_cycle(call: Call, relative_package: str, expected_value: int, *,
@@ -78,6 +83,7 @@ async def development_cycle(call: Call, relative_package: str, expected_value: i
         raise ProbeError("game_already_running", "Проверка требует закрытую игру; существующий процесс не трогается")
     stage("recipe_checked")
     owned: dict[str, Any] | None = None
+    owned_bootstrap: dict[str, Any] | None = None
     primary: BaseException | None = None
     try:
         launch = await call("g1r_development_start", {
@@ -88,7 +94,14 @@ async def development_cycle(call: Call, relative_package: str, expected_value: i
         stage("launch_requested")
         deadline = clock() + startup_timeout
         while clock() < deadline:
-            owned = select_inner(await call("g1r_development_processes", {}), manifest["game_root"])
+            state = await call("g1r_development_processes", {})
+            candidate_bootstrap = select_process(state, manifest["game_root"], bootstrap=True)
+            if owned_bootstrap is None and candidate_bootstrap is not None:
+                owned_bootstrap = candidate_bootstrap
+                report["owned_bootstrap"] = dict(owned_bootstrap)
+            elif candidate_bootstrap is not None and candidate_bootstrap != owned_bootstrap:
+                raise ProbeError("bootstrap_process_changed", "Идентичность загрузочного процесса изменилась")
+            owned = select_inner(state, manifest["game_root"])
             if owned is not None:
                 break
             await sleep(.5)
@@ -172,10 +185,11 @@ async def development_cycle(call: Call, relative_package: str, expected_value: i
         primary = error
         raise
     finally:
-        if owned is not None:
+        cleanup_process = owned if owned is not None else owned_bootstrap
+        if cleanup_process is not None:
             try:
-                stopped = await call("g1r_development_stop", {"expected_process": owned})
-                if (stopped.get("state") != "stop_result" or stopped.get("process") != owned
+                stopped = await call("g1r_development_stop", {"expected_process": cleanup_process})
+                if (stopped.get("state") != "stop_result" or stopped.get("process") != cleanup_process
                         or stopped.get("tool_result", {}).get("state") != "stopped"):
                     raise ProbeError("stop_unconfirmed", "Остановка собственного процесса не подтверждена")
                 state = await call("g1r_development_processes", {})
