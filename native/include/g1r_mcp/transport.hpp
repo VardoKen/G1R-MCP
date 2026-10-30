@@ -43,9 +43,11 @@ private:
 class Transport {
 public:
     using Handler = std::function<nlohmann::json(const nlohmann::json&)>;
+    using SessionClosed = std::function<void(const std::string&)>;
 
     explicit Transport(Handler handler, std::uint16_t port = DefaultPort,
-                       std::chrono::milliseconds io_timeout = std::chrono::milliseconds{5000});
+                       std::chrono::milliseconds io_timeout = std::chrono::milliseconds{5000},
+                       SessionClosed session_closed = {});
     ~Transport();
     Transport(const Transport&) = delete;
     Transport& operator=(const Transport&) = delete;
@@ -68,6 +70,7 @@ private:
     std::string new_session();
 
     Handler handler_;
+    SessionClosed session_closed_;
     std::uint16_t requested_port_;
     std::chrono::milliseconds io_timeout_;
     mutable std::mutex state_mutex_;

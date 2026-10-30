@@ -83,10 +83,15 @@ std::uint16_t port(const Transport& transport) { return transport.status().at("p
 
 void exchange_duplicate_and_reconnect() {
     std::atomic_int calls{0};
+    std::atomic_int closed{0};
+    std::string closed_session;
     Transport transport([&](const json& input) {
         ++calls;
         return json{{"text", input.at("params").at("text")}, {"session", input.at("session_id")}};
-    }, 0);
+    }, 0, 5000ms, [&](const std::string& session) {
+        closed_session=session;
+        ++closed;
+    });
     require(transport.start(), "Транспорт не запущен");
     std::string first_session;
     {
@@ -108,8 +113,11 @@ void exchange_duplicate_and_reconnect() {
         client.send_json(request("one"));
         auto response = client.read_json();
         require(response.at("session_id") != first_session, "Новый клиент получил прежнюю сессию");
+        require(closed.load()==1 && closed_session==first_session,
+                "Reconnect начался до уведомления cleanup прежнего владельца");
     }
     transport.stop();
+    require(closed.load()==2,"Отключённые сессии не получили ровно одно уведомление cleanup");
     require(!transport.status().at("running").get<bool>(), "Транспорт не остановлен");
 }
 

@@ -117,7 +117,7 @@ class MCPNativeTests(unittest.IsolatedAsyncioTestCase):
         self._asyncioRunner.get_loop().slow_callback_duration = 2.0
 
     async def test_native_tools_stdio_parameters_and_unknown_effect_without_replay(self):
-        status = {"ready": True, "game_thread_id": 123, "tick_count": 42, "version": "1.0.0-dev.2"}
+        status = {"ready": True, "game_thread_id": 123, "tick_count": 42, "version": "1.0.0-dev.3"}
         found = {"items": [{"handle": "obj-1", "name": "ТестовыйОбъект"}], "truncated": False}
         properties = {"items": [{"name": "Enabled", "type": "BoolProperty", "value": True}], "truncated": False}
         functions = {"items": [{"name": "ReadOnlyProbe", "parameters": []}], "truncated": False}
@@ -151,7 +151,7 @@ class MCPNativeTests(unittest.IsolatedAsyncioTestCase):
                 async with ClientSession(incoming, outgoing) as client:
                     await client.initialize()
                     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-                    self.assertEqual(len(tools), 13)
+                    self.assertEqual(len(tools), 23)
                     self.assertFalse(tools["g1r_invoke"].annotations.read_only_hint)
                     self.assertFalse(tools["g1r_native_enable"].annotations.read_only_hint)
                     self.assertFalse(tools["g1r_invoke"].annotations.idempotent_hint)

@@ -9,6 +9,7 @@
 #include <string>
 #include <unordered_map>
 #include <nlohmann/json.hpp>
+#include "g1r_mcp/observations.hpp"
 
 namespace g1r_mcp {
 class GameAccess {
@@ -17,6 +18,7 @@ public:
     nlohmann::json request(const nlohmann::json& envelope);
     void pump();
     nlohmann::json status() const;
+    void disconnect(const std::string& session);
 
 private:
     struct Job {
@@ -44,6 +46,9 @@ private:
     std::unordered_map<std::string, Handle> handles_;
     uint64_t next_handle_{0};
     std::string handle_session_;
+    bool session_cleanup_pending_{};
+    Observations observations_;
+    uint64_t next_snapshot_{};
 
     nlohmann::json execute(const nlohmann::json& request);
     std::string name(uint64_t fname) const;
@@ -54,6 +59,8 @@ private:
     void* slot(int index) const;
     nlohmann::json object_info(void* object, int index);
     nlohmann::json properties(void* object, int limit);
+    nlohmann::json selected_properties(void* object, const nlohmann::json& names);
+    nlohmann::json snapshot(const nlohmann::json& targets);
     nlohmann::json functions(void* object, int limit);
     nlohmann::json invoke(void* object, const std::string& function_name, const nlohmann::json& arguments);
     static void __fastcall hooked_tick(void* loop);

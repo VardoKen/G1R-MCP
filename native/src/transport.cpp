@@ -26,8 +26,10 @@ bool nonblocking(SOCKET socket) {
 
 } // namespace
 
-Transport::Transport(Handler handler, std::uint16_t port, std::chrono::milliseconds io_timeout)
-    : handler_(std::move(handler)), requested_port_(port), io_timeout_(io_timeout) {
+Transport::Transport(Handler handler, std::uint16_t port, std::chrono::milliseconds io_timeout,
+                     SessionClosed session_closed)
+    : handler_(std::move(handler)), session_closed_(std::move(session_closed)),
+      requested_port_(port), io_timeout_(io_timeout) {
     if (!handler_) throw std::invalid_argument("Обработчик транспорта не задан");
     if (io_timeout_.count() <= 0 || io_timeout_.count() > 60000)
         throw std::invalid_argument("Таймаут транспорта должен быть от 1 до 60000 мс");
@@ -343,7 +345,12 @@ void Transport::run() {
                 active_client_ = client;
                 session_ = session;
             }
-            serve(client, session);
+            try { serve(client, session); }
+            catch (...) { set_error("transport_worker_error", "Обслуживание клиента завершилось ошибкой"); }
+            if (session_closed_) {
+                try { session_closed_(session); }
+                catch (...) { set_error("session_cleanup_failed", "Не удалось уведомить об отключении сессии"); }
+            }
             {
                 std::lock_guard state(state_mutex_);
                 active_client_ = INVALID_SOCKET;

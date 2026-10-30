@@ -23,6 +23,8 @@ param(
     [string]$SteamExe,
     [string]$GameRoot = 'E:\SteamLibrary\steamapps\common\Gothic 1 Remake',
     [string]$AppId = '1297900',
+    [string]$ModsDirectory,
+    [string[]]$Mods,
     [switch]$Restart
 )
 
@@ -67,6 +69,21 @@ function Get-CheckedGameProcesses {
     return $processes
 }
 
+function Assert-NoPathRedirect {
+    param([string]$Path)
+    $current = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    while ($null -ne $current) {
+        if (($current.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'Путь пакета содержит ссылку или junction; запуск отменён.'
+        }
+        if ($current -is [System.IO.DirectoryInfo]) {
+            $current = $current.Parent
+        } else {
+            $current = $current.Directory
+        }
+    }
+}
+
 if ($AppId -cne '1297900') {
     throw 'Этот инструмент поддерживает только Steam AppID 1297900.'
 }
@@ -93,6 +110,36 @@ if ([System.IO.Path]::GetFileName($resolvedSteamExe) -ine 'steam.exe') {
     throw 'Для запуска нужен файл steam.exe.'
 }
 
+$packageOptions = @()
+$selectedMods = @($Mods | Where-Object { $null -ne $_ })
+if (-not [string]::IsNullOrWhiteSpace($ModsDirectory) -or $selectedMods.Count -gt 0) {
+    if ([string]::IsNullOrWhiteSpace($ModsDirectory) -or $selectedMods.Count -eq 0) {
+        throw 'ModsDirectory и Mods должны быть указаны вместе.'
+    }
+    if ($ModsDirectory -notmatch '^(?:[A-Za-z]:[\\/]|\\\\[^\\]+\\[^\\]+)' -or $ModsDirectory -match '["\x00-\x1f]' -or $ModsDirectory.Substring(2).Contains(':')) {
+        throw 'ModsDirectory должен быть абсолютным путём без кавычек и управляющих символов.'
+    }
+    $resolvedModsDirectory = Get-RequiredPath -Path $ModsDirectory -Label 'Каталог пакетов' -Directory
+    Assert-NoPathRedirect -Path $resolvedModsDirectory
+    $uniqueMods = @{}
+    foreach ($mod in $selectedMods) {
+        if ([string]::IsNullOrWhiteSpace($mod) -or $mod -cnotmatch '^[A-Za-z0-9_-]{1,128}$' -or $uniqueMods.ContainsKey($mod)) {
+            throw 'Имена Mods должны быть уникальными именами каталогов из букв, цифр, _ или -.'
+        }
+        $uniqueMods[$mod] = $true
+        $packagePath = Get-RequiredPath -Path (Join-Path $resolvedModsDirectory $mod) -Label 'Пакет' -Directory
+        Assert-NoPathRedirect -Path $packagePath
+        $descriptorPath = Get-RequiredPath -Path (Join-Path $packagePath 'GothicMod.json') -Label 'Дескриптор пакета'
+        Assert-NoPathRedirect -Path $descriptorPath
+        $descriptor = Get-Content -LiteralPath $descriptorPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+        if ($null -eq $descriptor -or $null -eq $descriptor.PSObject.Properties['name'] -or $descriptor.name -cne $mod) {
+            throw 'Имя в GothicMod.json должно совпадать с выбранным каталогом Mods.'
+        }
+    }
+    $quotedModsDirectory = $resolvedModsDirectory.Replace('\', '/')
+    $packageOptions = @(('-ModsDirectory="' + $quotedModsDirectory + '"'), ('-Mods="' + ($selectedMods -join ',') + '"'))
+}
+
 $runningProcesses = @(Get-CheckedGameProcesses -BootstrapPath $bootstrapPath -InnerPath $innerPath)
 if ($runningProcesses.Count -gt 0 -and -not $Restart) {
     throw 'Игра уже запущена. Для штатного перезапуска используйте -Restart.'
@@ -104,7 +151,7 @@ $steamArguments = @(
     '-as-development-mode',
     '-as-ignore-precompiled-data',
     '-as-exit-on-error'
-)
+) + $packageOptions
 $operation = if ($runningProcesses.Count -gt 0) {
     'Штатно закрыть игру и запустить режим разработки через Steam'
 }

@@ -1,5 +1,6 @@
 #include "g1r_mcp/game_access.hpp"
 #include "g1r_mcp/transport.hpp"
+#include "g1r_mcp/scalar_arguments.hpp"
 #include <MinHook.h>
 #include <bcrypt.h>
 #include <algorithm>
@@ -10,6 +11,7 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <set>
 #include <vector>
 
 namespace g1r_mcp {
@@ -91,7 +93,7 @@ std::string field_type(uintptr_t field, const std::function<std::string(uint64_t
     auto type=read<uintptr_t>(field+8); return get_name(read<uint64_t>(type));
 }
 json scalar(uintptr_t address,const std::string& type,int size,uintptr_t field) {
-    if(type=="BoolProperty") {auto offset=read<uint8_t>(field+0x71),mask=read<uint8_t>(field+0x73);return (read<uint8_t>(address+offset)&mask)!=0;}
+    if(type=="BoolProperty") {auto offset=read<uint8_t>(field+0x71),mask=read<uint8_t>(field+0x73);validate_bool_layout(size,offset,mask);return (read<uint8_t>(address+offset)&mask)!=0;}
     if(type=="IntProperty" && size==4) return read<int32_t>(address);
     if(type=="Int64Property" && size==8) return read<int64_t>(address);
     if(type=="UInt32Property" && size==4) return read<uint32_t>(address);
@@ -140,10 +142,24 @@ void __fastcall GameAccess::hooked_tick(void* loop) {
     if(count<2)diagnostic("tick_pump_return");
 }
 json GameAccess::status() const {
-    return {{"version","1.0.0-dev.2"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.3"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&ticks_.load()>0},
             {"build_hash",kHash},{"startup_error",startup_error_},
-            {"limitations",{"Экспериментальная привязка к одному EXE","Serial UObject не подтверждён: handle проверяет слот, указатель, класс и имя","Одно активное соединение; ссылки принадлежат его сессии","Без выгрузки DLL: завершение через закрытие игры"}}};
+            {"process_id",GetCurrentProcessId()},
+            {"operations",{"status","enable_game","objects","properties","functions","invoke",
+                           "snapshot","watch_start","watch_read","watch_stop","watch_forget"}},
+            {"snapshot_limits",{{"objects",16},{"properties_per_object",32},{"scan_fields_per_object",4096},
+                                {"property_value_bytes",16384},{"object_path_bytes",8192},
+                                {"snapshot_bytes",Observations::MaxSnapshotBytes}}},
+            {"watch_limits",{{"records",Observations::MaxWatches},{"properties",32},
+                             {"duration_ms_min",1},{"duration_ms_max",600000},
+                             {"interval_ms_min",10},{"interval_ms_max",60000},
+                             {"capacity_min",1},{"capacity_max",128},
+                             {"buffer_bytes",Observations::MaxBufferBytes},{"read_events",100},
+                             {"due_watches_per_tick",1}}},
+            {"snapshot_consistency","single_tick_sequential"},
+            {"world_generation_supported",false},
+            {"limitations",{"Экспериментальная привязка к одному EXE","Serial UObject не подтверждён: handle проверяет слот, указатель, класс и имя","Одно активное соединение; ссылки и наблюдения принадлежат его сессии","Смена мира не определяет отдельное поколение; проверяется объект перед каждым чтением","Без выгрузки DLL: завершение через закрытие игры"}}};
 }
 json GameAccess::request(const json& envelope) {
     if(envelope.at("op")=="status") return status();
@@ -157,15 +173,52 @@ json GameAccess::request(const json& envelope) {
     }
     return future.get();
 }
+void GameAccess::disconnect(const std::string& session) {
+    // Сетевой поток: только пометка и отмена ещё не вошедших в Tick работ.
+    std::lock_guard lock(queue_mutex_);
+    session_cleanup_pending_=true;
+    for (const auto& job : queue_) {
+        if (job->request.value("session_id",std::string{})!=session) continue;
+        int queued=0;
+        if (job->state.compare_exchange_strong(queued,2)) {
+            job->result.set_exception(std::make_exception_ptr(
+                HandlerError("session_closed","Сессия отключилась до исполнения запроса")));
+        }
+    }
+}
 void GameAccess::pump() {
     if(!game_thread_.load()) game_thread_=GetCurrentThreadId();
     if(game_thread_.load()!=GetCurrentThreadId()) return;
     ++ticks_;
     std::shared_ptr<Job> job;
-    {std::lock_guard lock(queue_mutex_);if(queue_.empty())return;job=queue_.front();queue_.pop_front();}
-    int queued=0;if(!job->state.compare_exchange_strong(queued,1)) return;
-    try {job->result.set_value(execute(job->request));}catch(...) {job->result.set_exception(std::current_exception());}
-    job->state=3;
+    {
+        std::lock_guard lock(queue_mutex_);
+        if(session_cleanup_pending_) {
+            observations_.disconnect(handle_session_);
+            handles_.clear();handle_session_.clear();session_cleanup_pending_=false;
+        }
+        if(!queue_.empty()){job=queue_.front();queue_.pop_front();}
+    }
+    if(job) {
+        int queued=0;
+        if(job->state.compare_exchange_strong(queued,1)) {
+            try {job->result.set_value(execute(job->request));}catch(...) {job->result.set_exception(std::current_exception());}
+            job->state=3;
+        }
+    }
+    const auto now=static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+    // Уведомление disconnect ждёт уже вошедшее чтение; после пометки новая
+    // выборка не начинается. Реальная очистка выполняется тем же Tick.
+    {
+        std::lock_guard lock(queue_mutex_);
+        if(session_cleanup_pending_) {
+            observations_.disconnect(handle_session_);
+            handles_.clear();handle_session_.clear();session_cleanup_pending_=false;
+        } else {
+            observations_.pump(now,ticks_.load(),[this](const json& targets){return snapshot(targets);});
+        }
+    }
 }
 
 std::string GameAccess::name(uint64_t fname) const {
@@ -228,6 +281,95 @@ json GameAccess::properties(void* object,int limit) {
     }
     return {{"items",items},{"truncated",truncated},{"validation","game_thread_memory_read"}};
 }
+json GameAccess::selected_properties(void* object,const json& names) {
+    json items=json::array();
+    std::unordered_map<std::string,json> selected;
+    auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);
+    int scanned=0;bool scan_truncated=false;
+    std::set<uintptr_t> visited_classes;
+    for(int depth=0;klass && depth<64 && selected.size()<names.size();
+        klass=read<uintptr_t>(klass+0x40),++depth) {
+        if(!visited_classes.insert(klass).second){scan_truncated=true;break;}
+        auto field=read<uintptr_t>(klass+0x50);auto class_size=read<int32_t>(klass+0x58);
+        for(;field && selected.size()<names.size();field=read<uintptr_t>(field+0x18)) {
+            if(++scanned>4096){scan_truncated=true;break;}
+            const auto field_name=name(read<uint64_t>(field+0x20));
+            if(selected.contains(field_name) || std::find(names.begin(),names.end(),json(field_name))==names.end())continue;
+            const auto type=field_type(field,[this](auto f){return name(f);});
+            const auto offset=read<int32_t>(field+0x44),size=read<int32_t>(field+0x34);
+            json item={{"name",field_name},{"type",type},{"supported",false}};
+            try {
+                if(offset<0 || size<=0 || size>class_size || offset>class_size-size
+                   || read<int32_t>(field+0x30)!=1)
+                    throw HandlerError("unsupported_property_layout","Неподдерживаемая раскладка свойства");
+                auto value=scalar(reinterpret_cast<uintptr_t>(object)+offset,type,size,field);
+                if(value.is_null())throw HandlerError("unsupported_property_type","Тип свойства не поддержан");
+                if(value.dump().size()>16384)throw HandlerError("property_value_too_large","Значение превышает предел поля 16 КиБ");
+                item["value"]=std::move(value);item["supported"]=true;
+            } catch(const HandlerError& error) {
+                item["error"]={{"code",error.code()},{"message",error.what()}};
+            }
+            selected.emplace(field_name,std::move(item));
+        }
+        if(scan_truncated)break;
+        if(depth==63 && klass)scan_truncated=true;
+    }
+    bool partial=scan_truncated;
+    for(const auto& requested:names) {
+        const auto key=requested.get<std::string>();
+        auto found=selected.find(key);
+        if(found==selected.end()) {
+            items.push_back({{"name",key},{"type",nullptr},{"supported",false},
+                {"error",{{"code",scan_truncated?"property_scan_truncated":"property_not_found"},
+                           {"message",scan_truncated?"Поиск свойства достиг лимита":"Свойство не найдено"}}}});
+            partial=true;
+        } else {
+            if(!found->second.at("supported").get<bool>())partial=true;
+            items.push_back(found->second);
+        }
+    }
+    return {{"properties",items},{"partial",partial},{"truncated",scan_truncated},{"scanned_fields",scanned}};
+}
+json GameAccess::snapshot(const json& targets) {
+    Observations::validate_targets(targets);
+    json result={{"snapshot_id","snapshot-"+std::to_string(++next_snapshot_)},
+        {"source","live_native"},{"session_id",handle_session_},{"process_id",GetCurrentProcessId()},
+        {"thread_id",GetCurrentThreadId()},{"tick_count",ticks_.load()},
+        {"consistency","single_tick_sequential"},{"objects",json::array()},
+        {"partial",false},{"truncated",false},
+        {"limits",{{"objects",16},{"properties_per_object",32},{"scan_fields_per_object",4096},
+                   {"property_value_bytes",16384},{"snapshot_bytes",Observations::MaxSnapshotBytes}}}};
+    for(const auto& target:targets) {
+        const auto handle=target.at("handle").get<std::string>();
+        json item={{"handle",handle},{"properties",json::array()}};
+        try {
+            auto object=resolve(handle);
+            item["path"]=object_path(object);
+            item["class"]=object_name(reinterpret_cast<void*>(read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10)));
+            if(item["path"].get_ref<const std::string&>().size()>8192)
+                throw HandlerError("object_identity_too_large","Путь объекта превышает предел 8 КиБ");
+            const auto fields=selected_properties(object,target.at("properties"));
+            resolve(handle);
+            item["properties"]=fields.at("properties");
+            item["partial"]=fields.at("partial");item["truncated"]=fields.at("truncated");
+            if(fields.at("partial").get<bool>())result["partial"]=true;
+            if(fields.at("truncated").get<bool>())result["truncated"]=true;
+        } catch(const HandlerError& error) {
+            item["properties"]=json::array();
+            if(error.code()=="object_identity_too_large")item.erase("path");
+            item["error"]={{"code",error.code()},{"message",error.what()}};
+            result["partial"]=true;
+        }
+        if(result.dump().size()+item.dump().size()>Observations::MaxSnapshotBytes-4096) {
+            result["objects"].push_back({{"handle",handle},{"properties",json::array()},
+                {"error",{{"code","snapshot_too_large"},{"message","Снимок достиг предела 256 КиБ"}}}});
+            result["partial"]=true;result["truncated"]=true;
+            break;
+        }
+        result["objects"].push_back(std::move(item));
+    }
+    return result;
+}
 json GameAccess::functions(void* object,int limit) {
     json items=json::array();auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);bool truncated=false;
     for(int depth=0;klass && depth<64;klass=read<uintptr_t>(klass+0x40),++depth) {
@@ -269,10 +411,10 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         if(flags&0x400){return_field=field;return_type=type;return_size=size;return_offset=offset;if((type=="StrProperty" && size!=16) || (type!="StrProperty" && scalar(reinterpret_cast<uintptr_t>(buffer+offset),type,size,field).is_null()))throw HandlerError("unsupported_signature","Тип результата пока не поддержан");continue;}
         if(flags&(0x100|0x800))throw HandlerError("unsupported_signature","Out/ref параметры пока не поддержаны");
         auto key=name(read<uint64_t>(field+0x20));if(!arguments.contains(key))throw HandlerError("missing_argument","Не задан аргумент "+key);auto v=arguments.at(key);++input_count;
-        if(type=="BoolProperty" && v.is_boolean()){auto bo=read<uint8_t>(field+0x71),mask=read<uint8_t>(field+0x73);buffer[offset+bo]=v.get<bool>()?mask:0;}
-        else if(type=="IntProperty" && size==4 && v.is_number_integer()){auto n=v.get<int64_t>();if(n<INT32_MIN||n>INT32_MAX)throw HandlerError("invalid_argument","Аргумент вне int32");*reinterpret_cast<int32_t*>(buffer+offset)=static_cast<int32_t>(n);}
-        else if(type=="FloatProperty" && size==4 && v.is_number()){*reinterpret_cast<float*>(buffer+offset)=v.get<float>();}
-        else if(type=="DoubleProperty" && size==8 && v.is_number()){*reinterpret_cast<double*>(buffer+offset)=v.get<double>();}
+        if(type=="BoolProperty" && v.is_boolean()){auto bo=read<uint8_t>(field+0x71),mask=read<uint8_t>(field+0x73);validate_bool_layout(size,bo,mask);buffer[offset+bo]=v.get<bool>()?mask:0;}
+        else if(type=="IntProperty" && size==4){*reinterpret_cast<int32_t*>(buffer+offset)=int32_argument(v);}
+        else if(type=="FloatProperty" && size==4){*reinterpret_cast<float*>(buffer+offset)=float_argument(v);}
+        else if(type=="DoubleProperty" && size==8){*reinterpret_cast<double*>(buffer+offset)=double_argument(v);}
         else throw HandlerError("unsupported_signature","Тип аргумента пока не поддержан: "+type);
     }
     if(arguments.size()!=input_count)throw HandlerError("unknown_argument","Переданы лишние аргументы");
@@ -286,11 +428,27 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
 json GameAccess::execute(const json& request) {
     auto op=request.at("op").get<std::string>();auto params=request.at("params");
     auto session=request.at("session_id").get<std::string>();
-    if(session!=handle_session_){handles_.clear();handle_session_=session;}
+    if(session!=handle_session_){observations_.disconnect(handle_session_);handles_.clear();handle_session_=session;}
+    const auto now=static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+    if(op=="snapshot") {
+        if(!params.contains("targets"))throw HandlerError("invalid_snapshot_params","Требуется targets");
+        return snapshot(params.at("targets"));
+    }
+    if(op=="watch_start") {
+        if(!params.contains("handle") || !params.contains("properties"))
+            throw HandlerError("invalid_watch_params","Требуются handle и properties");
+        auto targets=json::array({{{"handle",params.at("handle")},{"properties",params.at("properties")}}});
+        Observations::validate_targets(targets);
+        return observations_.start(session,params,snapshot(targets),now,ticks_.load());
+    }
+    if(op=="watch_read")return observations_.read(session,params);
+    if(op=="watch_stop")return observations_.stop(session,params,now,ticks_.load());
+    if(op=="watch_forget")return observations_.forget(session,params);
     if(op!="objects" && op!="properties" && op!="functions" && op!="invoke")throw HandlerError("unknown_operation","Операция не поддержана");
     if(op=="objects") {
         auto query=params.value("query",std::string{}),class_query=params.value("class_query",std::string{});int limit=limit_of(params);if(query.size()>256||class_query.size()>256)throw HandlerError("invalid_query","Запрос слишком длинный");
-        if(handles_.size()+limit>4096)handles_.clear();
+        if(handles_.size()+limit>4096)throw HandlerError("handle_limit","Реестр ссылок заполнен; существующие ссылки и наблюдения сохранены. Для новой сессии переподключить клиент явно");
         auto count=read<int32_t>(base_+kObjects+0x14);if(count<0||count>4000000)throw HandlerError("invalid_registry","Некорректный реестр объектов");
         json items=json::array();int scanned=0,skipped=0;
         for(int index=0;index<count;++index){++scanned;auto object=slot(index);if(!object)continue;

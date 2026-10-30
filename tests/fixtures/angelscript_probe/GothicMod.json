@@ -1,0 +1,7 @@
+{
+  "name": "G1RMCPProbe",
+  "title": "Проверка компиляции G1R MCP",
+  "author": "G1R MCP",
+  "description": "Изолированный проверочный объект без игрового поведения.",
+  "modVersion": "1.0.0"
+}

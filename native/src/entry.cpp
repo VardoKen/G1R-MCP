@@ -27,9 +27,16 @@ DWORD WINAPI initialize(void*) {
     try {
         game=new g1r_mcp::GameAccess();
         transport=new g1r_mcp::Transport([](const nlohmann::json& request){
-            if(request.at("op")=="enable_game") {phase("enable_game_enter");game->start();phase("enable_game_return");return game->status();}
-            return game->request(request);
-        });
+            nlohmann::json result;
+            if(request.at("op")=="enable_game") {phase("enable_game_enter");game->start();phase("enable_game_return");result=game->status();}
+            else result=game->request(request);
+            if(request.at("op")=="status" || request.at("op")=="enable_game") {
+                result["session_id"]=request.at("session_id");
+                result["protocol"]=1;
+            }
+            return result;
+        }, g1r_mcp::DefaultPort, std::chrono::milliseconds{5000},
+        [](const std::string& session) { game->disconnect(session); });
         phase("transport_created");transport->start();phase("transport_started");
     } catch(const std::exception& error) {phase(error.what());}
     catch(...) {phase("initialization_exception");}
