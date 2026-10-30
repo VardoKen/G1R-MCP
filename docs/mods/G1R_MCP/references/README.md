@@ -1,6 +1,6 @@
 # Источники G1R MCP
 
-Дата первоначальной сверки: **30.10.2026**. Исследование выполнено чтением репозиториев и официальной документации. Тесты и игровые эксперименты в рамках создания подпроекта не запускались.
+Дата первоначальной сверки: **30.10.2026**. При создании подпроекта использовалось только чтение. После поручения начать PLAN-001 выполнены диагностика, автономные тесты и разрешённые запуски; их [результаты и границы подтверждения](2026-10-30-environment-and-transport.md) описаны отдельно.
 
 ## Локальные репозитории
 
@@ -32,9 +32,17 @@
 
 ## Официальные источники
 
+Дополнительные источники Э0–Э1:
+
+- [Клиент Hazelight debugger](https://github.com/Hazelight/vscode-unreal-angelscript/tree/ffc7ab2948589abb04200b7dcedd326eaeaf7a4d), закреплённая ревизия для диагностического протокола.
+- [UGothicModExt_WorldSubsystem](https://alkimiainteractive.github.io/G1R-Modkit/script-reference/class_u_gothic_mod_ext___world_subsystem.html) — документированные события lifecycle.
+- [Официальный Unreal MCP](https://dev.epicgames.com/documentation/en-us/unreal-engine/unreal-mcp-in-unreal-editor) и [UE 5.8 release notes](https://dev.epicgames.com/documentation/en-us/unreal-engine/unreal-engine-5-8-release-notes) — архитектурный источник, не доказательство наличия плагина в G1R.
+- [Content Cooking G1R](https://alkimiainteractive.github.io/G1R-Modkit/unreal-project/content-cooking/) — отдельный контур Unreal Editor 5.4 для новых ресурсов.
+- [Ответ Alkimia об отсутствующем LSP в 1.1](https://github.com/AlkimiaInteractive/G1R-Modkit/issues/1#issuecomment-6520702135), 30.10.2026: включение обещано в следующем обновлении; фактическая пригодность будущего канала ещё не проверена.
+
 | Источник | Что подтверждено чтением | Что не подтверждено |
 | --- | --- | --- |
-| [Официальный G1R-Modkit](https://github.com/AlkimiaInteractive/G1R-Modkit) | Источник Modkit, игровых скриптов, руководств и примеров. | Соответствие исследованной ревизии установленному обновлению игры. |
+| [Официальный G1R-Modkit](https://github.com/AlkimiaInteractive/G1R-Modkit) | Источник Modkit; все 7 280 Script-файлов исследованной ревизии совпали с установленным build 26295476. | Фактическое выполнение каждого описанного API; равенство всех компонентов нативной сборки. |
 | [Описание ModPackage](https://alkimiainteractive.github.io/G1R-Modkit/getting-started/mod-package/) | Формат официального пакета, включая `GothicMod.json` и каталоги скриптов. | Загрузка ещё не созданного G1R MCP. |
 | [JSON API](https://alkimiainteractive.github.io/G1R-Modkit/script-reference/namespace_json.html) | Наличие функций разбора JSON в справочнике. | Фактическая доступность и выполнение в установленной сборке игры. |
 | [FFileHelper](https://alkimiainteractive.github.io/G1R-Modkit/script-reference/namespace_f_file_helper.html) | Наличие чтения и записи строк в файлы в справочнике. | Пригодность для канала связи; выбор файлового обмена. |
