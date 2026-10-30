@@ -9,6 +9,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include "../include/g1r_mcp/process_identity.hpp"
 
 namespace fs = std::filesystem;
 static_assert(sizeof(void*) == 8, "Загрузчик требует Windows x64");
@@ -19,11 +20,7 @@ struct Handle {
     operator HANDLE() const { return value; }
 };
 std::wstring normalized(const fs::path& path) {
-    auto result = fs::canonical(path).wstring();
-    std::replace(result.begin(), result.end(), L'/', L'\\');
-    std::transform(result.begin(), result.end(), result.begin(), [](wchar_t value) { return towlower(value); });
-    if (result.starts_with(L"\\\\?\\")) result.erase(0, 4);
-    return result;
+    return g1r::loader::comparable_path(fs::canonical(path).wstring());
 }
 bool suffix(const std::wstring& path, const std::wstring& end) {
     return path.size() >= end.size() && path.compare(path.size() - end.size(), end.size(), end) == 0;
@@ -83,24 +80,40 @@ int error(const char* code, const char* message, bool unknown = false) {
 int wmain(int argc, wchar_t** argv) {
     SetConsoleOutputCP(CP_UTF8);
     try {
-        DWORD pid{}; fs::path dll;
+        DWORD pid{}; fs::path dll, expected_exe;
+        std::uint64_t expected_created{};
+        bool has_pid{}, has_dll{}, has_expected_exe{}, has_expected_created{};
         for (int index = 1; index < argc; ++index) {
             std::wstring argument = argv[index];
             if (argument == L"--pid" && index + 1 < argc) {
+                if (has_pid) return error("invalid_arguments", "PID задан повторно");
+                has_pid = true;
                 std::wstring value = argv[++index]; size_t consumed{}; auto parsed = std::stoull(value, &consumed);
                 if (consumed != value.size() || parsed == 0 || parsed > MAXDWORD) throw std::runtime_error("invalid_pid");
                 pid = static_cast<DWORD>(parsed);
-            } else if (argument == L"--dll" && index + 1 < argc) dll = argv[++index];
-            else return error("invalid_arguments", "Вызов: load_bridge --pid PID --dll абсолютный_путь_G1R_MCP.dll");
+            } else if (argument == L"--dll" && index + 1 < argc) {
+                if (has_dll) return error("invalid_arguments", "DLL задана повторно");
+                has_dll = true; dll = argv[++index];
+            } else if (argument == L"--expected-exe" && index + 1 < argc) {
+                if (has_expected_exe) return error("invalid_arguments", "EXE задан повторно");
+                has_expected_exe = true; expected_exe = argv[++index];
+            } else if (argument == L"--expected-creation-filetime" && index + 1 < argc) {
+                if (has_expected_created) return error("invalid_arguments", "Время создания задано повторно");
+                has_expected_created = true; expected_created = g1r::loader::parse_creation_filetime(argv[++index]);
+            } else return error("invalid_arguments", "Нужны --pid PID --dll путь; проверка экземпляра: --expected-exe путь --expected-creation-filetime FILETIME");
         }
+        if (has_expected_exe != has_expected_created ||
+            (has_expected_exe && (expected_exe.empty() || !expected_exe.is_absolute())))
+            return error("invalid_arguments", "Ожидаемые абсолютный EXE и FILETIME задаются вместе");
         if (!pid || dll.empty() || !dll.is_absolute() || !fs::is_regular_file(dll) || _wcsicmp(dll.filename().c_str(), L"G1R_MCP.dll") != 0)
             return error("invalid_arguments", "Нужны точный PID и абсолютный путь существующей G1R_MCP.dll");
         auto dll_path = normalized(dll); pe_identity(dll);
         Handle process{OpenProcess(PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ, FALSE, pid)};
         if (!process.value) return error("open_process_failed", "Не удалось открыть игровой процесс");
-        std::vector<wchar_t> image(32768); DWORD image_size = static_cast<DWORD>(image.size());
-        if (!QueryFullProcessImageNameW(process, 0, image.data(), &image_size)) return error("process_path_failed", "Не удалось проверить путь игрового процесса");
-        auto process_path = normalized(std::wstring(image.data(), image_size));
+        auto process_path = normalized(g1r::loader::process_image(process));
+        if (has_expected_exe && !g1r::loader::identity_matches(process_path, g1r::loader::creation_filetime(process),
+                                                           normalized(expected_exe), expected_created))
+            return error("process_identity_mismatch", "EXE или время создания не совпадают с выбранным экземпляром игры");
         if (!suffix(process_path, L"\\g1r\\binaries\\win64\\g1r-win64-shipping.exe")) return error("wrong_process", "PID не принадлежит внутреннему Win64 EXE Gothic 1 Remake");
         auto identity = pe_identity(process_path); (void)identity;
         USHORT process_machine{}, native_machine{};

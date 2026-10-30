@@ -2,10 +2,18 @@
 
 #include <g1r_mcp/transport.hpp>
 #include <cmath>
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 
 namespace g1r_mcp {
+
+inline int parameter_extent(int current, int offset, int size, int array_dim) {
+    if (current<0 || current>4096 || offset<0 || size<1 || size>4096
+        || offset>4096-size || array_dim!=1)
+        throw HandlerError("unsupported_signature", "Некорректные отражённые параметры");
+    return std::max(current,offset+size);
+}
 
 inline void validate_bool_layout(int size, std::uint8_t byte_offset, std::uint8_t mask) {
     if (size < 1 || byte_offset >= size || mask == 0)

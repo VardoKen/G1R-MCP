@@ -29,12 +29,15 @@ inline constexpr std::size_t MaxSessionRequests = 1024;
 
 class HandlerError : public std::runtime_error {
 public:
-    HandlerError(std::string code, std::string message)
-        : std::runtime_error(std::move(message)), code_(std::move(code)) {}
+    HandlerError(std::string code, std::string message,
+                 nlohmann::json details={{"executed",false},{"may_have_executed",false},{"do_not_retry",false}})
+        : std::runtime_error(std::move(message)), code_(std::move(code)), details_(std::move(details)) {}
     const std::string& code() const noexcept { return code_; }
+    const nlohmann::json& details() const noexcept { return details_; }
 
 private:
     std::string code_;
+    nlohmann::json details_;
 };
 
 // Обработчик исполняется на рабочем потоке транспорта: игровые вызовы здесь

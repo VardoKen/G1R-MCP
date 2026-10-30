@@ -14,9 +14,10 @@ namespace g1r_mcp {
 namespace {
 
 nlohmann::json error_response(const nlohmann::json& id, const std::string& session,
-                              std::string code, std::string message) {
+                             std::string code, std::string message,
+                             nlohmann::json details={{"executed",false},{"may_have_executed",false},{"do_not_retry",false}}) {
     return {{"protocol", 1}, {"type", "error"}, {"id", id}, {"session_id", session},
-            {"error", {{"code", std::move(code)}, {"message", std::move(message)}}}};
+            {"error", {{"code", std::move(code)}, {"message", std::move(message)}, {"details",std::move(details)}}}};
 }
 
 bool nonblocking(SOCKET socket) {
@@ -295,12 +296,16 @@ void Transport::serve(SOCKET client, const std::string& session) {
             if (!result.is_object()) throw HandlerError("invalid_handler_result", "Обработчик должен вернуть JSON-объект");
             response = {{"protocol", 1}, {"type", "response"}, {"id", id}, {"session_id", session},
                         {"result", std::move(result)}};
-            if (response.dump().size() > MaxFrameBytes)
-                response = error_response(id, session, "response_too_large", "Ответ обработчика превышает предел кадра");
+            if (response.dump().size() > MaxFrameBytes) {
+                const bool executed=response.at("result").value("executed",false);
+                response = error_response(id, session, "response_too_large", "Ответ обработчика превышает предел кадра",
+                    {{"executed",executed},{"may_have_executed",executed},{"do_not_retry",executed}});
+            }
         } catch (const HandlerError& error) {
-            response = error_response(id, session, error.code(), error.what());
+            response = error_response(id, session, error.code(), error.what(),error.details());
         } catch (...) {
-            response = error_response(id, session, "native_handler_error", "Обработчик завершился ошибкой");
+            response = error_response(id, session, "native_handler_error", "Обработчик завершился ошибкой",
+                {{"executed",false},{"may_have_executed",true},{"do_not_retry",true}});
         }
         if (!send_json(client, response)) return;
     }

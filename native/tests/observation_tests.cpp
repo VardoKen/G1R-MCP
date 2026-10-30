@@ -1,6 +1,7 @@
 #include <g1r_mcp/observations.hpp>
 #include <g1r_mcp/transport.hpp>
 #include <g1r_mcp/scalar_arguments.hpp>
+#include <g1r_mcp/object_arguments.hpp>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -163,6 +164,12 @@ void copied_values_byte_drop_and_no_catchup() {
 }
 
 void scalar_argument_boundaries() {
+    require(g1r_mcp::parameter_extent(8,8,1,1)==9,"AS bool return beyond ParmsSize не включён");
+    require(g1r_mcp::parameter_extent(8,8,8,1)==16,"AS object return beyond ParmsSize не включён");
+    require(g1r_mcp::parameter_extent(8,0,8,1)==8,"Обычный параметр изменил размер");
+    error("unsupported_signature",[]{g1r_mcp::parameter_extent(8,4096,1,1);});
+    error("unsupported_signature",[]{g1r_mcp::parameter_extent(8,-1,1,1);});
+    error("unsupported_signature",[]{g1r_mcp::parameter_extent(8,0,1,2);});
     g1r_mcp::validate_bool_layout(1,0,1);
     g1r_mcp::validate_bool_layout(1,0,255);
     error("unsupported_property_layout",[]{g1r_mcp::validate_bool_layout(1,1,1);});
@@ -186,6 +193,36 @@ void scalar_argument_boundaries() {
             std::numeric_limits<float>::max(),"float max не принимается");
     require(g1r_mcp::double_argument(json(1e300))==1e300,"Конечный double потерян");
 }
+void object_argument_boundaries_and_inheritance() {
+    const g1r_mcp::ObjectIdentity identity{1,2,3,4};
+    require(g1r_mcp::same_object_identity(identity,{1,2,3,4}),"Одинаковая идентичность не переиспользуется");
+    require(!g1r_mcp::same_object_identity(identity,{1,9,3,4}),"Изменение класса не меняет идентичность");
+    require(!g1r_mcp::same_object_identity(identity,{1,2,3,9}),"Изменение имени не меняет идентичность");
+    require(!g1r_mcp::same_object_identity(identity,{9,2,3,4}),"Изменение указателя не меняет идентичность");
+    require(g1r_mcp::object_argument_handle(json(nullptr)).empty(),"Null объектного аргумента не принят");
+    require(g1r_mcp::object_argument_handle(json{{"handle","obj-1"}})=="obj-1","Handle не принят");
+    error("invalid_object_argument",[]{g1r_mcp::object_argument_handle(json(42));});
+    error("invalid_object_argument",[]{g1r_mcp::object_argument_handle(json{{"handle","obj-1"},{"ptr",42}});});
+    error("invalid_object_argument",[]{g1r_mcp::object_argument_handle(json{{"handle",""}});});
+    error("invalid_object_argument",[]{g1r_mcp::object_argument_handle(json{{"handle",std::string(81,'x')}});});
+    auto parent=[](std::uintptr_t klass){return klass==3?std::uintptr_t{2}:klass==2?std::uintptr_t{1}:std::uintptr_t{0};};
+    require(g1r_mcp::compatible_object_class(3,3,parent),"Точный класс не принят");
+    require(g1r_mcp::compatible_object_class(3,1,parent),"Наследник не принят");
+    require(!g1r_mcp::compatible_object_class(1,3,parent),"Базовый класс принят вместо наследника");
+    error("invalid_object_class",[]{g1r_mcp::compatible_object_class(1,2,[](std::uintptr_t){return std::uintptr_t{1};});});
+    error("invalid_object_class",[]{g1r_mcp::compatible_object_class(1,200,[](std::uintptr_t c){return c+1;});});
+    error("invalid_object_class",[]{g1r_mcp::compatible_object_class(0,1,[](std::uintptr_t){return std::uintptr_t{0};});});
+    Observations model;
+    auto data=snapshot(1);
+    data["objects"][0]["properties"][0]["type"]="ObjectProperty";
+    data["objects"][0]["properties"][0]["value"]={{"handle","obj-2"},{"index",2},
+        {"name","Peer"},{"path","World.Peer"},{"class","Actor"},{"session_id","owner"}};
+    const auto id=model.start("owner",params(),data,0,1).at("watch_id").get<std::string>();
+    model.pump(10,2,[&](const json&){return data;});
+    require(model.read("owner",query(id)).at("events").size()==1,"Стабильный object descriptor дал ложное изменение");
+    model.pump(20,3,[&](const json&){auto empty=data;empty["objects"][0]["properties"][0]["value"]=nullptr;return empty;});
+    require(model.read("owner",query(id)).at("events").size()==2,"Изменение object descriptor в null не замечено");
+}
 }
 
 int main() {
@@ -196,6 +233,7 @@ int main() {
         invalid_parameters_and_capacity();
         copied_values_byte_drop_and_no_catchup();
         scalar_argument_boundaries();
+        object_argument_boundaries_and_inheritance();
         std::cout << "Проверки наблюдений пройдены\n";
         return 0;
     } catch (const std::exception& caught) {

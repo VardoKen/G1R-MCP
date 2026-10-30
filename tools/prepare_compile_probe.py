@@ -18,7 +18,7 @@ import tempfile
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 from g1r_mcp.packages import PackageError, validate_package
-from g1r_mcp.workspace import PackageWorkspace, WorkspaceError, _destination_lock, _guard_directories
+from g1r_mcp.workspace import PackageWorkspace, WorkspaceError, _checked, _destination_lock, _guard_directories, _read_bytes
 
 PACKAGE_NAME = "G1RMCPProbe"
 CLASS_NAME = "UG1RMCPCompileProbe"
@@ -29,6 +29,41 @@ FIXTURE_ROOT = REPOSITORY_ROOT / "tests" / "fixtures" / "angelscript_probe"
 
 def _hash(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
+
+
+def _file_identity(path: Path) -> tuple[int, int]:
+    info = path.stat()
+    return info.st_dev, info.st_ino
+
+
+def _cleanup_own_stage(stage: Path, workspace: Path, files: dict, directories: dict) -> None:
+    """Удалить только свои неизменённые файлы; подозрительное дерево сохранить."""
+    try:
+        with _guard_directories(stage, workspace):
+            for relative, identity in directories.items():
+                path = _checked(stage if relative == "." else stage / relative, stage, directory=True)
+                if _file_identity(path) != identity:
+                    return
+            for relative in files:
+                _checked((stage / relative).parent, stage, directory=True)
+            for relative, (identity, digest) in files.items():
+                path = stage / relative
+                with _guard_directories(path.parent, workspace):
+                    checked = _checked(path, stage)
+                    if _file_identity(checked) == identity and _hash(_read_bytes(checked, stage, 2 * 1024 * 1024)) == digest:
+                        checked.unlink()
+            # Guard stage остаётся активным, Script guard уже закрыт.
+            for relative, identity in reversed(tuple(directories.items())):
+                if relative == ".":
+                    continue
+                path = _checked(stage / relative, stage, directory=True)
+                if _file_identity(path) == identity and not any(path.iterdir()):
+                    path.rmdir()
+        checked_stage = _checked(stage, workspace, directory=True)
+        if _file_identity(checked_stage) == directories.get(".") and not any(checked_stage.iterdir()):
+            checked_stage.rmdir()
+    except (WorkspaceError, OSError):
+        pass
 
 
 def _checked_artifacts_path(path: Path, repository_root: Path) -> Path:
@@ -85,31 +120,34 @@ def prepare_probe(workspace_root: Path, *, phase: str = "baseline",
         workspace.mkdir(parents=True, exist_ok=True)
         _checked_artifacts_path(workspace, repository_root)
         stage = None
+        owned_files = {}
+        owned_directories = {}
         with _destination_lock(package), _guard_directories(workspace, Path(repository_root)):
             try:
                 if package.exists():
                     raise PackageError("already_exists", "Проверочный пакет уже существует")
                 stage = Path(tempfile.mkdtemp(prefix=".g1r-mcp-probe-", dir=workspace))
                 _checked_artifacts_path(stage, repository_root)
-                (stage / "Script").mkdir()
-                (stage / "GothicMod.json").write_bytes(descriptor)
-                (stage / SCRIPT_RELATIVE).write_bytes(source)
-                validation = validate_package(workspace, stage.name)
-                if not validation["valid_structure"] or validation["script_count"] != 1:
-                    raise PackageError("fixture_invalid", "Копия fixture не прошла структурную проверку")
-                if package.exists():
-                    raise PackageError("already_exists", "Проверочный пакет появился до завершения подготовки")
+                owned_directories["."] = _file_identity(stage)
+                with _guard_directories(stage, workspace):
+                    (stage / "Script").mkdir()
+                    owned_directories["Script"] = _file_identity(stage / "Script")
+                    writer = PackageWorkspace(workspace)
+                    with _guard_directories(stage / "Script", stage):
+                        for relative, raw in (("GothicMod.json", descriptor), (SCRIPT_RELATIVE, source)):
+                            result = writer.write_package_file(stage.name, relative, raw.decode("utf-8"))
+                            owned_files[relative] = (_file_identity(_checked(stage / relative, stage)), result["sha256"])
+                        validation = validate_package(workspace, stage.name)
+                        if not validation["valid_structure"] or validation["script_count"] != 1:
+                            raise PackageError("fixture_invalid", "Копия fixture не прошла структурную проверку")
+                        if package.exists():
+                            raise PackageError("already_exists", "Проверочный пакет появился до завершения подготовки")
+                    _checked(stage / "Script", workspace, directory=True)
                 stage.rename(package)
                 stage = None
             finally:
                 if stage is not None:
-                    # Удаляются только известные файлы собственной незавершённой копии.
-                    _checked_artifacts_path(stage, repository_root)
-                    (stage / SCRIPT_RELATIVE).unlink(missing_ok=True)
-                    (stage / "GothicMod.json").unlink(missing_ok=True)
-                    if (stage / "Script").exists():
-                        (stage / "Script").rmdir()
-                    stage.rmdir()
+                    _cleanup_own_stage(stage, workspace, owned_files, owned_directories)
     else:
         if not package.is_dir():
             raise PackageError("invalid_path", "Пакет baseline не найден")

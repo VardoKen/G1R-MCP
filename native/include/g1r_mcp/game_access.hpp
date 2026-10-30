@@ -55,6 +55,11 @@ private:
     std::string object_name(void* object) const;
     std::string object_path(void* object) const;
     std::string handle_for(void* object, int index);
+    Handle validate_object(void* object) const;
+    void validate_class(void* object_class) const;
+    bool is_compatible_object(void* object, void* expected_class) const;
+    nlohmann::json object_descriptor(void* object, void* expected_class);
+    nlohmann::json property_value(uintptr_t address, const std::string& type, int size, uintptr_t field);
     void* resolve(const std::string& id);
     void* slot(int index) const;
     nlohmann::json object_info(void* object, int index);

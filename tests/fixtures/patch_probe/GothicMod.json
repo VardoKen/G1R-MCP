@@ -1,0 +1,7 @@
+{
+  "name": "G1RMCPPatchProbe",
+  "title": "Проверка применения собственного ScriptPatch",
+  "author": "G1R MCP",
+  "description": "Изолированный UObject с постоянным значением; порядок применения патча требует проверки.",
+  "modVersion": "1.0.0"
+}

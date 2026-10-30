@@ -1,0 +1,7 @@
+{
+  "name": "G1RMCPObjectProbe",
+  "title": "G1R MCP Object Probe",
+  "author": "G1R MCP",
+  "description": "Изолированные проверки объектных аргументов, результатов и свойств без игрового поведения.",
+  "modVersion": "1.0.0"
+}

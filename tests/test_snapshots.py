@@ -22,6 +22,11 @@ def snapshot(properties=None, handle="obj-1"):
     }
 
 
+def object_reference(handle="ref-1", index=12):
+    return {"handle": handle, "index": index, "name": "Default__Target", "path": "/Script/Probe.Default__Target",
+            "class": "Target", "session_id": "session-1"}
+
+
 class SnapshotComparisonTests(unittest.TestCase):
     def assert_invalid(self, candidate, code="invalid_snapshot"):
         with self.assertRaises(SnapshotError) as failure:
@@ -227,6 +232,77 @@ class SnapshotComparisonTests(unittest.TestCase):
             candidate["objects"][0][field] = 1
             self.assert_invalid(candidate)
         self.assert_invalid(snapshot([prop(kind=None)]))
+
+    def test_object_reference_and_null_have_stable_declared_type(self):
+        null_snapshot = snapshot([prop("Target", None, "ObjectProperty")])
+        reference_snapshot = snapshot([prop("Target", object_reference(), "ObjectProperty")])
+        self.assertTrue(compare_snapshots(null_snapshot, null_snapshot)["equal_selected_values"])
+        self.assertTrue(compare_snapshots(reference_snapshot, reference_snapshot)["equal_selected_values"])
+        for before, after in ((null_snapshot, reference_snapshot), (reference_snapshot, null_snapshot)):
+            result = compare_snapshots(before, after)
+            self.assertEqual(result["type_changes"], 0)
+            self.assertEqual(result["value_changes"], 1)
+            self.assertEqual(result["items"][0]["kind"], "value_changed")
+        other = snapshot([prop("Target", object_reference("ref-2", 13), "ObjectProperty")])
+        result = compare_snapshots(reference_snapshot, other)
+        self.assertEqual((result["value_changes"], result["unknown_count"]), (1, 0))
+
+    def test_same_reference_handle_with_changed_identity_is_unknown(self):
+        before = snapshot([prop("Target", object_reference(), "ObjectProperty")])
+        for key, changed in (("index", 13), ("name", "Other"), ("path", "/Script/Other"), ("class", "Other")):
+            after = copy.deepcopy(before)
+            after["objects"][0]["properties"][0]["value"][key] = changed
+            result = compare_snapshots(before, after)
+            self.assertEqual((result["unknown_count"], result["value_changes"]), (1, 0))
+            self.assertEqual(result["items"][0]["reason"], "object_reference_identity_mismatch")
+            self.assertIsNone(result["equal_selected_values"])
+
+    def test_reference_descriptors_remain_client_copies_and_detached(self):
+        before = snapshot([prop("Target", None, "ObjectProperty")])
+        after = snapshot([prop("Target", object_reference(), "ObjectProperty")])
+        result = compare_snapshots(before, after)
+        self.assertEqual(result["provenance"], "unverified")
+        result["items"][0]["after"]["path"] = "/ChangedOutput"
+        self.assertEqual(after["objects"][0]["properties"][0]["value"]["path"], "/Script/Probe.Default__Target")
+        del after["source"]
+        result = compare_snapshots(before, after)
+        self.assertEqual(result["value_changes"], 0)
+        self.assertGreater(result["unknown_count"], 0)
+
+    def test_reference_descriptor_sessions_and_shape_are_validated(self):
+        reference = object_reference()
+        for key, changed in (("session_id", "session-2"), ("index", True), ("index", -1),
+                             ("index", 4_000_000), ("handle", ""), ("handle", "h" * 81),
+                             ("handle", "ж" * 41), ("name", "n" * 4097),
+                             ("class", "c" * 4097), ("path", "p" * 8193), ("name", "ж" * 2049)):
+            value = {**reference, key: changed}
+            with self.subTest(key=key, value=repr(changed)[:30]):
+                self.assert_invalid(snapshot([prop("Target", value, "ObjectProperty")]))
+        self.assert_invalid(snapshot([prop("Target", {**reference, "extra": True}, "ObjectProperty")]))
+        value = dict(reference)
+        del value["index"]
+        self.assert_invalid(snapshot([prop("Target", value, "ObjectProperty")]))
+        self.assert_invalid(snapshot([prop("Target", reference, "StructProperty")]))
+        self.assert_invalid(snapshot([prop("Target", reference, "ClassProperty")]))
+        self.assert_invalid(snapshot([prop("Target", None, "ClassProperty")]))
+
+    def test_unicode_object_names_use_fname_compatible_byte_limits(self):
+        value = {**object_reference(), "name": "ж" * 600, "class": "名" * 1000}
+        candidate = snapshot([prop("Target", value, "ObjectProperty")])
+        self.assertTrue(compare_snapshots(candidate, candidate)["equal_selected_values"])
+        value = {**object_reference(), "handle": "h" * 80, "name": "n" * 4096,
+                 "class": "c" * 4096, "path": "p" * 8192}
+        candidate = snapshot([prop("Target", value, "ObjectProperty")])
+        self.assertTrue(compare_snapshots(candidate, candidate)["equal_selected_values"])
+
+    def test_same_reference_type_cannot_be_hidden_as_loose_scalar(self):
+        for value in (True, 12, "ref-1", [object_reference()]):
+            self.assert_invalid(snapshot([prop("Target", value, "ObjectProperty")]))
+        before = snapshot([prop("Target", object_reference(), "ObjectProperty")])
+        after = snapshot([prop("Target", "ref-1", "StrProperty")])
+        result = compare_snapshots(before, after)
+        self.assertEqual((result["type_changes"], result["value_changes"]), (1, 1))
+        self.assertEqual(result["items"][0]["before_value_kind"], "object_reference")
 
 
 if __name__ == "__main__":

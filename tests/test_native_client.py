@@ -93,6 +93,37 @@ class FakeServer:
 
 
 class NativeClientTests(unittest.TestCase):
+    def test_confirmed_error_effects_distinguish_validation_from_result_failure(self):
+        cases = [
+            ("incompatible_object_argument", {"executed": False, "may_have_executed": False, "do_not_retry": False}),
+            ("game_result_error", {"executed": True, "may_have_executed": True,
+                                   "do_not_retry": True, "cause_code": "stale_handle"}),
+        ]
+        for code, details in cases:
+            with self.subTest(code=code):
+                def handler(stream):
+                    value = request(stream)
+                    stream.sendall(frame({"protocol": 1, "id": value["id"], "type": "error",
+                                          "error": {"code": code, "message": "Проверка", "details": details}}))
+                with FakeServer(handler) as server, NativeClient(port=server.port) as client:
+                    with self.assertRaises(NativeError) as caught:
+                        client.request("invoke")
+                    self.assertEqual(caught.exception.details, details)
+                    self.assertEqual(caught.exception.may_have_executed, details["may_have_executed"])
+                    self.assertEqual(server.accepted, 1)
+
+    def test_invalid_error_effect_metadata_is_protocol_failure(self):
+        def handler(stream):
+            value = request(stream)
+            stream.sendall(frame({"protocol": 1, "id": value["id"], "type": "error",
+                                  "error": {"code": "failed", "message": "Ошибка",
+                                            "details": {"executed": "false"}}}))
+        with FakeServer(handler) as server, NativeClient(port=server.port) as client:
+            with self.assertRaises(NativeError) as caught:
+                client.request("invoke")
+            self.assertEqual(caught.exception.code, "native_protocol_error")
+            self.assertTrue(caught.exception.may_have_executed)
+
     def test_persistent_unique_requests_and_fragmented_unicode_reply(self):
         received = []
 

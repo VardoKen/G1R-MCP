@@ -78,6 +78,105 @@ class WorkspaceTests(unittest.TestCase):
         self.assertNotEqual(replacement["sha256"], first["sha256"])
         self.assertEqual(self.workspace.read_package_file("Example", "Script/Example.as")["text"], "// заменено")
 
+    def test_patch_first_write_creates_directory_and_preserves_unified_diff_text(self):
+        self.create()
+        patch = "diff --git a/Script/Test.as b/Script/Test.as\n--- a/Script/Test.as\n+++ b/Script/Test.as\n@@ -1 +1 @@\n-old\n+new\n"
+        result = self.workspace.write_package_file("Example", "ScriptPatches/Changes.patch", patch)
+        self.assertTrue(result["created"])
+        self.assertTrue((self.root / "Example/ScriptPatches").is_dir())
+        read = self.workspace.read_package_file("Example", "ScriptPatches/Changes.patch")
+        self.assertEqual(read["text"], patch.rstrip("\n"))
+        self.assertEqual(read["sha256"], result["sha256"])
+        self.assertFalse(read["compiled"])
+        self.assertEqual(read["runtime_validation"], "not_performed")
+        replacement = self.workspace.write_package_file("Example", "ScriptPatches/Changes.patch", patch + "\n", read["sha256"])
+        self.assertFalse(replacement["created"])
+        self.assertEqual([item["path"] for item in self.workspace.list_package_files("Example")["items"]],
+                         ["GothicMod.json", "ScriptPatches/Changes.patch"])
+        before = self.state()
+        self.assert_error("conflict", lambda: self.workspace.write_package_file("Example", "ScriptPatches/Changes.patch", "overwrite", read["sha256"]))
+        self.assertEqual(before, self.state())
+
+    def test_patch_allowlist_refusals_leave_no_directory(self):
+        self.create()
+        before = self.state()
+        for path in ("ScriptPatches/Changes.json", "ScriptPatches/Changes.diff", "ScriptPatches/nested/Changes.patch",
+                     "ScriptPatches/main.as", "ScriptPatches"):
+            self.assert_error("unsupported_file", lambda: self.workspace.write_package_file("Example", path, "new"))
+        self.assert_error("conflict", lambda: self.workspace.write_package_file("Example", "ScriptPatches/Changes.patch", "new", "0" * 64))
+        self.assert_error("limit_exceeded", lambda: self.workspace.write_package_file("Example", "ScriptPatches/Changes.patch", "a" * (MAX_CONTENT_BYTES + 1)))
+        self.assertEqual(before, self.state())
+
+    def test_new_patch_directory_is_cleaned_on_write_failure(self):
+        self.create()
+        before = self.state()
+        with patch("g1r_mcp.workspace.os.link", side_effect=OSError("fixture")):
+            self.assert_error("access_error", lambda: self.workspace.write_package_file("Example", "ScriptPatches/Changes.patch", "fixture"))
+        self.assertEqual(before, self.state())
+
+    def test_existing_patch_directory_and_unrelated_files_survive_write_failure(self):
+        self.create()
+        directory = self.root / "Example/ScriptPatches"
+        directory.mkdir()
+        (directory / "Notes.txt").write_text("preserve", encoding="utf-8")
+        before = self.state()
+        with patch("g1r_mcp.workspace.os.link", side_effect=OSError("fixture")):
+            self.assert_error("access_error", lambda: self.workspace.write_package_file("Example", "ScriptPatches/Changes.patch", "fixture"))
+        self.assertEqual(before, self.state())
+
+    def test_unrelated_file_created_in_new_patch_directory_is_preserved_on_failure(self):
+        self.create()
+        directory = self.root / "Example/ScriptPatches"
+        def foreign_file_then_failure(*args, **kwargs):
+            (directory / "User.txt").write_text("preserve", encoding="utf-8")
+            raise OSError("fixture")
+        with patch("g1r_mcp.workspace.os.link", side_effect=foreign_file_then_failure):
+            self.assert_error("access_error", lambda: self.workspace.write_package_file("Example", "ScriptPatches/Changes.patch", "fixture"))
+        self.assertEqual((directory / "User.txt").read_text(encoding="utf-8"), "preserve")
+        self.assertEqual([path.name for path in directory.iterdir()], ["User.txt"])
+
+    def test_patch_protected_source_boundary_and_utf8_limit(self):
+        self.create()
+        protected = self.root / "Example/ScriptPatches"
+        protected.mkdir()
+        workspace = PackageWorkspace(self.root, protected_roots=[protected])
+        before = self.state()
+        self.assert_error("unsafe_path", lambda: workspace.write_package_file("Example", "ScriptPatches/Changes.patch", "new"))
+        self.assertEqual(before, self.state())
+        file = protected / "Invalid.patch"
+        file.write_bytes(b"\xff")
+        self.assert_error("invalid_encoding", lambda: self.workspace.read_package_file("Example", "ScriptPatches/Invalid.patch"))
+
+    def test_script_patch_directory_symlink_refused(self):
+        self.create()
+        with tempfile.TemporaryDirectory() as outside:
+            external = Path(outside)
+            link = self.root / "Example/ScriptPatches"
+            try:
+                link.symlink_to(external, target_is_directory=True)
+            except OSError:
+                self.skipTest("Система не разрешает изолированный symlink")
+            try:
+                self.assert_error("unsafe_path", lambda: self.workspace.write_package_file("Example", "ScriptPatches/Changes.patch", "new"))
+                self.assertFalse((external / "Changes.patch").exists())
+            finally:
+                link.unlink()
+
+    @unittest.skipUnless(os.name == "nt", "Windows junction")
+    def test_script_patch_junction_refused(self):
+        self.create()
+        with tempfile.TemporaryDirectory() as outside:
+            external = Path(outside)
+            link = self.root / "Example/ScriptPatches"
+            operation = subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(external)], capture_output=True)
+            if operation.returncode:
+                self.skipTest("Система не разрешает изолированный junction")
+            try:
+                self.assert_error("unsafe_path", lambda: self.workspace.write_package_file("Example", "ScriptPatches/Changes.patch", "new"))
+                self.assertFalse((external / "Changes.patch").exists())
+            finally:
+                link.rmdir()
+
     def test_absent_existing_and_stale_hash_conflicts_preserve_contents(self):
         self.create()
         self.workspace.write_package_file("Example", "Script/Example.as", "original")

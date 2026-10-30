@@ -58,7 +58,7 @@ class CompileProbeTests(unittest.TestCase):
         self.prepare()
         with self.assertRaises(probe.PackageError) as captured:
             self.prepare()
-        self.assertEqual(captured.exception.code, "already_exists")
+        self.assertIn(captured.exception.code, ("already_exists", "conflict"))
         for path in (self.repository / "mods", self.repository / "artifacts", self.repository / "artifacts" / ".." / "outside"):
             with self.subTest(path=path), self.assertRaises(probe.PackageError) as captured:
                 probe.prepare_probe(path, repository_root=self.repository)
@@ -118,17 +118,68 @@ class CompileProbeTests(unittest.TestCase):
         self.assertEqual(list(target.iterdir()), [])
 
     def test_failed_copy_leaves_no_partial_package_or_stage(self):
-        original = Path.write_bytes
+        original = probe.PackageWorkspace.write_package_file
 
-        def fail_script(path, data):
-            if path.name == "G1RMCPProbe.as" and ".g1r-mcp-probe-" in str(path):
+        def fail_script(writer, package, file_path, content, expected_sha256=None):
+            if file_path == probe.SCRIPT_RELATIVE:
                 raise OSError("Isolated write failure")
-            return original(path, data)
+            return original(writer, package, file_path, content, expected_sha256)
 
-        with patch.object(Path, "write_bytes", fail_script):
+        with patch.object(probe.PackageWorkspace, "write_package_file", fail_script):
             with self.assertRaises(OSError):
                 self.prepare()
         self.assertEqual(list(self.workspace.iterdir()), [])
+
+    def test_replaced_stage_script_link_preserves_external_file(self):
+        from g1r_mcp.workspace import WorkspaceError
+        import contextlib
+        external = self.repository / "external"
+        external.mkdir()
+        victim = external / "G1RMCPProbe.as"
+        victim.write_bytes(b"External user file")
+        original = probe._guard_directories
+        swapped = []
+
+        @contextlib.contextmanager
+        def replace_before_guard(path, boundary):
+            if path.name == "Script" and ".g1r-mcp-probe-" in str(path) and not swapped:
+                path.rmdir()
+                try:
+                    path.symlink_to(external, target_is_directory=True)
+                except OSError:
+                    self.skipTest("Система не разрешает isolated symlink")
+                swapped.append(path)
+            with original(path, boundary):
+                yield
+
+        try:
+            with patch.object(probe, "_guard_directories", replace_before_guard):
+                with self.assertRaises(WorkspaceError):
+                    self.prepare()
+            self.assertEqual(victim.read_bytes(), b"External user file")
+        finally:
+            for path in swapped:
+                path.unlink(missing_ok=True)
+                if path.parent.exists():
+                    path.parent.rmdir()
+
+    def test_foreign_exact_source_filename_is_not_overwritten_or_removed(self):
+        original = probe.PackageWorkspace.write_package_file
+        injected = []
+
+        def inject_source(writer, package, file_path, content, expected_sha256=None):
+            result = original(writer, package, file_path, content, expected_sha256)
+            if file_path == "GothicMod.json":
+                path = writer.root / package / probe.SCRIPT_RELATIVE
+                path.write_bytes(b"Foreign user source")
+                injected.append(path)
+            return result
+
+        with patch.object(probe.PackageWorkspace, "write_package_file", inject_source):
+            with self.assertRaises(probe.WorkspaceError) as captured:
+                self.prepare()
+        self.assertIn(captured.exception.code, ("already_exists", "conflict"))
+        self.assertEqual(injected[0].read_bytes(), b"Foreign user source")
 
     def test_live_probe_checks_signature_before_invocation(self):
         valid = {"name": "ReadProbeValue", "parameter_size": 4,

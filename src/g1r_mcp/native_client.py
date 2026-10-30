@@ -21,12 +21,13 @@ class NativeError(Exception):
     """Ошибка канала; потерянный ответ не подтверждает отсутствие эффекта."""
 
     def __init__(self, code: str, message: str, may_have_executed: bool = False,
-                 request_id: str | None = None):
+                 request_id: str | None = None, details: dict[str, Any] | None = None):
         super().__init__(message)
         self.code = code
         self.message = message
         self.may_have_executed = may_have_executed
         self.request_id = request_id
+        self.details = dict(details or {})
 
 
 def _timeout(value: float) -> float:
@@ -154,7 +155,17 @@ class NativeClient:
                     and 0 < len(error["code"]) <= 128 and isinstance(error.get("message"), str)
                     and len(error["message"]) <= 8192):
                 # Формат не обещает отсутствие эффектов при ошибке обработчика.
-                raise NativeError(error["code"], error["message"], True, request_id)
+                details = error.get("details")
+                if details is not None:
+                    if not isinstance(details, dict) or any(
+                        key in details and type(details[key]) is not bool
+                        for key in ("executed", "may_have_executed", "do_not_retry")
+                    ) or ("cause_code" in details and not isinstance(details["cause_code"], str)):
+                        raise NativeError("native_protocol_error", "Некорректные сведения об эффекте команды", True, request_id)
+                    may_have_executed = details.get("may_have_executed", False) or details.get("executed", False)
+                else:
+                    may_have_executed = True
+                raise NativeError(error["code"], error["message"], may_have_executed, request_id, details)
         raise NativeError("native_protocol_error", "Нативный ответ не содержит результата или корректной ошибки", True, request_id)
 
     def request(self, op: str, params: dict[str, Any] | None = None,

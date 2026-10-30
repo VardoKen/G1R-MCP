@@ -13,6 +13,7 @@ MAX_DIFF_BYTES = 1024 * 1024
 MAX_OBJECTS = 16
 MAX_PROPERTIES = 32
 MAX_ITEMS = 200
+MAX_OBJECT_INDEX = 4_000_000
 
 
 class SnapshotError(Exception):
@@ -45,6 +46,32 @@ def _error(value: Any) -> None:
     _text(value["code"], "Код ошибки")
     if not isinstance(value["message"], str) or len(value["message"]) > 8192:
         _invalid("Сообщение ошибки должно быть строкой до 8192 символов")
+
+
+def _object_value(value: Any, session_id: str) -> None:
+    """Проверить копию непрозрачной ссылки, не разрешая её в игровой среде."""
+    if value is None:
+        return
+    expected = {"handle", "index", "name", "path", "class", "session_id"}
+    if not isinstance(value, dict) or set(value) != expected:
+        _invalid("ObjectProperty должен содержать null или точный дескриптор объекта")
+    _text(value["handle"], "Ссылка значения ObjectProperty")
+    if len(value["handle"].encode("utf-8")) > 80:
+        _invalid("Ссылка значения ObjectProperty превышает предел 80 байт")
+    _integer(value["index"], "Индекс значения ObjectProperty")
+    if value["index"] >= MAX_OBJECT_INDEX:
+        _invalid("Индекс значения ObjectProperty превышает предел реестра")
+    for key, bound in (("name", 4096), ("class", 4096), ("path", 8192)):
+        _text(value[key], f"ObjectProperty.{key}")
+        if len(value[key].encode("utf-8")) > bound:
+            _invalid(f"ObjectProperty.{key}: строка превышает предел {bound} байт")
+    _text(value["session_id"], "Сессия значения ObjectProperty")
+    if value["session_id"] != session_id:
+        _invalid("Дескриптор ObjectProperty принадлежит другой сессии снимка")
+
+
+def _value_kind(prop: dict[str, Any]) -> str:
+    return "object_reference" if prop["type"] == "ObjectProperty" else type(prop["value"]).__name__
 
 
 def _encoded_size(value: Any) -> int:
@@ -126,7 +153,11 @@ def _snapshot(value: Any) -> dict[str, dict[str, Any]]:
             if prop["supported"]:
                 if "value" not in prop or "type" not in prop or "error" in prop:
                     _invalid("Поддержанное свойство должно иметь тип и значение без ошибки")
-                if type(prop["value"]) not in {bool, int, float, str}:
+                if prop["type"] == "ObjectProperty":
+                    _object_value(prop["value"], value["session_id"])
+                elif prop["type"] == "ClassProperty":
+                    _invalid("ClassProperty не поддержан контрактом копий снимков")
+                elif type(prop["value"]) not in {bool, int, float, str}:
                     _invalid("Поддержанное значение должно быть скаляром")
             elif "value" in prop and prop["value"] is not None:
                 _invalid("Неподдержанное свойство не должно выдавать значение за прочитанное")
@@ -210,10 +241,18 @@ def compare_snapshots(before: dict[str, Any], after: dict[str, Any], limit: int 
                      reason="source_not_claimed_live_native" if not source_known else "property_not_readable",
                      before_error=a.get("error"), after_error=b.get("error"))
                 continue
-            if a["type"] != b["type"] or type(a["value"]) is not type(b["value"]):
+            if a["type"] == b["type"] == "ObjectProperty":
+                av, bv = a["value"], b["value"]
+                if av is not None and bv is not None and av["handle"] == bv["handle"] and av != bv:
+                    emit("unknown", handle=handle, property=name, reason="object_reference_identity_mismatch")
+                    continue
+                if av != bv:
+                    emit("value_changed", handle=handle, property=name, before=av, after=bv)
+                continue
+            if a["type"] != b["type"] or _value_kind(a) != _value_kind(b):
                 emit("type_changed", handle=handle, property=name,
                      before_type=a["type"], after_type=b["type"],
-                     before_value_kind=type(a["value"]).__name__, after_value_kind=type(b["value"]).__name__)
+                     before_value_kind=_value_kind(a), after_value_kind=_value_kind(b))
             if type(a["value"]) is not type(b["value"]) or a["value"] != b["value"]:
                 emit("value_changed", handle=handle, property=name, before=a["value"], after=b["value"])
 

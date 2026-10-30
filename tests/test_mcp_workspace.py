@@ -129,6 +129,56 @@ class MCPWorkspaceTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse((modkit / "Script/New.as").exists())
             self.assertFalse((modkit / "Nested").exists())
 
+    async def test_script_patch_workspace_flow_reports_structural_validation_only(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            modkit = root / "Modkit"
+            source = modkit / "Script/Test.as"
+            source.parent.mkdir(parents=True)
+            source.write_text("old\n", encoding="utf-8")
+            original = source.read_bytes()
+            workspace = root / "workspace"
+            workspace.mkdir()
+            parameters = StdioServerParameters(command=sys.executable, args=[
+                "-B", "-m", "g1r_mcp.server", "--modkit-root", str(modkit), "--workspace-root", str(workspace),
+            ])
+            async with stdio_client(parameters) as (incoming, outgoing):
+                async with ClientSession(incoming, outgoing) as client:
+                    await client.initialize()
+                    metadata = {"name": "PatchExample", "title": "Пакет патча", "author": "Автор", "modVersion": "1.0.0"}
+                    created = await client.call_tool("g1r_create_package", {"relative_path": "PatchExample", "metadata": metadata})
+                    self.assertFalse(created.is_error)
+                    diff = "--- a/Script/Test.as\n+++ b/Script/Test.as\n@@ -1 +1 @@\n-old\n+new\n"
+                    written = await client.call_tool("g1r_write_package_file", {
+                        "relative_path": "PatchExample", "file_path": "ScriptPatches/Changes.patch", "content": diff,
+                    })
+                    self.assertFalse(written.is_error)
+                    read = await client.call_tool("g1r_read_package_file", {
+                        "relative_path": "PatchExample", "file_path": "ScriptPatches/Changes.patch",
+                    })
+                    self.assertEqual(read.structured_content["sha256"], written.structured_content["sha256"])
+                    self.assertEqual(read.structured_content["text"], diff.rstrip("\n"))
+                    self.assertFalse(read.structured_content["compiled"])
+                    validation = await client.call_tool("g1r_validate_package", {"relative_path": "PatchExample"})
+                    self.assertTrue(validation.structured_content["valid_structure"])
+                    self.assertEqual(validation.structured_content["patch_count"], 1)
+                    self.assertEqual(validation.structured_content["patch_validation"], "not_performed")
+                    listing = await client.call_tool("g1r_list_package_files", {"relative_path": "PatchExample"})
+                    self.assertEqual([item["path"] for item in listing.structured_content["items"]],
+                                     ["GothicMod.json", "ScriptPatches/Changes.patch"])
+                    for file_path in ("ScriptPatches/Nested.patch.json", "ScriptPatches/nested/Changes.patch"):
+                        denied = await client.call_tool("g1r_write_package_file", {
+                            "relative_path": "PatchExample", "file_path": file_path, "content": diff,
+                        })
+                        self.assertTrue(denied.is_error)
+                    stale = await client.call_tool("g1r_write_package_file", {
+                        "relative_path": "PatchExample", "file_path": "ScriptPatches/Changes.patch", "content": diff + "\n",
+                        "expected_sha256": "0" * 64,
+                    })
+                    self.assertTrue(stale.is_error)
+            self.assertEqual(source.read_bytes(), original)
+            self.assertFalse(any(path.name.startswith(".g1r-mcp-") for path in root.rglob("*")))
+
 
 if __name__ == "__main__":
     unittest.main()

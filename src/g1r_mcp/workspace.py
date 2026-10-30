@@ -1,7 +1,8 @@
 """Создание и редактирование официальных пакетов в выбранной рабочей базе.
 
 Игровые каталоги и официальный Modkit этим модулем не определяются. Доступ
-ограничен GothicMod.json и Script/**/*.as; компиляция и загрузка не выполняются.
+ограничен GothicMod.json, Script/**/*.as и ScriptPatches/*.patch;
+компиляция, применение патчей и загрузка не выполняются.
 """
 from __future__ import annotations
 
@@ -191,7 +192,34 @@ class PackageWorkspace:
             return parts
         if len(parts) >= 2 and parts[0] == "Script" and Path(parts[-1]).suffix.lower() == ".as":
             return parts
-        raise WorkspaceError("unsupported_file", "Разрешены GothicMod.json и Script/**/*.as")
+        if len(parts) == 2 and parts[0] == "ScriptPatches" and Path(parts[-1]).suffix.lower() == ".patch":
+            return parts
+        raise WorkspaceError("unsupported_file", "Разрешены GothicMod.json, Script/**/*.as и ScriptPatches/*.patch")
+
+    @contextmanager
+    def _write_parent(self, package: Path, parts: tuple[str, ...]) -> Iterator[Path]:
+        parent = package.joinpath(*parts[:-1])
+        self._unprotected(parent)
+        if parts[0] != "ScriptPatches" or os.path.lexists(parent):
+            yield _checked(parent, package, directory=True)
+            return
+        # Создание единственного документированного каталога сериализовано отдельно.
+        with _destination_lock(parent), _guard_directories(package, self.root):
+            created = False
+            try:
+                if not os.path.lexists(parent):
+                    parent.mkdir()
+                    created = True
+                yield self._unprotected(_checked(parent, package, directory=True))
+            except BaseException as error:
+                if created:
+                    # Удаляется лишь наша пустая папка; чужие появившиеся файлы сохраняются.
+                    checked = _checked(parent, package, directory=True)
+                    if not any(checked.iterdir()):
+                        checked.rmdir()
+                if isinstance(error, OSError):
+                    raise WorkspaceError("access_error", "Не удалось подготовить каталог патчей") from None
+                raise
 
     def create_package(self, relative_path: str, metadata: dict) -> dict:
         parts = _parts(relative_path)
@@ -269,6 +297,21 @@ class PackageWorkspace:
                         files.append({"path": file.relative_to(package).as_posix(), "bytes": file.stat().st_size})
                         if len(files) > MAX_FILES:
                             raise WorkspaceError("limit_exceeded", "Превышен предел количества файлов")
+            patches = package / "ScriptPatches"
+            if os.path.lexists(patches):
+                checked = self._unprotected(_checked(patches, package, directory=True))
+                try:
+                    for child in checked.iterdir():
+                        self._unprotected(_checked(child, package))
+                        if child.suffix.lower() != ".patch":
+                            continue
+                        if not child.is_file():
+                            raise WorkspaceError("invalid_path", "Патч должен быть обычным файлом")
+                        files.append({"path": child.relative_to(package).as_posix(), "bytes": child.stat().st_size})
+                        if len(files) > MAX_FILES:
+                            raise WorkspaceError("limit_exceeded", "Превышен предел количества файлов")
+                except OSError:
+                    raise WorkspaceError("access_error", "Не удалось прочитать каталог патчей") from None
             files.sort(key=lambda item: item["path"])
             return _result(package_path=name, items=files[:limit], total=len(files),
                            truncated=len(files) > limit, snapshot_atomic=False)
@@ -315,10 +358,10 @@ class PackageWorkspace:
         with self._lock:
             package, name = self._package(relative_path)
             parent = package.joinpath(*parts[:-1])
-            # Создаём только файлы в уже существующих каталогах: отказ не оставляет папок.
-            _checked(parent, package, directory=True)
             target = self._unprotected(parent / parts[-1])
-            with _destination_lock(target), _guard_directories(parent, self.root):
+            if parts[0] == "ScriptPatches" and not os.path.lexists(parent) and expected_sha256 is not None:
+                raise WorkspaceError("conflict", "Файл для замены отсутствует")
+            with self._write_parent(package, parts), _destination_lock(target), _guard_directories(parent, self.root):
                 def verify_destination() -> None:
                     exists = os.path.lexists(target)
                     if expected_sha256 is None:

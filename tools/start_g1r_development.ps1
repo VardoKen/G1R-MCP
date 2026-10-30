@@ -9,7 +9,9 @@
 
 Без -Restart работающая игра вызывает отказ. -Restart штатно закрывает
 только проверенный игровой процесс и ожидает завершения загрузчика;
-принудительное завершение не используется. -WhatIf не закрывает игру
+без ExpectedPid и ExpectedCreationTime принудительное завершение не используется.
+С точной идентичностью контролируемый restart использует удерживаемый HANDLE
+и может завершить исходную сессию после ограниченного ожидания. -WhatIf не закрывает игру
 и не отправляет запрос запуска в Steam.
 
 .EXAMPLE
@@ -25,11 +27,16 @@ param(
     [string]$AppId = '1297900',
     [string]$ModsDirectory,
     [string[]]$Mods,
+    [uint32]$ExpectedPid,
+    [string]$ExpectedCreationTime,
+    [switch]$Json,
     [switch]$Restart
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+. (Join-Path $PSScriptRoot 'game_process_common.ps1')
 
 function Get-RequiredPath {
     param([string]$Path, [string]$Label, [switch]$Directory)
@@ -160,13 +167,14 @@ else {
 }
 
 if (-not $PSCmdlet.ShouldProcess($resolvedGameRoot, $operation)) {
-    [pscustomobject]@{
+    $result = [pscustomobject]@{
         State = 'Без изменения состояния'
         SteamExe = $resolvedSteamExe
         AppId = $AppId
         Arguments = $steamArguments
         RestartRequested = [bool]$Restart
     }
+    if ($Json) { $result | ConvertTo-Json -Depth 5 -Compress } else { $result }
     return
 }
 
@@ -176,6 +184,17 @@ if ($runningProcesses.Count -gt 0 -and -not $Restart) {
     throw 'Игра запущена после начальной проверки; повторный запуск отменён.'
 }
 
+if ($runningProcesses.Count -gt 0 -and ($ExpectedPid -ne 0 -or -not [string]::IsNullOrWhiteSpace($ExpectedCreationTime))) {
+    if (-not $Restart -or $ExpectedPid -eq 0 -or [string]::IsNullOrWhiteSpace($ExpectedCreationTime)) {
+        throw 'Контролируемый restart требует Restart, ExpectedPid и ExpectedCreationTime вместе.'
+    }
+    $stoppedJson = & (Join-Path $PSScriptRoot 'stop_g1r_development.ps1') -GameRoot $resolvedGameRoot -ExpectedPid $ExpectedPid -ExpectedCreationTime $ExpectedCreationTime -Json -Confirm:$false
+    $stopped = $stoppedJson | ConvertFrom-Json -ErrorAction Stop
+    if ($stopped.state -ne 'stopped') { throw 'Завершение исходной сессии перед запуском не подтверждено.' }
+    $runningProcesses = @(Get-CheckedGameProcesses -BootstrapPath $bootstrapPath -InnerPath $innerPath)
+} elseif ($runningProcesses.Count -eq 0 -and ($ExpectedPid -ne 0 -or -not [string]::IsNullOrWhiteSpace($ExpectedCreationTime))) {
+    throw 'Ожидаемая игровая сессия уже завершилась; новый запуск отменён.'
+}
 if ($runningProcesses.Count -gt 0) {
     $deadline = [DateTime]::UtcNow.AddSeconds(20)
     $originalProcessIds = @($runningProcesses | ForEach-Object { $_.ProcessId })
@@ -238,11 +257,14 @@ if (@(Get-CheckedGameProcesses -BootstrapPath $bootstrapPath -InnerPath $innerPa
     throw 'Игра появилась перед запуском Steam; повторный запуск отменён.'
 }
 $request = Start-Process -FilePath $resolvedSteamExe -ArgumentList $steamArguments -WindowStyle Hidden -PassThru
-[pscustomobject]@{
-    State = 'Запрос запуска отправлен в Steam'
+$result = [pscustomobject]@{
+    state = 'launch_requested'
+    package_name = $(if ($selectedMods.Count -eq 1) { $selectedMods[0] } else { $null })
+    description = 'Запрос запуска отправлен в Steam'
     SteamExe = $resolvedSteamExe
     AppId = $AppId
     Arguments = $steamArguments
     SteamRequestPid = $request.Id
     Note = 'PID относится к запросу Steam; загрузка игры и активация модов ещё требуют проверки.'
 }
+if ($Json) { $result | ConvertTo-Json -Depth 5 -Compress } else { $result }

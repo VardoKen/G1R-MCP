@@ -17,6 +17,7 @@ from .sources import SourceCatalog, SourceError
 from .native_client import NativeClient, NativeError
 from .workspace import PackageWorkspace, WorkspaceError
 from .snapshots import SnapshotError, compare_snapshots
+from .development import DevelopmentError, DevelopmentService
 
 
 LOCAL_TOOLS = (
@@ -53,7 +54,8 @@ def _tool_failure(error: SourceError | PackageError | WorkspaceError | SnapshotE
     return ToolError(json.dumps({"code": error.code, "message": str(error)}, ensure_ascii=False))
 
 
-def create_server(modkit_root: Path, workspace_root: Path, source_revision: str | None = None, native_port: int = 27123) -> MCPServer:
+def create_server(modkit_root: Path, workspace_root: Path, source_revision: str | None = None,
+                  native_port: int = 27123, game_root: Path | None = None) -> MCPServer:
     """Создать сервер с каталогом Modkit и отдельной рабочей базой пакетов."""
     if source_revision is not None and not re.fullmatch(r"[0-9a-fA-F]{40}", source_revision):
         raise ValueError("Ревизия источников должна быть полным Git SHA либо отсутствовать")
@@ -67,6 +69,14 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     sources = SourceCatalog(modkit_root, revision=source_revision)
     workspace = PackageWorkspace(workspace_root, protected_roots=[modkit_root])
     native = NativeClient(port=native_port)
+    development = None
+    def development_service() -> DevelopmentService:
+        nonlocal development
+        if development is None:
+            development = DevelopmentService(repository_root=Path(__file__).resolve().parents[2],
+                                             workspace_root=workspace_root, modkit_root=modkit_root,
+                                             game_root=game_root or Path(r"E:\SteamLibrary\steamapps\common\Gothic 1 Remake"))
+        return development
     server = MCPServer(
         "G1R MCP", version=__version__, log_level="WARNING",
         instructions=(
@@ -118,8 +128,13 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             "game_groups": [
                 {"name": group, "implemented": False, "available": False,
                  "reason_code": "confirmed_operation_unavailable"}
-                for group in ("compile_diagnostics", "hot_reload", "arbitrary_angelscript")
+                for group in ("compile_diagnostics", "arbitrary_angelscript")
             ],
+            "development_tools": {"implemented": True, "availability": "requires_windows_and_configured_game",
+                                  "operations": ["recipe", "processes", "start", "stop", "native_load"],
+                                  "launch_result": "launch_requested", "compiler_result": "requires_runtime_probe"},
+            "hot_reload": {"mechanism_confirmed": True, "method": "file_watch_development_mode",
+                           "scope": "function_bodies", "runtime_result_requires_verification": True},
             "observations": {"implemented": True, "availability": "requires_live_native_status",
                              "source": "selected_reflected_properties_on_existing_tick",
                              "ownership": "native_tcp_session", "world_generation_confirmed": False},
@@ -183,7 +198,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_list_package_files(relative_path: str, limit: int = 100) -> dict[str, Any]:
-        """Получить ограниченный список дескриптора и .as исходников рабочего пакета."""
+        """Получить ограниченный список дескриптора, .as исходников и ScriptPatches/*.patch."""
         try:
             return workspace.list_package_files(relative_path, limit)
         except WorkspaceError as error:
@@ -213,7 +228,49 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             return native.request(operation, params)
         except NativeError as error:
             raise ToolError(json.dumps({"code": error.code, "message": str(error),
-                "may_have_executed": error.may_have_executed, "request_id": error.request_id}, ensure_ascii=False)) from None
+                                       "may_have_executed": error.may_have_executed,
+                                       "request_id": error.request_id, "effect": error.details}, ensure_ascii=False)) from None
+
+    def development_request(operation: str, **params: Any) -> dict[str, Any]:
+        try:
+            return getattr(development_service(), operation)(**params)
+        except DevelopmentError as error:
+            raise ToolError(json.dumps({"code": error.code, "message": str(error),
+                                       "outcome_unknown": error.outcome_unknown,
+                                       "retry": "only_explicit_new_request"}, ensure_ascii=False)) from None
+
+    @server.tool(annotations=read_only)
+    def g1r_development_recipe(relative_package: str) -> dict[str, Any]:
+        """Проверить полный манифест рабочего пакета, процессы и SHA-256 DLL без запуска игры."""
+        return development_request("recipe", relative_package=relative_package)
+
+    @server.tool(annotations=read_only)
+    def g1r_development_processes() -> dict[str, Any]:
+        """Прочитать точные PID, времена создания и пути процессов выбранной игры."""
+        return development_request("process_state")
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True,
+                                            idempotentHint=False, openWorldHint=True))
+    def g1r_development_start(relative_package: str, expected_manifest_sha256: str,
+                               restart: bool = False,
+                               expected_process: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Запросить development-запуск проверенного пакета; restart требует точную идентичность процесса."""
+        return development_request("start", relative_package=relative_package,
+                                   expected_manifest_sha256=expected_manifest_sha256,
+                                   restart=restart, expected_process=expected_process)
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True,
+                                            idempotentHint=False, openWorldHint=True))
+    def g1r_development_stop(expected_process: dict[str, Any]) -> dict[str, Any]:
+        """Закрыть только подтверждённый экземпляр игры через удерживаемые HANDLE."""
+        return development_request("stop", expected_process=expected_process)
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                                            idempotentHint=False, openWorldHint=True))
+    def g1r_native_load(expected_process: dict[str, Any], expected_dll_sha256: str) -> dict[str, Any]:
+        """Загрузить DLL в проверенный процесс с проверкой хеша; неопределённый результат не повторяется."""
+        return development_request("load_native", expected_process=expected_process,
+                                   expected_dll_sha256=expected_dll_sha256)
 
     @server.tool(annotations=read_only)
     def g1r_native_status() -> dict[str, Any]:
@@ -226,9 +283,13 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
         return native_request("enable_game", {})
 
     @server.tool(annotations=read_only)
-    def g1r_find_objects(query: str = "", class_query: str = "", limit: int = 50) -> dict[str, Any]:
+    def g1r_find_objects(query: str = "", class_query: str = "", limit: int = 50,
+                         exact_path: str = "") -> dict[str, Any]:
         """Найти UObject по части имени/класса на игровом Tick; вернуть непрозрачные ссылки."""
-        return native_request("objects", {"query": query, "class_query": class_query, "limit": limit})
+        params = {"query": query, "class_query": class_query, "limit": limit}
+        if exact_path:
+            params["exact_path"] = exact_path
+        return native_request("objects", params)
 
     @server.tool(annotations=read_only)
     def g1r_object_properties(handle: str, limit: int = 50) -> dict[str, Any]:
@@ -302,9 +363,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workspace-root", type=Path, required=True, help="Корень разрабатываемых пакетов")
     parser.add_argument("--source-revision", help="Полный Git SHA Modkit; при отсутствии ревизия неизвестна")
     parser.add_argument("--native-port", type=int, default=27123, help="Порт localhost экспериментальной DLL")
+    parser.add_argument("--game-root", type=Path, help="Корень выбранной игры для команд development-запуска")
     args = parser.parse_args(argv)
     try:
-        server = create_server(args.modkit_root, args.workspace_root, args.source_revision, args.native_port)
+        server = create_server(args.modkit_root, args.workspace_root, args.source_revision, args.native_port, args.game_root)
     except (ValueError, OSError, SourceError, NativeError) as error:
         print(f"Не удалось создать G1R MCP: {error}", file=sys.stderr)
         return 2

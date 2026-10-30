@@ -163,6 +163,27 @@ void request_errors_and_handler_errors() {
     transport.stop();
 }
 
+void execution_error_metadata() {
+    Transport transport([](const json& envelope)->json {
+        if(envelope.at("op")=="pre_event")
+            throw g1r_mcp::HandlerError("invalid_object_argument","До вызова");
+        throw g1r_mcp::HandlerError("game_result_error","После вызова",
+            {{"executed",true},{"may_have_executed",true},{"do_not_retry",true},{"cause_code","stale_handle"}});
+    },0);
+    require(transport.start(),"Транспорт метаданных эффекта не запущен");
+    {
+        Client client(port(transport));
+        client.send_json(request("before","pre_event"));
+        const auto before=client.read_json().at("error").at("details");
+        require(before.at("executed")==false && before.at("may_have_executed")==false,
+                "До-вызовный отказ получил возможный эффект");
+        client.send_json(request("after","post_event"));
+        const auto after=client.read_json().at("error").at("details");
+        require(after.at("executed")==true && after.at("do_not_retry")==true
+                && after.at("cause_code")=="stale_handle","Потеря результата скрыла исполнение");
+    }
+    transport.stop();
+}
 void bounded_timeout_and_stop() {
     Transport transport([](const json&) { return json{{"ok", true}}; }, 0, 150ms);
     require(transport.start(), "Транспорт таймаута не запущен");
@@ -213,6 +234,7 @@ void bounded_session_and_busy_port() {
 int main() {
     try {
         exchange_duplicate_and_reconnect();
+        execution_error_metadata();
         request_errors_and_handler_errors();
         bounded_timeout_and_stop();
         bounded_session_and_busy_port();

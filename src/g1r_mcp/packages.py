@@ -1,15 +1,16 @@
 """Локальная проверка официального пакета Gothic без компиляции и загрузки.
 
 Формат сверён с G1R-Modkit/Documentation/getting-started/mod-package.md.
-Валидатор читает GothicMod.json и считает .as внутри Script/; содержимое
-Config, Content, Story и ScriptPatches не читается. Работа с загрузчиком,
-совместимость версий и корректность AngelScript этим не подтверждаются.
+Валидатор читает GothicMod.json, считает .as внутри Script/ и .patch непосредственно
+в ScriptPatches/. Содержимое патчей, Config, Content и Story не читается. Работа
+с загрузчиком, применение патчей, совместимость версий и AngelScript не подтверждаются.
 """
 
 import json
 import os
 from pathlib import Path, PureWindowsPath
 import re
+import stat
 
 
 MAX_DESCRIPTOR_BYTES = 256 * 1024
@@ -36,7 +37,8 @@ def _checked_path(path: Path, boundary: Path | None = None) -> Path:
     try:
         absolute = Path(os.path.abspath(path))
         for part in (absolute, *absolute.parents):
-            if part.is_symlink() or (hasattr(part, "is_junction") and part.is_junction()):
+            info = part.lstat()
+            if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
                 raise PackageError("unsafe_path", "Путь содержит символическую ссылку или junction")
         resolved = absolute.resolve(strict=True)
         if boundary is not None and not resolved.is_relative_to(boundary):
@@ -124,6 +126,26 @@ def _script_count(script_root: Path, boundary: Path) -> int:
     return total
 
 
+def _patch_count(patch_root: Path, boundary: Path) -> int:
+    """Считать документированные top-level .patch без анализа diff или UTF-8."""
+    total = 0
+    try:
+        for candidate in patch_root.iterdir():
+            file = _checked_path(candidate, boundary)
+            if candidate.suffix.casefold() != ".patch":
+                continue
+            if not file.is_file():
+                raise PackageError("invalid_path", "Патч должен быть обычным файлом")
+            total += 1
+            if total > MAX_SCRIPT_FILES:
+                raise PackageError("limit_exceeded", "Превышен диагностический предел количества патчей")
+    except PackageError:
+        raise
+    except OSError:
+        raise PackageError("access_error", "Не удалось прочитать каталог патчей") from None
+    return total
+
+
 def validate_package(workspace_root: Path, relative_path: str) -> dict:
     """Проверить пакет только внутри выбранной рабочей базы без изменений."""
     package, normalized = _relative_package(workspace_root, relative_path)
@@ -136,6 +158,8 @@ def validate_package(workspace_root: Path, relative_path: str) -> dict:
         "metadata": {},
         "components": {},
         "script_count": 0,
+        "patch_count": 0,
+        "patch_validation": "not_performed",
         "errors": [],
         "warnings": [],
         "issues_truncated": False,
@@ -169,9 +193,11 @@ def validate_package(workspace_root: Path, relative_path: str) -> dict:
                 issue("errors", "component_not_directory", "Компонент пакета должен быть каталогом", component)
             elif component == "Script":
                 result["script_count"] = _script_count(checked, package)
+            elif component == "ScriptPatches":
+                result["patch_count"] = _patch_count(checked, package)
         result["components"][component] = {"present": present, "is_directory": is_directory}
-    if result["script_count"] == 0:
-        issue("warnings", "no_scripts", "В Script/ нет файлов AngelScript; пакет может содержать только контент")
+    if result["script_count"] == 0 and result["patch_count"] == 0:
+        issue("warnings", "no_scripts", "В пакете нет новых AngelScript-файлов или документированных патчей; возможен пакет контента")
 
     descriptor_path = package / "GothicMod.json"
     if descriptor_path.is_symlink() or (hasattr(descriptor_path, "is_junction") and descriptor_path.is_junction()):

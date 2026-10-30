@@ -49,6 +49,43 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(result["script_count"], 0)
         self.assertIn("no_scripts", {item["code"] for item in result["warnings"]})
 
+    def test_patch_only_package_is_structural_without_claiming_patch_application(self):
+        self.write_descriptor()
+        directory = self.package / "ScriptPatches"
+        directory.mkdir()
+        # Локальные fixtures не устанавливают грамматику игрового patch parser.
+        (directory / "Changes.patch").write_text("--- a/Script/Test.as\n+++ b/Script/Test.as\n@@ -1 +1 @@\n-old\n+new\n", encoding="utf-8")
+        (directory / "Opaque.patch").write_bytes(b"\xff invalid diff bytes are not parsed")
+        (directory / "Ignored.json").write_text("{}", encoding="utf-8")
+        nested = directory / "nested"
+        nested.mkdir()
+        (nested / "Nested.patch").write_text("not a verified patch", encoding="utf-8")
+        before = {path: path.read_bytes() for path in directory.rglob("*") if path.is_file()}
+        result = self.validate()
+        self.assertTrue(result["valid_structure"])
+        self.assertEqual(result["script_count"], 0)
+        self.assertEqual(result["patch_count"], 2)
+        self.assertEqual(result["patch_validation"], "not_performed")
+        self.assertEqual(result["runtime_validation"], "not_performed")
+        self.assertNotIn("no_scripts", {item["code"] for item in result["warnings"]})
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        self.assertNotIn("invalid diff bytes", repr(result))
+
+    def test_patch_file_symlink_is_rejected(self):
+        self.write_descriptor()
+        directory = self.package / "ScriptPatches"
+        directory.mkdir()
+        external = self.workspace / "Outside.patch"
+        external.write_text("private", encoding="utf-8")
+        link = directory / "Linked.patch"
+        try:
+            link.symlink_to(external)
+        except OSError:
+            self.skipTest("Система не разрешает изолированный symlink")
+        with self.assertRaises(PackageError) as captured:
+            self.validate()
+        self.assertEqual(captured.exception.code, "unsafe_path")
+
     def test_development_version_is_string_but_loader_is_unverified(self):
         self.write_descriptor(modVersion="1.0.0-dev.1")
         result = self.validate()
