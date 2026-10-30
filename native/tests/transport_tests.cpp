@@ -184,6 +184,35 @@ void execution_error_metadata() {
     }
     transport.stop();
 }
+
+void executed_result_exceeding_frame_preserves_effect_and_session() {
+    std::atomic_int action_calls{0};
+    Transport transport([&](const json& envelope)->json {
+        if(envelope.at("op")=="large_action") {
+            ++action_calls;
+            return {{"executed",true},{"result",std::string(g1r_mcp::MaxFrameBytes,'x')}};
+        }
+        return {{"ready",true}};
+    },0);
+    require(transport.start(),"Транспорт большого результата не запущен");
+    {
+        Client client(port(transport));
+        client.send_json(request("large","large_action"));
+        const auto failed=client.read_json();
+        require(failed.at("type")=="error" && failed.at("error").at("code")=="response_too_large",
+                "Переполнение результата не вернуло структурированный отказ");
+        const auto& details=failed.at("error").at("details");
+        require(details.at("executed")==true && details.at("may_have_executed")==true
+                && details.at("do_not_retry")==true,"Большой ответ скрыл выполненное действие");
+        require(action_calls==1,"Большое действие было повторено");
+        client.send_json(request("status","status"));
+        const auto status=client.read_json();
+        require(status.at("result").at("ready")==true && status.at("session_id")==failed.at("session_id"),
+                "Отказ большого результата изменил сессию или сломал следующее чтение");
+        require(action_calls==1,"Следующее чтение повторило действие");
+    }
+    transport.stop();
+}
 void bounded_timeout_and_stop() {
     Transport transport([](const json&) { return json{{"ok", true}}; }, 0, 150ms);
     require(transport.start(), "Транспорт таймаута не запущен");
@@ -235,6 +264,7 @@ int main() {
     try {
         exchange_duplicate_and_reconnect();
         execution_error_metadata();
+        executed_result_exceeding_frame_preserves_effect_and_session();
         request_errors_and_handler_errors();
         bounded_timeout_and_stop();
         bounded_session_and_busy_port();

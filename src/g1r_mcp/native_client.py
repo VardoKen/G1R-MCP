@@ -162,7 +162,10 @@ class NativeClient:
                         for key in ("executed", "may_have_executed", "do_not_retry")
                     ) or ("cause_code" in details and not isinstance(details["cause_code"], str)):
                         raise NativeError("native_protocol_error", "Некорректные сведения об эффекте команды", True, request_id)
-                    may_have_executed = details.get("may_have_executed", False) or details.get("executed", False)
+                    # Отсутствующее поле не подтверждает отсутствие эффекта.
+                    # Только два явных false допускают определённый отказ до исполнения.
+                    may_have_executed = not (details.get("executed") is False
+                                             and details.get("may_have_executed") is False)
                 else:
                     may_have_executed = True
                 raise NativeError(error["code"], error["message"], may_have_executed, request_id, details)

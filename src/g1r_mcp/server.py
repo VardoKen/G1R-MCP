@@ -31,6 +31,7 @@ LOCAL_TOOLS = (
     ("g1r_list_source_types", "Лексический поиск объявлений типов"),
     ("g1r_validate_package", "Структурная проверка официального пакета"),
     ("g1r_build_script_patch", "Unified diff из проверенных байтов Modkit без изменения файлов"),
+    ("g1r_compare_snapshots", "Сравнить копии снимков без игровых вызовов"),
 )
 WORKSPACE_TOOLS = (
     ("g1r_create_package", "Создать официальный пакет в выбранной рабочей базе", "local_write"),
@@ -52,6 +53,10 @@ NATIVE_TOOLS = (
     ("g1r_watch_read", "Прочитать события наблюдения и сведения о потерях"),
     ("g1r_watch_stop", "Остановить наблюдение и подтвердить прекращение чтений"),
     ("g1r_watch_forget", "Освободить завершённое наблюдение"),
+)
+DEVELOPMENT_TOOLS = (
+    "g1r_development_recipe", "g1r_development_processes", "g1r_development_start",
+    "g1r_development_stop", "g1r_native_load",
 )
 
 
@@ -75,22 +80,34 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     patch_builder = ScriptPatchBuilder(modkit_root, revision=source_revision)
     workspace = PackageWorkspace(workspace_root, protected_roots=[modkit_root])
     native = NativeClient(port=native_port)
+    configured_game_root = game_root or Path(r"E:\SteamLibrary\steamapps\common\Gothic 1 Remake")
     development = None
     def development_service() -> DevelopmentService:
         nonlocal development
         if development is None:
             development = DevelopmentService(repository_root=Path(__file__).resolve().parents[2],
                                              workspace_root=workspace_root, modkit_root=modkit_root,
-                                             game_root=game_root or Path(r"E:\SteamLibrary\steamapps\common\Gothic 1 Remake"))
+                                             game_root=configured_game_root)
         return development
     server = MCPServer(
         "G1R MCP", version=__version__, log_level="WARNING",
         instructions=(
-            "Локальные инструменты разработки официальных AngelScript-модов. "
-            "Поиск и проверка пакета не являются компиляцией или игровым вызовом. "
-            "Игровые операции используют экспериментальную DLL только при подключении. "
-            "Вызовы g1r_invoke могут менять игру; не повторяйте их после таймаута. "
-            "Не выводите работоспособность API из наличия исходника."
+            "Мост разработки официальных AngelScript-пакетов GothicMod.json; это не UE4SS/Lua. "
+            "Начните с g1r_status и g1r_capabilities: они не проверяют живую игру. "
+            "Для нового development-сеанса: g1r_development_recipe → g1r_development_processes → "
+            "явно разрешённый g1r_development_start с manifest SHA-256 → g1r_development_processes → "
+            "g1r_native_load с точными PID/creation_time/executable и SHA-256 DLL → g1r_native_status. "
+            "Если Tick не установлен, явно вызовите g1r_native_enable и проверьте ready через g1r_native_status; "
+            "запрос Steam и загрузка DLL сами по себе не подтверждают компиляцию или готовность Tick. "
+            "В уже работающем мосте начинайте с native_status, затем g1r_find_objects и "
+            "g1r_object_functions перед явным g1r_invoke; завершайте свой сеанс g1r_development_stop. "
+            "Один TCP-клиент владеет ссылками и наблюдениями; после reconnect найдите объекты заново. "
+            "Редактируйте полные байты через g1r_read_source_exact/g1r_read_package_file_exact и SHA-256; "
+            "построчные чтения нормализуют текст. Поиск и valid_structure не являются компиляцией. "
+            "ScriptPatches создаются как diff, но их применение в игре не подтверждено. "
+            "Старт, остановка, загрузка DLL и invoke меняют внешнее состояние: не повторяйте операцию "
+            "автоматически после outcome_unknown, may_have_executed или do_not_retry. "
+            "Не выводите работоспособность игрового API из наличия исходника."
         ),
     )
     read_only = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
@@ -100,10 +117,13 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
         """Узнать версию сервера и какие результаты не подтверждены в игре."""
         return {
             "server": {"name": "G1R MCP", "version": __version__, "transport": "stdio", "ready": True},
-            "sources": {"kind": "official_modkit_static", "revision": source_revision,
+            "sources": {"kind": "official_modkit_static", "root": str(sources.root), "revision": source_revision,
                         "revision_source": "caller_label", "validation": "source_only"},
+            "workspace": {"root": str(workspace.root), "format": "GothicMod.json/Script/ScriptPatches",
+                          "installed_game_deployment": False},
             "game": {
-                "backend_implemented": True, "connection_checked": False, "ready": False,
+                "backend_implemented": True, "connection_checked": False, "ready": False, "ready_known": False,
+                "configured_root": str(configured_game_root.absolute()),
                 "reason_code": "use_native_status_for_live_state",
                 "reason": "Для текущего состояния DLL вызовите g1r_native_status; локальные инструменты независимы",
                 "last_research": {
@@ -138,15 +158,47 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                 for group in ("compile_diagnostics", "arbitrary_angelscript")
             ],
             "development_tools": {"implemented": True, "availability": "requires_windows_and_configured_game",
-                                  "operations": ["recipe", "processes", "start", "stop", "native_load"],
+                                  "operations": list(DEVELOPMENT_TOOLS),
                                   "launch_result": "launch_requested", "compiler_result": "requires_runtime_probe"},
+            "bootstrap": {
+                "game_sequence": [
+                    {"tool": "g1r_development_recipe", "condition": "Проверить выбранный рабочий пакет и получить manifest/DLL SHA-256"},
+                    {"tool": "g1r_development_processes", "condition": "Определить исходные PID/creation_time/executable"},
+                    {"tool": "g1r_development_start", "condition": "Только явно выбранный запуск; restart требует исходную идентичность"},
+                    {"tool": "g1r_development_processes", "condition": "Получить идентичность запущенного внутреннего игрового EXE"},
+                    {"tool": "g1r_native_load", "condition": "Одна загрузка с ожидаемыми процессом и SHA-256 DLL"},
+                    {"tool": "g1r_native_status", "condition": "Проверить установленный Tick и ready"},
+                    {"tool": "g1r_native_enable", "condition": "Только если hook_installed=false и включение явно разрешено"},
+                    {"tool": "g1r_native_status", "condition": "Дождаться ready=true; неизвестный результат не является отказом компиляции"},
+                    {"tool": "g1r_find_objects", "condition": "Найти актуальную сессионную ссылку и проверить точный объект"},
+                    {"tool": "g1r_object_functions", "condition": "Прочитать отражённую сигнатуру, при необходимости function_query"},
+                    {"tool": "g1r_invoke", "condition": "Один явно выбранный вызов подтверждённой сигнатуры"},
+                    {"tool": "g1r_development_stop", "condition": "При явном завершении своей development-сессии с ожидаемой идентичностью"},
+                ],
+                "existing_session_sequence": ["g1r_native_status", "g1r_find_objects", "g1r_object_functions"],
+                "edit_tools": ["g1r_read_source_exact", "g1r_read_package_file_exact", "g1r_write_package_file"],
+                "argument_examples": {
+                    "g1r_create_package": {"relative_path": "Example",
+                                           "metadata": {"name": "Example", "title": "Example", "author": "Author", "modVersion": "1.0.0"}},
+                    "g1r_create_package_directory": {"relative_path": "Example", "directory_path": "Script/Components"},
+                    "g1r_snapshot": {"targets": [{"handle": "use_handle_from_find_objects", "properties": ["UseNameFromObjectProperties"]}]},
+                    "g1r_invoke": {"handle": "use_handle_from_find_objects", "function": "use_name_from_object_functions",
+                                   "arguments": {"use_reflected_parameter_name": None}},
+                    "g1r_list_package_files": {"relative_path": "Example", "limit": 100, "offset": 0},
+                },
+                "ownership": "one_native_tcp_client_session",
+                "reconnect": "discard_old_handles_and_watches_then_find_objects_again",
+                "uncertain_effect": "never_automatically_retry_outcome_unknown_may_have_executed_do_not_retry",
+                "package_format": "GothicMod.json/Script/ScriptPatches",
+                "script_patch_engine_apply_confirmed": False,
+            },
             "hot_reload": {"mechanism_confirmed": True, "method": "file_watch_development_mode",
                            "scope": "function_bodies", "runtime_result_requires_verification": True},
             "observations": {"implemented": True, "availability": "requires_live_native_status",
                              "source": "selected_reflected_properties_on_existing_tick",
                              "ownership": "native_tcp_session", "world_generation_confirmed": False},
             "snapshot_comparison": {"implemented": True, "effects": "read_only",
-                                    "validation": "client_supplied_copies"},
+                                    "tool": "g1r_compare_snapshots", "validation": "client_supplied_copies"},
             "limitations": [
                 "Исходники не покрывают все нативные bindings и не подтверждают вызовы в текущей игре",
                 "Объявления типов найдены лексически; это не AST компилятора и не runtime-рефлексия",
@@ -197,7 +249,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=False))
     def g1r_create_package(relative_path: str, metadata: dict[str, Any]) -> dict[str, Any]:
-        """Создать новый GothicMod.json и пустой Script в рабочей базе; не загружает мод."""
+        """Создать GothicMod.json/Script: metadata требует name, title, author, modVersion; не загружает мод."""
         try:
             return workspace.create_package(relative_path, metadata)
         except WorkspaceError as error:
@@ -213,10 +265,10 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             raise _tool_failure(error) from None
 
     @server.tool(annotations=read_only)
-    def g1r_list_package_files(relative_path: str, limit: int = 100) -> dict[str, Any]:
-        """Получить ограниченный список дескриптора, .as исходников и ScriptPatches/*.patch."""
+    def g1r_list_package_files(relative_path: str, limit: int = 100, offset: int = 0) -> dict[str, Any]:
+        """Получить страницу дескриптора, .as и ScriptPatches/*.patch; продолжение через next_offset."""
         try:
-            return workspace.list_package_files(relative_path, limit)
+            return workspace.list_package_files(relative_path, limit, offset)
         except WorkspaceError as error:
             raise _tool_failure(error) from None
 
@@ -335,7 +387,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_object_properties(handle: str, limit: int = 50) -> dict[str, Any]:
-        """Читать поддержанные скалярные свойства проверенной ссылки объекта."""
+        """Читать поддержанные свойства проверенной ссылки: скаляры, FName/enum и Object/Class-ссылки."""
         return native_request("properties", {"handle": handle, "limit": limit})
 
     @server.tool(annotations=read_only)
@@ -348,7 +400,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_snapshot(targets: list[dict[str, Any]]) -> dict[str, Any]:
-        """Скопировать свойства до 16 объектов на одном Tick; это последовательные чтения."""
+        """Скопировать до 16 targets={handle, properties:[имена]} на одном Tick; это последовательные чтения."""
         return native_request("snapshot", {"targets": targets})
 
     @server.tool(annotations=read_only)
@@ -388,7 +440,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def g1r_invoke(handle: str, function: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Явно вызвать UFunction со скалярными параметрами; эффект зависит от функции, повтор запрещён."""
+        """Явно вызвать подтверждённую UFunction со скалярами или Object/Class-ссылками; неизвестный эффект не повторять."""
         return native_request("invoke", {"handle": handle, "function": function, "arguments": arguments or {}})
 
     return server

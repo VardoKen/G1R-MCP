@@ -1,6 +1,7 @@
 """Проверки владения процессом и однократных действий development MCP probe."""
 
 import copy
+import asyncio
 from pathlib import Path
 import sys
 import unittest
@@ -188,6 +189,97 @@ class DevelopmentCycleTests(unittest.IsolatedAsyncioTestCase):
         stops = [args for name, args in fake.calls if name == "g1r_development_stop"]
         self.assertEqual(stops, [{"expected_process": outer}])
         self.assertNotIn({"expected_process": replacement}, stops)
+
+    async def test_cancelled_start_settles_receipt_and_cleans_owned_process(self):
+        fake = FakeMCP()
+        launched = asyncio.Event()
+        release = asyncio.Event()
+        async def call(name, args):
+            result = await fake.call(name, args)
+            if name == "g1r_development_start":
+                launched.set()
+                await release.wait()
+            return result
+        task = asyncio.create_task(probe.development_cycle(call, "artifacts/probe", 2))
+        await launched.wait()
+        task.cancel()
+        await asyncio.sleep(0)
+        self.assertFalse(task.done())
+        release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertTrue(fake.stopped)
+        self.assertEqual(sum(name == "g1r_development_start" for name, _ in fake.calls), 1)
+        self.assertEqual(sum(name == "g1r_development_stop" for name, _ in fake.calls), 1)
+
+    async def test_uncertain_start_does_not_adopt_unproven_process_or_retry(self):
+        fake = FakeMCP()
+        async def call(name, args):
+            result = await fake.call(name, args)
+            if name == "g1r_development_start":
+                error = probe.ProbeError("operation_timeout", "Steam-запрос уже мог исполниться")
+                error.outcome_unknown = True
+                raise error
+            return result
+        with self.assertRaises(probe.ProbeError) as captured:
+            await probe.development_cycle(call, "artifacts/probe", 2)
+        self.assertEqual(captured.exception.code, "operation_timeout")
+        self.assertFalse(fake.stopped)
+        self.assertEqual(sum(name == "g1r_development_start" for name, _ in fake.calls), 1)
+        self.assertNotIn("g1r_native_load", [name for name, _ in fake.calls])
+        self.assertNotIn("g1r_development_stop", [name for name, _ in fake.calls])
+        self.assertTrue(captured.exception.outcome_unknown)
+        self.assertTrue(captured.exception.__notes__)
+
+    async def test_definite_start_refusal_never_adopts_concurrent_user_game(self):
+        fake = FakeMCP()
+        async def call(name, args):
+            if name == "g1r_development_start":
+                fake.calls.append((name, copy.deepcopy(args)))
+                fake.preexisting = True
+                raise probe.ProbeError("game_running", "Пользователь запустил игру после начального снимка")
+            return await fake.call(name, args)
+        with self.assertRaises(probe.ProbeError) as captured:
+            await probe.development_cycle(call, "artifacts/probe", 2)
+        self.assertEqual(captured.exception.code, "game_running")
+        self.assertFalse(fake.stopped)
+        self.assertNotIn("g1r_development_stop", [name for name, _ in fake.calls])
+
+    async def test_repeated_cancel_does_not_interrupt_owned_stop(self):
+        fake = FakeMCP()
+        loading = asyncio.Event()
+        stopping = asyncio.Event()
+        release = asyncio.Event()
+        async def call(name, args):
+            if name == "g1r_native_load":
+                fake.calls.append((name, copy.deepcopy(args)))
+                loading.set()
+                await asyncio.Future()
+            if name == "g1r_development_stop":
+                stopping.set()
+                await release.wait()
+            return await fake.call(name, args)
+        task = asyncio.create_task(probe.development_cycle(call, "artifacts/probe", 2))
+        await loading.wait()
+        task.cancel()
+        await stopping.wait()
+        task.cancel()
+        await asyncio.sleep(0)
+        self.assertFalse(task.done())
+        release.set()
+        with self.assertRaises((asyncio.CancelledError, probe.ProbeError)):
+            await task
+        self.assertTrue(fake.stopped)
+        self.assertEqual(sum(name == "g1r_development_stop" for name, _ in fake.calls), 1)
+
+    async def test_optional_probe_uses_existing_owned_cleanup(self):
+        fake = FakeMCP()
+        async def callback(call):
+            return {"read_only_fixture": True}
+        result = await probe.development_cycle(fake.call, "artifacts/probe", 2, probe=callback)
+        self.assertEqual(result["probe_result"], {"read_only_fixture": True})
+        self.assertTrue(result["stop_confirmed"])
+        self.assertNotIn("g1r_find_objects", [name for name, _ in fake.calls])
 
     def test_inner_selection_ignores_bootstrap_and_preserves_timestamp(self):
         fake = FakeMCP()

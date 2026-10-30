@@ -1,0 +1,7 @@
+{
+  "name": "G1RMCPNameProbe",
+  "title": "G1R MCP Name Probe",
+  "author": "G1R MCP",
+  "description": "Изолированная проверка возврата FName и неизменных свойств без игровых вызовов.",
+  "modVersion": "1.0.0"
+}

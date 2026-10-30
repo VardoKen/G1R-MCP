@@ -5,6 +5,8 @@
 #include "g1r_mcp/class_arguments.hpp"
 #include "g1r_mcp/object_query.hpp"
 #include "g1r_mcp/function_query.hpp"
+#include "g1r_mcp/name_return.hpp"
+#include "g1r_mcp/string_return.hpp"
 #include "g1r_mcp/enum_values.hpp"
 #include <MinHook.h>
 #include <bcrypt.h>
@@ -52,10 +54,10 @@ bool call_event(void* function, void* object, void* event, void* params) {
     __try { reinterpret_cast<void(__fastcall*)(void*,void*,void*)>(function)(object,event,params); return true; }
     __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
-void free_string(uintptr_t free_address, void* memory) {
-    if (!memory) return;
-    __try { reinterpret_cast<void(__fastcall*)(void*)>(free_address)(memory); }
-    __except(EXCEPTION_EXECUTE_HANDLER) { }
+bool free_string(uintptr_t free_address, void* memory) {
+    if (!memory) return true;
+    __try { reinterpret_cast<void(__fastcall*)(void*)>(free_address)(memory); return true; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 std::string utf8(const wchar_t* value, int length) {
     if (length <= 0) return {};
@@ -64,6 +66,16 @@ std::string utf8(const wchar_t* value, int length) {
     std::string result(count,'\0');
     WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,value,length,result.data(),count,nullptr,nullptr);
     return result;
+}
+std::string copied_string(const g1r_mcp::StringHeader& header) {
+    g1r_mcp::validate_string_header(header);
+    if(header.count>32768)throw HandlerError("string_too_large","FString превышает предел копирования");
+    std::vector<wchar_t> text(static_cast<size_t>(header.count));
+    if(header.count && !copy_memory(text.data(),reinterpret_cast<void*>(header.data),
+                                   static_cast<size_t>(header.count)*sizeof(wchar_t)))
+        throw HandlerError("invalid_memory","Строка недоступна");
+    if(header.count && text.back()==0)text.pop_back();
+    return utf8(text.data(),static_cast<int>(text.size()));
 }
 std::string file_hash() {
     wchar_t path[32768]{};
@@ -107,12 +119,7 @@ json scalar(uintptr_t address,const std::string& type,int size,uintptr_t field) 
     if(type=="FloatProperty" && size==4) {auto v=read<float>(address); return std::isfinite(v)?json(v):json(nullptr);}
     if(type=="DoubleProperty" && size==8) {auto v=read<double>(address);return std::isfinite(v)?json(v):json(nullptr);}
     if(type=="StrProperty" && size==16) {
-        auto pointer=read<uintptr_t>(address);auto count=read<int32_t>(address+8),max=read<int32_t>(address+12);
-        if(!pointer && !count) return "";
-        if(count<0 || count>32768 || max<count) throw HandlerError("invalid_string","Некорректный FString");
-        std::vector<wchar_t> text(count);
-        if(count && !copy_memory(text.data(),reinterpret_cast<void*>(pointer),count*2ull)) throw HandlerError("invalid_memory","Строка недоступна");
-        if(count && text.back()==0) text.pop_back();return utf8(text.data(),static_cast<int>(text.size()));
+        return copied_string(read<g1r_mcp::StringHeader>(address));
     }
     return nullptr;
 }
@@ -147,7 +154,7 @@ void __fastcall GameAccess::hooked_tick(void* loop) {
     if(count<2)diagnostic("tick_pump_return");
 }
 json GameAccess::status() const {
-    return {{"version","1.0.0-dev.6"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.7"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&ticks_.load()>0},
             {"build_hash",kHash},{"startup_error",startup_error_},
             {"process_id",GetCurrentProcessId()},
@@ -640,10 +647,12 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         auto type=field_type(field,[this](auto f){return name(f);});int offset=read<int32_t>(field+0x44),size=read<int32_t>(field+0x34);
         parameter_extent(extent,offset,size,read<int32_t>(field+0x30));
         if(flags&0x400){
-            if(type=="NameProperty" || type=="EnumProperty" || type=="ByteProperty")
-                throw HandlerError("unsupported_signature","Возвраты Name/Enum/Byte пока не входят в разрешённый контракт вызова");
+            if(return_field)throw HandlerError("unsupported_signature","У функции обнаружено несколько возвращаемых параметров");
+            if(type=="EnumProperty" || type=="ByteProperty")
+                throw HandlerError("unsupported_signature","Возвраты Enum/Byte пока не входят в разрешённый контракт вызова");
             return_field=field;return_type=type;return_size=size;return_offset=offset;
-            if(type=="ObjectProperty" || type=="ClassProperty") {
+            if(type=="NameProperty")validate_name_return_layout(size,read<int32_t>(field+0x30));
+            else if(type=="ObjectProperty" || type=="ClassProperty") {
                 if(size!=8)throw HandlerError("unsupported_signature","Размер объектного возврата не поддержан");
                 validate_class(reinterpret_cast<void*>(read<uintptr_t>(field+0x70)));
                 if(type=="ClassProperty")validate_class(reinterpret_cast<void*>(read<uintptr_t>(field+0x78)));
@@ -653,6 +662,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             continue;
         }
         if(flags&(0x100|0x800))throw HandlerError("unsupported_signature","Out/ref параметры пока не поддержаны");
+        if(type=="NameProperty")reject_name_input();
         auto key=name(read<uint64_t>(field+0x20));if(!arguments.contains(key))throw HandlerError("missing_argument","Не задан аргумент "+key);auto v=arguments.at(key);++input_count;
         if(type=="BoolProperty" && v.is_boolean()){auto bo=read<uint8_t>(field+0x71),mask=read<uint8_t>(field+0x73);validate_bool_layout(size,bo,mask);buffer[offset+bo]=v.get<bool>()?mask:0;}
         else if(type=="IntProperty" && size==4){*reinterpret_cast<int32_t*>(buffer+offset)=int32_argument(v);}
@@ -702,20 +712,40 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             throw HandlerError("incompatible_class_argument","Классовый аргумент изменился до вызова функции");
     }
     validate_object(object);
-    if(!call_event(reinterpret_cast<void*>(process_event_),object,reinterpret_cast<void*>(function),buffer))throw HandlerError("game_call_fault","Игровой вызов вызвал native exception; эффект неизвестен",
-        {{"executed",false},{"may_have_executed",true},{"do_not_retry",true}});
+    if(!call_event(reinterpret_cast<void*>(process_event_),object,reinterpret_cast<void*>(function),buffer)) {
+        json details={{"executed",false},{"may_have_executed",true},{"do_not_retry",true}};
+        if(return_type=="StrProperty") {
+            details["cleanup_attempted"]=false;details["cleanup_confirmed"]=false;
+            details["cleanup_state"]="unknown";
+        }
+        throw HandlerError("game_call_fault","Игровой вызов вызвал native exception; эффект неизвестен",std::move(details));
+    }
     json result;
-    try {result=return_field?property_value(reinterpret_cast<uintptr_t>(buffer+return_offset),return_type,return_size,return_field):json(nullptr);}
+    if(return_type=="StrProperty") {
+        StringHeader header{};
+        if(!copy_memory(&header,buffer+return_offset,sizeof(header)))
+            throw HandlerError("game_result_error","Вызов выполнен, но FString не прочитан; очистка не подтверждена",
+                               string_cleanup_details(false,false,"invalid_string_storage"));
+        result=copied_owned_string_return(header,
+            [](const StringHeader& copied){return copied_string(copied);},
+            [this](uintptr_t memory){return free_string(base_+kFree,reinterpret_cast<void*>(memory));});
+        return {{"function",function_name},{"return_type",return_type},{"result",result},
+                {"executed",true},{"thread_id",GetCurrentThreadId()},{"cleanup_confirmed",true}};
+    }
+    try {
+        if(return_type=="NameProperty") {
+            result=copied_name_return(return_size,1,
+                [&]{return read<uint64_t>(reinterpret_cast<uintptr_t>(buffer+return_offset));},
+                [this](uint64_t copied){return name(copied);});
+        } else result=return_field?property_value(reinterpret_cast<uintptr_t>(buffer+return_offset),return_type,return_size,return_field):json(nullptr);
+    }
     catch(const HandlerError& error) {
-        if(return_type=="StrProperty")free_string(base_+kFree,*reinterpret_cast<void**>(buffer+return_offset));
         throw HandlerError("game_result_error","Вызов выполнен, но результат не получен; не повторять запрос",
             {{"executed",true},{"may_have_executed",true},{"do_not_retry",true},{"cause_code",error.code()}});
     } catch(...) {
-        if(return_type=="StrProperty")free_string(base_+kFree,*reinterpret_cast<void**>(buffer+return_offset));
         throw HandlerError("game_result_error","Вызов выполнен, но результат не получен; не повторять запрос",
             {{"executed",true},{"may_have_executed",true},{"do_not_retry",true},{"cause_code","result_processing_failed"}});
     }
-    if(return_type=="StrProperty")free_string(base_+kFree,*reinterpret_cast<void**>(buffer+return_offset));
     return {{"function",function_name},{"return_type",return_type},{"result",result},{"executed",true},{"thread_id",GetCurrentThreadId()}};
 }
 json GameAccess::execute(const json& request) {

@@ -60,7 +60,8 @@ class ClassCallFixture:
         return {**item, "session_id": "fixture-owner"}
 
     def snapshot(self):
-        return {"session_id": "fixture-owner", "partial": False, "truncated": False, "objects": [{"handle": self.host["handle"],
+        return {"session_id": "fixture-owner", "source": "live_native", "consistency": "single_tick_sequential",
+                "partial": False, "truncated": False, "objects": [{**self.host,
             "properties": [{"name": name, "type": "ClassProperty", "supported": True, "value": value}
                            for name, value in self.fields.items()]}]}
 
@@ -112,9 +113,9 @@ class ClassCallFixture:
             return {"value_changes": 2}
         if name == "g1r_watch_stop":
             self.watch = False
-            return {"cleanup_complete": True}
+            return {"cleanup_complete": True, "state": "stopped"}
         if name == "g1r_watch_forget":
-            return {"forgotten": True}
+            return {"forgotten": True, "cleanup_complete": True}
         raise AssertionError((name, arguments))
 
 
@@ -237,6 +238,30 @@ class ClassProbeTests(unittest.TestCase):
             asyncio.run(live.exercise(fixture.call))
         self.assertEqual(captured.exception.code, "probe_class_identity")
         self.assertFalse(any(name == "g1r_invoke" and arguments["function"].startswith("Store") for name, arguments in fixture.calls))
+
+    def test_class_cleanup_requires_explicit_null_and_terminal_flags(self):
+        for mode in ("snapshot", "stop", "forget"):
+            fixture = ClassCallFixture()
+            restoring = False
+
+            async def call(name, arguments, **keywords):
+                nonlocal restoring
+                result = await fixture.call(name, arguments, **keywords)
+                if name == "g1r_compare_snapshots":
+                    restoring = True
+                if restoring:
+                    if mode == "snapshot" and name == "g1r_snapshot":
+                        result["objects"][0]["properties"][0].pop("value")
+                    if mode == "stop" and name == "g1r_watch_stop":
+                        return {"state": "running", "cleanup_complete": True}
+                    if mode == "forget" and name == "g1r_watch_forget":
+                        return {"cleanup_complete": True}
+                return result
+
+            with self.subTest(mode=mode), self.assertRaises(live.ProbeError) as captured:
+                asyncio.run(live.exercise(call))
+            self.assertEqual(captured.exception.code, "probe_cleanup_failed")
+            self.assertEqual([name for name, _ in fixture.calls[-2:]], ["g1r_watch_stop", "g1r_watch_forget"])
 
 
 if __name__ == "__main__":

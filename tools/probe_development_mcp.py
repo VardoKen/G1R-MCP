@@ -21,6 +21,7 @@ from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
 from probe_live_mcp import ProbeError, check_signature
+from probe_cleanup import settle_task, deferred_sigint
 
 ROOT = Path(__file__).resolve().parents[1]
 Call = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -59,7 +60,8 @@ async def development_cycle(call: Call, relative_package: str, expected_value: i
                             startup_timeout: float = 45, ready_timeout: float = 45,
                             sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
                             clock: Callable[[], float] = time.monotonic,
-                            progress: Callable[[str], None] | None = None) -> dict[str, Any]:
+                            progress: Callable[[str], None] | None = None,
+                            probe: Callable[[Call], Awaitable[dict[str, Any]]] | None = None) -> dict[str, Any]:
     if not 1 <= startup_timeout <= 45 or not 1 <= ready_timeout <= 60:
         raise ProbeError("invalid_timeout", "Ожидание запуска ограничено 45 с, Tick — 60 с")
     report: dict[str, Any] = {"source": "real_stdio_development_cycle", "stages": []}
@@ -85,13 +87,21 @@ async def development_cycle(call: Call, relative_package: str, expected_value: i
     owned: dict[str, Any] | None = None
     owned_bootstrap: dict[str, Any] | None = None
     primary: BaseException | None = None
-    try:
-        launch = await call("g1r_development_start", {
-            "relative_package": relative_package,
-            "expected_manifest_sha256": manifest["manifest_sha256"], "restart": False})
-        if launch.get("state") != "launch_requested" or launch.get("outcome_unknown") is not False:
-            raise ProbeError("launch_unconfirmed", "Запрос запуска не подтверждён; автоматически не повторяется")
-        stage("launch_requested")
+    async def start_and_identify() -> None:
+        nonlocal owned, owned_bootstrap
+        try:
+            launch = await call("g1r_development_start", {
+                "relative_package": relative_package,
+                "expected_manifest_sha256": manifest["manifest_sha256"], "restart": False})
+            if launch.get("state") != "launch_requested" or launch.get("outcome_unknown") is not False:
+                raise ProbeError("launch_unconfirmed", "Запрос запуска не подтверждён; автоматически не повторяется")
+            stage("launch_requested")
+        except BaseException as error:
+            # Даже пустой начальный snapshot не доказывает принадлежность нового
+            # процесса при потерянном receipt. Неопределённый эффект не повторяется.
+            if getattr(error, "outcome_unknown", False) is True:
+                error.add_note("Receipt запуска не получен; принадлежность процесса требует отдельной проверки")
+            raise
         deadline = clock() + startup_timeout
         while clock() < deadline:
             state = await call("g1r_development_processes", {})
@@ -109,6 +119,8 @@ async def development_cycle(call: Call, relative_package: str, expected_value: i
             raise ProbeError("game_start_timeout", "Внутренний процесс игры не появился в срок")
         report["owned_process"] = dict(owned)
         stage("process_identified")
+    try:
+        await settle_task(asyncio.create_task(start_and_identify()), min(115, 65 + startup_timeout), "development startup")
         # Повторная проверка recipe связывает загрузку с текущими пакетом и DLL.
         current = await call("g1r_development_recipe", {"relative_package": relative_package})
         if current.get("manifest", {}).get("manifest_sha256") != manifest["manifest_sha256"]:
@@ -159,6 +171,10 @@ async def development_cycle(call: Call, relative_package: str, expected_value: i
                                            "last_status": status}, ensure_ascii=False))
         report["readiness_observations"] = observations
         stage("tick_ready")
+        if probe is not None:
+            report["probe_result"] = await probe(call)
+            stage("probe_verified")
+            return report
         deadline = clock() + ready_timeout
         while True:
             found = await call("g1r_find_objects", {"query": "Default__G1RMCPCompileProbe",
@@ -187,7 +203,7 @@ async def development_cycle(call: Call, relative_package: str, expected_value: i
     finally:
         cleanup_process = owned if owned is not None else owned_bootstrap
         if cleanup_process is not None:
-            try:
+            async def stop_owned() -> None:
                 stopped = await call("g1r_development_stop", {"expected_process": cleanup_process})
                 if (stopped.get("state") != "stop_result" or stopped.get("process") != cleanup_process
                         or stopped.get("tool_result", {}).get("state") != "stopped"):
@@ -197,6 +213,8 @@ async def development_cycle(call: Call, relative_package: str, expected_value: i
                     raise ProbeError("game_lingering", "После остановки остались игровые процессы")
                 report["stop_confirmed"] = True
                 stage("game_stopped")
+            try:
+                await settle_task(asyncio.create_task(stop_owned()), 45, "development stop")
             except BaseException as cleanup:
                 if primary is None:
                     raise
@@ -228,7 +246,10 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                     except (ValueError, TypeError):
                         structured_error = {}
                     code = structured_error.get("code", "mcp_call_failed") if isinstance(structured_error, dict) else "mcp_call_failed"
-                    raise ProbeError(code, f"{name}: {text}")
+                    error = ProbeError(code, f"{name}: {text}")
+                    error.outcome_unknown = (isinstance(structured_error, dict)
+                                             and structured_error.get("outcome_unknown") is True)
+                    raise error
                 if not isinstance(result.structured_content, dict):
                     raise ProbeError("mcp_result_invalid", f"{name}: отсутствует структурированный объект")
                 return result.structured_content
@@ -253,7 +274,10 @@ def main() -> int:
     parser.add_argument("--ready-timeout", type=float, default=45)
     args = parser.parse_args()
     try:
-        print(json.dumps(asyncio.run(run(args)), ensure_ascii=False, indent=2))
+        async def protected_run():
+            with deferred_sigint():
+                return await run(args)
+        print(json.dumps(asyncio.run(protected_run()), ensure_ascii=False, indent=2))
         return 0
     except Exception as error:
         while isinstance(error, BaseExceptionGroup) and len(error.exceptions) == 1:

@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from g1r_mcp.workspace import MAX_CONTENT_BYTES, MAX_EXACT_READ_BYTES, PackageWorkspace, WorkspaceError
+from g1r_mcp.workspace import MAX_CONTENT_BYTES, MAX_EXACT_READ_BYTES, MAX_FILES, PackageWorkspace, WorkspaceError
 
 
 class WorkspaceTests(unittest.TestCase):
@@ -284,8 +284,56 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual([item["path"] for item in result["items"]], ["GothicMod.json", "Script/a.as"])
         self.assertTrue(result["truncated"])
         self.assertEqual(result["total"], 4)
+        self.assertEqual(result["offset"], 0)
+        self.assertEqual(result["next_offset"], 2)
+        self.assertTrue(result["has_more"])
         root_workspace = PackageWorkspace(self.root / "Example")
         self.assertEqual(root_workspace.read_package_file(".", "Script/a.as")["package_path"], ".")
+
+    def test_index_pagination_covers_more_than_200_files_once_in_stable_order(self):
+        self.create()
+        script = self.root / "Example/Script"
+        for index in reversed(range(205)):
+            (script / f"F{index:03}.as").write_bytes(b"// isolated fixture\n")
+        patches = self.root / "Example/ScriptPatches"
+        patches.mkdir()
+        (patches / "Marker.patch").write_bytes(b"// fixture is not engine validation\n")
+        first = self.workspace.list_package_files("Example", limit=200)
+        self.assertEqual(first["total"], 207)
+        self.assertEqual(len(first["items"]), 200)
+        self.assertEqual(first["next_offset"], 200)
+        self.assertTrue(first["has_more"])
+        self.assertTrue(first["truncated"])
+        self.assertFalse(first["snapshot_atomic"])
+        second = self.workspace.list_package_files("Example", limit=200, offset=first["next_offset"])
+        self.assertEqual(second["total"], 207)
+        self.assertEqual(len(second["items"]), 7)
+        self.assertIsNone(second["next_offset"])
+        self.assertFalse(second["has_more"])
+        self.assertTrue(second["truncated"])
+        paths = [item["path"] for item in first["items"] + second["items"]]
+        expected = ["GothicMod.json"] + [f"Script/F{index:03}.as" for index in range(205)] + ["ScriptPatches/Marker.patch"]
+        self.assertEqual(paths, expected)
+        self.assertEqual(len(paths), len(set(paths)))
+        repeated = self.workspace.list_package_files("Example", limit=200, offset=200)
+        self.assertEqual(repeated["items"], second["items"])
+
+    def test_index_offsets_at_end_and_beyond_return_empty_exhausted_page(self):
+        self.create()
+        self.workspace.write_package_file("Example", "Script/A.as", "fixture")
+        for offset in (2, 3, MAX_FILES):
+            with self.subTest(offset=offset):
+                result = self.workspace.list_package_files("Example", 200, offset)
+                self.assertEqual(result["items"], [])
+                self.assertEqual(result["total"], 2)
+                self.assertEqual(result["offset"], offset)
+                self.assertIsNone(result["next_offset"])
+                self.assertFalse(result["has_more"])
+                self.assertTrue(result["truncated"])
+        complete = self.workspace.list_package_files("Example", 200)
+        self.assertFalse(complete["truncated"])
+        self.assertFalse(complete["has_more"])
+        self.assertIsNone(complete["next_offset"])
 
     def test_create_nested_source_directories_and_idempotency(self):
         self.create()
@@ -516,6 +564,8 @@ class WorkspaceTests(unittest.TestCase):
         self.create()
         for value in (0, 201, True, 1.5):
             self.assert_error("invalid_arguments", lambda: self.workspace.list_package_files("Example", value))
+        for offset in (-1, MAX_FILES + 1, True, 1.5, "0", None):
+            self.assert_error("invalid_arguments", lambda: self.workspace.list_package_files("Example", offset=offset))
         for start, count in ((0, 1), (True, 1), (1, 401), (1, True)):
             self.assert_error("invalid_arguments", lambda: self.workspace.read_package_file("Example", "GothicMod.json", start, count))
         self.assert_error("invalid_arguments", lambda: self.workspace.write_package_file("Example", "GothicMod.json", "{}", "bad-hash"))

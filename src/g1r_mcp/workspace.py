@@ -339,9 +339,11 @@ class PackageWorkspace:
             return _result(package_path=name, directory_path="/".join(parts), created=bool(paths),
                            created_paths=paths, created_count=len(paths), exists=True)
 
-    def list_package_files(self, relative_path: str, limit: int = 100) -> dict:
+    def list_package_files(self, relative_path: str, limit: int = 100, offset: int = 0) -> dict:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
             raise WorkspaceError("invalid_arguments", "Предел списка должен быть целым числом от 1 до 200")
+        if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset <= MAX_FILES:
+            raise WorkspaceError("invalid_arguments", "Смещение списка должно быть целым числом от 0 до 10000")
         with self._lock:
             package, name = self._package(relative_path)
             files: list[dict] = []
@@ -385,8 +387,11 @@ class PackageWorkspace:
                 except OSError:
                     raise WorkspaceError("access_error", "Не удалось прочитать каталог патчей") from None
             files.sort(key=lambda item: item["path"])
-            return _result(package_path=name, items=files[:limit], total=len(files),
-                           truncated=len(files) > limit, snapshot_atomic=False)
+            items = files[offset:offset + limit]
+            has_more = offset + len(items) < len(files)
+            return _result(package_path=name, items=items, total=len(files), offset=offset,
+                           next_offset=offset + len(items) if has_more else None, has_more=has_more,
+                           truncated=len(items) < len(files), snapshot_atomic=False)
 
     def read_package_file(self, relative_path: str, file_path: str,
                           start_line: int = 1, line_count: int = 100) -> dict:

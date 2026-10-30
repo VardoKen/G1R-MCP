@@ -55,14 +55,15 @@ class ObjectProbeCallFixture:
 
     def snapshot(self):
         base = self.targets["G1RMCPObjectProbe"]
-        return {"partial": False, "truncated": False, "objects": [{"handle": base["handle"],
+        return {"session_id": "fixture-owner", "source": "live_native", "consistency": "single_tick_sequential",
+                "partial": False, "truncated": False, "objects": [{**base,
             "properties": [{"name": name, "type": "ObjectProperty", "supported": True, "value": value}
                            for name, value in self.fields.items()]}]}
 
     async def call(self, name, arguments, *, expected_error=None):
         self.calls.append((name, arguments))
         if name == "g1r_native_status":
-            return {"ready": True}
+            return {"ready": True, "session_id": "fixture-owner"}
         if name == "g1r_find_objects":
             return {"items": [self.targets[arguments["class_query"]]]}
         if name == "g1r_object_functions":
@@ -105,9 +106,9 @@ class ObjectProbeCallFixture:
             return {"value_changes": 2}
         if name == "g1r_watch_stop":
             self.watch = False
-            return {"cleanup_complete": True}
+            return {"cleanup_complete": True, "state": "stopped"}
         if name == "g1r_watch_forget":
-            return {"forgotten": True}
+            return {"forgotten": True, "cleanup_complete": True}
         raise AssertionError((name, arguments))
 
 
@@ -240,6 +241,62 @@ class ObjectProbeTests(unittest.TestCase):
         self.assertEqual(len(echo_calls), 1)
         cleanup_calls = fixture.calls[-3:-1]
         self.assertEqual([arguments["function"] for name, arguments in cleanup_calls], ["StoreObject", "StoreTypedObject"])
+
+    def test_cleanup_flags_and_missing_null_value_do_not_claim_success(self):
+        for mode in ("setter", "stop", "forget", "snapshot"):
+            fixture = ObjectProbeCallFixture()
+            stopping = False
+
+            async def call(name, arguments, **keywords):
+                nonlocal stopping
+                result = await fixture.call(name, arguments, **keywords)
+                if name == "g1r_compare_snapshots":
+                    stopping = True
+                if stopping:
+                    if mode == "setter" and name == "g1r_invoke" and arguments["function"] == "StoreObject":
+                        return {"executed": False}
+                    if mode == "stop" and name == "g1r_watch_stop":
+                        return {"cleanup_complete": True, "state": "running"}
+                    if mode == "forget" and name == "g1r_watch_forget":
+                        return {"cleanup_complete": True, "forgotten": False}
+                    if mode == "snapshot" and name == "g1r_snapshot":
+                        result["objects"][0]["properties"][0].pop("value")
+                return result
+
+            with self.subTest(mode=mode), self.assertRaises(live.ProbeError) as captured:
+                asyncio.run(live.exercise(call))
+            self.assertEqual(captured.exception.code, "probe_cleanup_failed")
+            self.assertEqual([name for name, _ in fixture.calls[-2:]], ["g1r_watch_stop", "g1r_watch_forget"])
+
+    def test_repeated_cancellation_during_cleanup_keeps_all_steps(self):
+        async def scenario():
+            fixture = ObjectProbeCallFixture()
+            started, release = asyncio.Event(), asyncio.Event()
+            stopping = False
+
+            async def call(name, arguments, **keywords):
+                nonlocal stopping
+                result = await fixture.call(name, arguments, **keywords)
+                if name == "g1r_compare_snapshots":
+                    stopping = True
+                elif stopping and name == "g1r_invoke" and arguments["function"] == "StoreObject":
+                    started.set()
+                    await release.wait()
+                return result
+
+            task = asyncio.create_task(live.exercise(call))
+            await asyncio.wait_for(started.wait(), timeout=2)
+            task.cancel()
+            await asyncio.sleep(0)
+            task.cancel()
+            release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            self.assertFalse(fixture.watch)
+            self.assertEqual(fixture.fields, {name: None for name in live.PROPERTIES})
+            self.assertEqual([name for name, _ in fixture.calls[-2:]], ["g1r_watch_stop", "g1r_watch_forget"])
+
+        asyncio.run(scenario())
 
     def test_atomic_destination_failure_preserves_original_destination(self):
         original = Path.rename

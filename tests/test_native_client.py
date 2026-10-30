@@ -124,6 +124,42 @@ class NativeClientTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, "native_protocol_error")
             self.assertTrue(caught.exception.may_have_executed)
 
+    def test_incomplete_error_effects_remain_uncertain_and_do_not_replay(self):
+        cases = [
+            ({}, True),
+            ({"cause_code": "result_processing_failed"}, True),
+            ({"executed": False}, True),
+            ({"may_have_executed": False}, True),
+            ({"executed": False, "do_not_retry": False}, True),
+            ({"executed": False, "may_have_executed": True, "do_not_retry": True}, True),
+            ({"executed": True, "may_have_executed": False}, True),
+            ({"executed": False, "may_have_executed": False}, False),
+        ]
+        for details, uncertain in cases:
+            with self.subTest(details=details):
+                received = []
+
+                def handler(stream):
+                    value = request(stream)
+                    received.append(value)
+                    stream.sendall(frame({"protocol": 1, "id": value["id"], "type": "error",
+                                          "error": {"code": "invoke_failed", "message": "Ошибка обработчика",
+                                                    "details": details}}))
+                    status = request(stream)
+                    received.append(status)
+                    stream.sendall(frame(response(status, {"ready": True})))
+
+                with FakeServer(handler) as server, NativeClient(port=server.port) as client:
+                    with self.assertRaises(NativeError) as caught:
+                        client.request("invoke")
+                    self.assertIs(caught.exception.may_have_executed, uncertain)
+                    self.assertEqual(caught.exception.details, details)
+                    self.assertEqual(caught.exception.request_id, received[0]["id"])
+                    self.assertEqual(client.status(), {"ready": True})
+                    self.assertEqual(server.accepted, 1)
+                self.assertEqual([entry["op"] for entry in received], ["invoke", "status"])
+                self.assertNotEqual(received[0]["id"], received[1]["id"])
+
     def test_persistent_unique_requests_and_fragmented_unicode_reply(self):
         received = []
 
@@ -161,6 +197,44 @@ class NativeClientTests(unittest.TestCase):
             self.assertTrue(ended.wait(1))
             self.assertEqual(len(received), 1)
             self.assertEqual(server.accepted, 1)
+
+    def test_late_reply_after_timeout_cannot_satisfy_next_request(self):
+        accepted = threading.Event()
+        release_late = threading.Event()
+        attempted_late = threading.Event()
+        received = []
+
+        def handler(stream):
+            value = request(stream)
+            received.append(value)
+            if value["op"] == "invoke":
+                accepted.set()
+                self.assertTrue(release_late.wait(1))
+                try:
+                    stream.sendall(frame(response(value, {"executed": True, "late_marker": "old-action"})))
+                except OSError:
+                    # TCP может уже заметить shutdown клиента; поздний результат всё равно не принимается.
+                    pass
+                finally:
+                    attempted_late.set()
+            else:
+                stream.sendall(frame(response(value, {"ready": True, "fresh_marker": "new-status"})))
+
+        with FakeServer(handler) as server, NativeClient(port=server.port) as client:
+            with self.assertRaises(NativeError) as caught:
+                client.request("invoke", {"action": "isolated"}, timeout=0.1)
+            self.assertTrue(accepted.is_set())
+            self.assertEqual(caught.exception.code, "native_timeout")
+            self.assertTrue(caught.exception.may_have_executed)
+            old_id = caught.exception.request_id
+            release_late.set()
+            result = client.status(timeout=1)
+            self.assertTrue(attempted_late.wait(1))
+            self.assertEqual(result, {"ready": True, "fresh_marker": "new-status"})
+            self.assertEqual(server.accepted, 2)
+        self.assertEqual([entry["op"] for entry in received], ["invoke", "status"])
+        self.assertEqual(received[0]["id"], old_id)
+        self.assertNotEqual(received[0]["id"], received[1]["id"])
 
     def test_eof_after_acceptance_is_uncertain(self):
         with FakeServer(lambda stream: request(stream)) as server, NativeClient(port=server.port) as client:

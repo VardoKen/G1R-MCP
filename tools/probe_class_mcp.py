@@ -13,6 +13,7 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPOSITORY_ROOT / "tools"))
+from probe_cleanup import settle_task, deferred_sigint
 from probe_object_mcp import ProbeError, _caller, _single_error
 
 HOST = "G1RMCPClassProbe"
@@ -83,17 +84,20 @@ def check_result(result: dict, expected: dict | None, session_id: str | None = N
         raise ProbeError("probe_class_identity", "Не сохранена идентичность объекта класса")
 
 
-def snapshot_values(snapshot: dict, host: dict) -> dict:
+def snapshot_values(snapshot: dict, host: dict, session_id: str | None = None) -> dict:
     objects = snapshot.get("objects")
     if (snapshot.get("partial") is not False or snapshot.get("truncated") is not False
             or not isinstance(objects, list) or len(objects) != 1
-            or objects[0].get("handle") != host["handle"] or objects[0].get("error")):
+            or objects[0].get("handle") != host["handle"] or objects[0].get("error")
+            or session_id is not None and (snapshot.get("session_id") != session_id
+                or snapshot.get("source") != "live_native" or snapshot.get("consistency") != "single_tick_sequential"
+                or any(objects[0].get(key) != host[key] for key in ("path", "class")))):
         raise ProbeError("probe_snapshot_invalid", "Не подтверждён полный снимок собственных полей")
     result = {}
     for name in PROPERTIES:
         fields = [field for field in objects[0].get("properties", []) if field.get("name") == name]
         if (len(fields) != 1 or fields[0].get("supported") is not True
-                or fields[0].get("type") != "ClassProperty" or fields[0].get("error")):
+                or fields[0].get("type") != "ClassProperty" or fields[0].get("error") or "value" not in fields[0]):
             raise ProbeError("probe_snapshot_invalid", "Не подтверждено class-свойство")
         result[name] = fields[0].get("value")
     return result
@@ -203,33 +207,46 @@ async def exercise(call) -> dict:
         failure = error
         raise
     finally:
-        cleanup_errors = []
-        if can_write:
-            for method in ("StoreAnyClass", "StoreTypedClass"):
+        async def finish_cleanup():
+            cleanup_errors = []
+            if can_write:
+                for method in ("StoreAnyClass", "StoreTypedClass"):
+                    try:
+                        result = await call("g1r_invoke", {"handle": host["handle"], "function": method, "arguments": {"Input": None}})
+                        if result.get("executed") is not True:
+                            raise ProbeError("probe_cleanup_unconfirmed", "Очистка поля не подтвердила выполнение")
+                        report["cleanup"].append(method)
+                    except BaseException as error:
+                        cleanup_errors.append(f"{method}: {getattr(error, 'code', 'failed')}")
                 try:
-                    await call("g1r_invoke", {"handle": host["handle"], "function": method, "arguments": {"Input": None}})
-                    report["cleanup"].append(method)
-                except Exception as error:
-                    cleanup_errors.append(f"{method}: {getattr(error, 'code', 'failed')}")
-            try:
-                restored = await call("g1r_snapshot", {"targets": [{"handle": host["handle"], "properties": PROPERTIES}]})
-                if any(value is not None for value in snapshot_values(restored, host).values()):
-                    raise ProbeError("probe_restore_mismatch", "Собственные class-поля не восстановлены к null")
-                report["cleanup"].append("restored_null_snapshot")
-            except Exception as error:
-                cleanup_errors.append(f"restore_snapshot: {getattr(error, 'code', 'failed')}")
-        if watch_id is not None:
-            for method in ("g1r_watch_stop", "g1r_watch_forget"):
-                try:
-                    await call(method, {"watch_id": watch_id})
-                    report["cleanup"].append(method)
-                except Exception as error:
-                    cleanup_errors.append(f"{method}: {getattr(error, 'code', 'failed')}")
-        if cleanup_errors:
-            message = "Не подтверждена очистка: " + "; ".join(cleanup_errors)
+                    restored = await call("g1r_snapshot", {"targets": [{"handle": host["handle"], "properties": PROPERTIES}]})
+                    if any(value is not None for value in snapshot_values(restored, host, session_id).values()):
+                        raise ProbeError("probe_restore_mismatch", "Собственные class-поля не восстановлены к null")
+                    report["cleanup"].append("restored_null_snapshot")
+                except BaseException as error:
+                    cleanup_errors.append(f"restore_snapshot: {getattr(error, 'code', 'failed')}")
+            if watch_id is not None:
+                for method in ("g1r_watch_stop", "g1r_watch_forget"):
+                    try:
+                        result = await call(method, {"watch_id": watch_id})
+                        if (result.get("cleanup_complete") is not True
+                                or method == "g1r_watch_forget" and result.get("forgotten") is not True
+                                or method == "g1r_watch_stop" and result.get("state") not in {"stopped", "completed", "failed"}):
+                            raise ProbeError("probe_cleanup_unconfirmed", "Освобождение наблюдения не подтверждено")
+                        report["cleanup"].append(method)
+                    except BaseException as error:
+                        cleanup_errors.append(f"{method}: {getattr(error, 'code', 'failed')}")
+            if cleanup_errors:
+                message = "Не подтверждена очистка: " + "; ".join(cleanup_errors)
+                if failure is None:
+                    raise ProbeError("probe_cleanup_failed", message)
+                failure.add_note(message)
+        try:
+            await settle_task(asyncio.create_task(finish_cleanup()), timeout=30, label='class cleanup')
+        except BaseException as cleanup_error:
             if failure is None:
-                raise ProbeError("probe_cleanup_failed", message)
-            failure.add_note(message)
+                raise
+            failure.add_note("Не подтверждено завершение очистки: " + str(cleanup_error))
     return report
 
 
@@ -253,6 +270,11 @@ async def run_probe(args) -> dict:
     return report
 
 
+async def _run_with_signals(args):
+    with deferred_sigint():
+        return await run_probe(args)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Проверить только собственную class-fixture через готовый MCP")
     parser.add_argument("--modkit-root", type=Path, default=REPOSITORY_ROOT.parent / "G1R-Modkit")
@@ -260,7 +282,7 @@ def main() -> int:
     parser.add_argument("--native-port", type=int, default=27123)
     args = parser.parse_args()
     try:
-        report = asyncio.run(run_probe(args))
+        report = asyncio.run(_run_with_signals(args))
     except Exception as error:
         cause = _single_error(error)
         print(json.dumps({"code": getattr(cause, "code", "probe_failed"), "message": str(cause),

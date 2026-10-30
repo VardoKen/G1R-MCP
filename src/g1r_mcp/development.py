@@ -95,6 +95,23 @@ def execute_command(arguments: list[str], timeout: int) -> CommandResult:
     except (OSError, UnicodeError):
         raise DevelopmentError("tool_unavailable", "Не удалось запустить или прочитать фиксированный инструмент",
                                outcome_unknown=started) from None
+    except DevelopmentError:
+        raise
+    except BaseException as error:
+        # KeyboardInterrupt/SystemExit не оставляют запущенный локальный helper.
+        # Внешний эффект (Steam/LoadLibrary) остаётся неопределённым и не повторяется.
+        if process is not None:
+            try:
+                process.kill()
+            except OSError:
+                pass
+            try:
+                process.wait(timeout=2)
+            except BaseException:
+                pass
+        if started:
+            error.add_note("Локальный helper остановлен; исход внешней операции неизвестен, повтор запрещён")
+        raise
 
 
 def _unique_json(pairs: list[tuple[str, object]]) -> dict:

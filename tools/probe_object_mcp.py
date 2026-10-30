@@ -12,6 +12,8 @@ from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPOSITORY_ROOT / "tools"))
+from probe_cleanup import settle_task, deferred_sigint
 PROBE_CLASSES = {
     "G1RMCPObjectProbe": 41,
     "G1RMCPDerivedObjectProbe": 41,
@@ -103,18 +105,21 @@ def check_object_result(result: dict, expected: dict | None) -> None:
         raise ProbeError("probe_identity_mismatch", "Не сохранена объектная идентичность")
 
 
-def snapshot_values(snapshot: dict, target: dict) -> dict:
+def snapshot_values(snapshot: dict, target: dict, session_id: str | None = None) -> dict:
     objects = snapshot.get("objects")
     if (snapshot.get("partial") is not False or snapshot.get("truncated") is not False
             or not isinstance(objects, list) or len(objects) != 1
-            or objects[0].get("handle") != target["handle"] or objects[0].get("error")):
+            or objects[0].get("handle") != target["handle"] or objects[0].get("error")
+            or session_id is not None and (snapshot.get("session_id") != session_id
+                or snapshot.get("source") != "live_native" or snapshot.get("consistency") != "single_tick_sequential"
+                or any(objects[0].get(key) != target[key] for key in ("path", "class")))):
         raise ProbeError("probe_snapshot_invalid", "Не подтверждён полный снимок проверочных свойств")
     fields = objects[0].get("properties", [])
     values = {}
     for name in PROPERTIES:
         matches = [field for field in fields if field.get("name") == name]
         if (len(matches) != 1 or matches[0].get("supported") is not True
-                or matches[0].get("type") != "ObjectProperty" or matches[0].get("error")):
+                or matches[0].get("type") != "ObjectProperty" or matches[0].get("error") or "value" not in matches[0]):
             raise ProbeError("probe_snapshot_invalid", "ObjectProperty не прочитан однозначно")
         values[name] = matches[0].get("value")
     return values
@@ -144,6 +149,9 @@ async def exercise(call) -> dict:
         status = await call("g1r_native_status", {})
         if not status.get("ready"):
             raise ProbeError("game_not_ready", "Нативная игровая очередь не готова")
+        session_id = status.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            raise ProbeError("probe_owner_unknown", "Не подтверждён владелец нативной сессии")
         for class_name in PROBE_CLASSES:
             found = await call("g1r_find_objects", {"query": f"Default__{class_name}", "class_query": class_name, "limit": 50})
             exact = [item for item in found.get("items", []) if item.get("name") == f"Default__{class_name}"]
@@ -224,33 +232,46 @@ async def exercise(call) -> dict:
         active_error = error
         raise
     finally:
-        failures = []
-        if writable_target is not None:
-            for method in ("StoreObject", "StoreTypedObject"):
+        async def finish_cleanup():
+            failures = []
+            if writable_target is not None:
+                for method in ("StoreObject", "StoreTypedObject"):
+                    try:
+                        result = await call("g1r_invoke", {"handle": writable_target["handle"], "function": method, "arguments": {"Input": None}})
+                        if result.get("executed") is not True:
+                            raise ProbeError("probe_cleanup_unconfirmed", "Очистка поля не подтвердила выполнение")
+                        report["cleanup"].append(method)
+                    except BaseException as error:
+                        failures.append(f"{method}: {getattr(error, 'code', 'failed')}")
                 try:
-                    await call("g1r_invoke", {"handle": writable_target["handle"], "function": method, "arguments": {"Input": None}})
-                    report["cleanup"].append(method)
-                except Exception as error:
-                    failures.append(f"{method}: {getattr(error, 'code', 'failed')}")
-            try:
-                restored = await call("g1r_snapshot", {"targets": [{"handle": writable_target["handle"], "properties": PROPERTIES}]})
-                if any(value is not None for value in snapshot_values(restored, writable_target).values()):
-                    raise ProbeError("probe_restore_mismatch", "Проверочные поля после очистки не равны null")
-                report["cleanup"].append("restored_null_snapshot")
-            except Exception as error:
-                failures.append(f"restore_snapshot: {getattr(error, 'code', 'failed')}")
-        if watch_id is not None:
-            for name in ("g1r_watch_stop", "g1r_watch_forget"):
-                try:
-                    await call(name, {"watch_id": watch_id})
-                    report["cleanup"].append(name)
-                except Exception as error:
-                    failures.append(f"{name}: {getattr(error, 'code', 'failed')}")
-        if failures:
+                    restored = await call("g1r_snapshot", {"targets": [{"handle": writable_target["handle"], "properties": PROPERTIES}]})
+                    if any(value is not None for value in snapshot_values(restored, writable_target, session_id).values()):
+                        raise ProbeError("probe_restore_mismatch", "Проверочные поля после очистки не равны null")
+                    report["cleanup"].append("restored_null_snapshot")
+                except BaseException as error:
+                    failures.append(f"restore_snapshot: {getattr(error, 'code', 'failed')}")
+            if watch_id is not None:
+                for name in ("g1r_watch_stop", "g1r_watch_forget"):
+                    try:
+                        result = await call(name, {"watch_id": watch_id})
+                        if (result.get("cleanup_complete") is not True
+                                or name == "g1r_watch_forget" and result.get("forgotten") is not True
+                                or name == "g1r_watch_stop" and result.get("state") not in {"stopped", "completed", "failed"}):
+                            raise ProbeError("probe_cleanup_unconfirmed", "Освобождение наблюдения не подтверждено")
+                        report["cleanup"].append(name)
+                    except BaseException as error:
+                        failures.append(f"{name}: {getattr(error, 'code', 'failed')}")
+            if failures:
+                if active_error is None:
+                    raise ProbeError("probe_cleanup_failed", "; ".join(failures))
+                if hasattr(active_error, "add_note"):
+                    active_error.add_note("Не подтверждена очистка: " + "; ".join(failures))
+        try:
+            await settle_task(asyncio.create_task(finish_cleanup()), timeout=30, label='object cleanup')
+        except BaseException as cleanup_error:
             if active_error is None:
-                raise ProbeError("probe_cleanup_failed", "; ".join(failures))
-            if hasattr(active_error, "add_note"):
-                active_error.add_note("Не подтверждена очистка: " + "; ".join(failures))
+                raise
+            active_error.add_note("Не подтверждено завершение очистки: " + str(cleanup_error))
     return report
 
 
@@ -302,6 +323,11 @@ def _single_error(error: BaseException) -> BaseException:
     return error
 
 
+async def _run_with_signals(args):
+    with deferred_sigint():
+        return await run_probe(args)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Проверить только собственные CDO object-fixture через готовый MCP")
     parser.add_argument("--modkit-root", type=Path, default=REPOSITORY_ROOT.parent / "G1R-Modkit")
@@ -309,7 +335,7 @@ def main() -> int:
     parser.add_argument("--native-port", type=int, default=27123)
     args = parser.parse_args()
     try:
-        report = asyncio.run(run_probe(args))
+        report = asyncio.run(_run_with_signals(args))
     except Exception as error:
         cause = _single_error(error)
         print(json.dumps({"code": getattr(cause, "code", "probe_failed"), "message": str(cause),
