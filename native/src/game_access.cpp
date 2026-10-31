@@ -156,11 +156,11 @@ void __fastcall GameAccess::hooked_tick(void* loop) {
     if(count<2)diagnostic("tick_pump_return");
 }
 json GameAccess::status() const {
-    return {{"version","1.0.0-dev.9"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.10"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&ticks_.load()>0},
             {"build_hash",kHash},{"startup_error",startup_error_},
             {"process_id",GetCurrentProcessId()},
-            {"operations",{"status","enable_game","objects","properties","functions","invoke",
+            {"operations",{"status","enable_game","objects","properties","functions","invoke","read_array","read_struct",
                            "snapshot","watch_start","watch_read","watch_stop","watch_forget"}},
             {"snapshot_limits",{{"objects",16},{"properties_per_object",32},{"scan_fields_per_object",4096},
                                 {"property_value_bytes",16384},{"object_path_bytes",8192},
@@ -856,7 +856,7 @@ json GameAccess::execute(const json& request) {
     if(op=="watch_read")return observations_.read(session,params);
     if(op=="watch_stop")return observations_.stop(session,params,now,ticks_.load());
     if(op=="watch_forget")return observations_.forget(session,params);
-    if(op!="objects" && op!="properties" && op!="functions" && op!="invoke")throw HandlerError("unknown_operation","Операция не поддержана");
+    if(op!="objects" && op!="properties" && op!="functions" && op!="invoke" && op!="read_array" && op!="read_struct")throw HandlerError("unknown_operation","Операция не поддержана");
     if(op=="objects") {
         auto query=params.value("query",std::string{}),class_query=params.value("class_query",std::string{});int limit=limit_of(params);if(query.size()>256||class_query.size()>256)throw HandlerError("invalid_query","Запрос слишком длинный");
         if(params.contains("exact_path") && !params.at("exact_path").is_string())
@@ -884,7 +884,13 @@ json GameAccess::execute(const json& request) {
         }
         return {{"items",items},{"total_slots",count},{"scanned_slots",scanned},{"skipped",skipped},{"truncated",scanned<count},{"thread_id",GetCurrentThreadId()}};
     }
+    if(op=="read_array")return read_array(params);
     auto object=resolve(params.at("handle").get<std::string>());
+    if(op=="read_struct") {
+        if(!params.contains("property_name") || !params.at("property_name").is_string())
+            throw HandlerError("invalid_struct_params","Требуется строковое имя свойства");
+        return read_struct(object,params.at("handle").get<std::string>(),params.at("property_name").get<std::string>());
+    }
     if(op=="properties")return properties(object,limit_of(params));
     if(op=="functions") {
         if(params.contains("function_query") && !params.at("function_query").is_string())

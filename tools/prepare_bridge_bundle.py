@@ -33,12 +33,15 @@ TOOLS = (
     "probe_native_route.py", "probe_live_mcp.py", "probe_object_mcp.py", "probe_class_mcp.py",
     "probe_name_mcp.py", "probe_metadata_mcp.py", "probe_development_mcp.py", "probe_cleanup.py", "prepare_bridge_bundle.py",
     "prepare_enum_probe.py", "probe_enum_mcp.py", "export_script_package.py",
+    "prepare_lifecycle_probe.py", "probe_lifecycle_mcp.py", "prepare_pod_read_probe.py",
+    "probe_array_mcp.py", "probe_struct_mcp.py",
 )
-FIXTURE_DIRS = ("angelscript_probe", "object_probe", "class_probe", "name_probe", "patch_probe", "enum_probe")
+FIXTURE_DIRS = ("angelscript_probe", "object_probe", "class_probe", "name_probe", "patch_probe", "enum_probe", "lifecycle_probe", "pod_read_probe")
 SOURCE_FILES = ("__init__.py", "server.py", "native_client.py", "development.py", "packages.py", "patches.py", "sources.py", "workspace.py", "snapshots.py")
 FIXTURE_SCRIPTS = {"angelscript_probe": "G1RMCPProbe.as", "object_probe": "G1RMCPObjectProbe.as",
                    "class_probe": "G1RMCPClassProbe.as", "name_probe": "G1RMCPNameProbe.as", "patch_probe": "G1RMCPPatchProbe.as",
-                   "enum_probe": "G1RMCPEnumProbe.as"}
+                   "enum_probe": "G1RMCPEnumProbe.as", "lifecycle_probe": "G1RMCPLifecycleProbe.as",
+                   "pod_read_probe": "G1RMCPPODReadProbe.as"}
 DOCUMENTS = ("README.md", "pyproject.toml", "uv.lock")
 BINARIES = ("build/native/Release/G1R_MCP.dll", "build/native/Release/g1r_mcp_loader.exe")
 

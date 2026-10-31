@@ -21,6 +21,7 @@ MAX_FILES = 100_000
 MAX_QUERY_CHARS = 512
 MAX_READ_BYTES = 64 * 1024
 MAX_EXACT_READ_BYTES = 1024 * 1024
+MAX_MATCH_OFFSET = 1_000_000
 
 
 class SourceError(Exception):
@@ -29,6 +30,21 @@ class SourceError(Exception):
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
+
+
+def _offset(value: int) -> int:
+    if type(value) is not int or not 0 <= value <= MAX_MATCH_OFFSET:
+        raise SourceError("invalid_arguments", "Смещение должно быть целым числом от 0 до 1000000")
+    return value
+
+
+def _page(total: int, offset: int, returned: int) -> dict:
+    next_index = offset + returned
+    has_more = next_index < total
+    limited = has_more and next_index > MAX_MATCH_OFFSET
+    return {"offset": offset, "next_offset": next_index if has_more and not limited else None,
+            "has_more": has_more, "pagination_limit_reached": limited,
+            "max_offset": MAX_MATCH_OFFSET}
 
 
 @dataclass(frozen=True)
@@ -226,22 +242,24 @@ class SourceCatalog:
     def _item(file: SourceFile, **values) -> dict:
         return {"path": file.relative, "root_kind": file.root_kind, **values}
 
-    def search_files(self, query: str, limit: int = 50) -> dict:
+    def search_files(self, query: str, limit: int = 50, offset: int = 0) -> dict:
         needle = _query(query).casefold()
         _limit(limit)
+        _offset(offset)
         files = self._files()
         total = 0
         items = []
         for file in files:
             if needle in file.relative.casefold():
                 total += 1
-                if len(items) < limit:
+                if total > offset and len(items) < limit:
                     items.append(self._item(file))
-        return self._result(items, total, len(files))
+        return self._result(items, total, len(files), **_page(total, offset, len(items)))
 
-    def search_text(self, query: str, limit: int = 50, case_sensitive: bool = False) -> dict:
+    def search_text(self, query: str, limit: int = 50, case_sensitive: bool = False, offset: int = 0) -> dict:
         query = _query(query)
         _limit(limit)
+        _offset(offset)
         if not isinstance(case_sensitive, bool):
             raise SourceError("invalid_arguments", "Параметр регистра должен быть логическим значением")
         needle = query if case_sensitive else query.casefold()
@@ -260,9 +278,9 @@ class SourceCatalog:
             for line_number, line in enumerate(text.splitlines(), 1):
                 if needle in (line if case_sensitive else line.casefold()):
                     total += 1
-                    if len(items) < limit:
+                    if total > offset and len(items) < limit:
                         items.append(self._item(file, line=line_number, text=line[:4096], text_truncated=len(line) > 4096))
-        return self._scan_result(items, total, files, skipped, query_kind="literal")
+        return self._scan_result(items, total, files, skipped, query_kind="literal", **_page(total, offset, len(items)))
 
     def _source_file(self, relative_path: str) -> SourceFile:
         if (not isinstance(relative_path, str) or not relative_path or "\\" in relative_path
@@ -335,9 +353,10 @@ class SourceCatalog:
                           content_truncated=byte_truncated or start_line > 1 or start_line - 1 + line_count < len(lines))
         return self._result([item], 1, 1, **item)
 
-    def list_types(self, query: str = "", limit: int = 50) -> dict:
+    def list_types(self, query: str = "", limit: int = 50, offset: int = 0) -> dict:
         needle = _query(query, empty=True).casefold()
         _limit(limit)
+        _offset(offset)
         files = self._files()
         items = []
         total = 0
@@ -353,7 +372,8 @@ class SourceCatalog:
             for declaration in _types(text):
                 if needle in declaration["qualified_name"].casefold():
                     total += 1
-                    if len(items) < limit:
+                    if total > offset and len(items) < limit:
                         items.append(self._item(file, **declaration))
         return self._scan_result(items, total, files, skipped, parser_kind="lexical",
-                            limitations=["Неполный лексический индекс, не AST компилятора", "Native bindings не включены", "Вызовы в игре не проверены"])
+                            limitations=["Неполный лексический индекс, не AST компилятора", "Native bindings не включены", "Вызовы в игре не проверены"],
+                            **_page(total, offset, len(items)))

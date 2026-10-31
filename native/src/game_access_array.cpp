@@ -1,0 +1,172 @@
+#include "g1r_mcp/game_access.hpp"
+#include "g1r_mcp/game_memory.hpp"
+#include "g1r_mcp/array_page.hpp"
+#include "g1r_mcp/scalar_arguments.hpp"
+#include <array>
+#include <limits>
+#include <set>
+
+namespace g1r_mcp {
+using json=nlohmann::json;
+using game_memory::read;
+
+json GameAccess::read_array(const json& params) {
+    if(!params.is_object() || !params.contains("handle") || !params.at("handle").is_string()
+       || !params.contains("property_name") || !params.at("property_name").is_string())
+        throw HandlerError("invalid_array_params","Требуются строковые handle и property_name");
+    const auto handle=params.at("handle").get<std::string>();
+    const auto property_name=params.at("property_name").get<std::string>();
+    if(handle.empty() || handle.size()>80 || handle.find('\0')!=std::string::npos
+       || property_name.empty() || property_name.size()>256 || property_name.find('\0')!=std::string::npos)
+        throw HandlerError("invalid_array_params","Неверные длина или содержимое handle/property_name");
+    auto integer=[&](const char* key,int default_value,int minimum,int maximum) {
+        if(!params.contains(key))return default_value;
+        const auto& value=params.at(key);
+        if(!value.is_number_integer()
+           || (!value.is_number_unsigned() && value.get<int64_t>()<minimum)
+           || value.get<uint64_t>()<static_cast<uint64_t>(minimum)
+           || value.get<uint64_t>()>static_cast<uint64_t>(maximum))
+            throw HandlerError("invalid_array_params","offset/limit требуют целое число в допустимом диапазоне");
+        return static_cast<int>(value.get<uint64_t>());
+    };
+    const auto offset=integer("offset",0,0,MaxArrayElements);
+    const auto limit=integer("limit",64,1,200);
+    auto object=resolve(handle);
+    const auto initial=validate_object(object);
+    struct Metadata {
+        uintptr_t field{},owner{},field_class{},inner{},inner_class{};
+        uint64_t field_name{},inner_name{},flags{},inner_flags{};
+        int offset{},size{},dim{},owner_size{},stride{},inner_dim{},inner_offset{};
+        uint8_t array_flags{};
+        std::string element_type;
+        std::vector<uint64_t> auxiliary;
+        Handle owner_identity;
+    };
+    auto capture=[&]() {
+        Metadata result;
+        auto klass=reinterpret_cast<uintptr_t>(validate_object(object).object_class);
+        std::set<uintptr_t> classes,fields;int scanned=0;
+        for(int depth=0;klass && !result.field;klass=read<uintptr_t>(klass+0x40),++depth) {
+            if(depth>=64 || !classes.insert(klass).second)
+                throw HandlerError("array_scan_incomplete","Цепочка классов массива не завершена в пределах 64");
+            validate_class(reinterpret_cast<void*>(klass));
+            for(auto field=read<uintptr_t>(klass+0x50);field;field=read<uintptr_t>(field+0x18)) {
+                if(++scanned>4096 || !fields.insert(field).second)
+                    throw HandlerError("array_scan_incomplete","Список свойств массива не завершён в пределах 4096");
+                if(name(read<uint64_t>(field+0x20))==property_name){result.field=field;result.owner=klass;break;}
+            }
+        }
+        if(!result.field)throw HandlerError("property_not_found","Свойство массива не найдено");
+        result.owner_identity=validate_object(reinterpret_cast<void*>(result.owner));
+        result.field_name=read<uint64_t>(result.field+0x20);result.field_class=read<uintptr_t>(result.field+8);
+        if(game_memory::field_type(result.field,[this](uint64_t value){return name(value);})!="ArrayProperty")
+            throw HandlerError("unsupported_array_type","Выбранное свойство не является точным ArrayProperty");
+        result.offset=read<int32_t>(result.field+0x44);result.size=read<int32_t>(result.field+0x34);
+        result.dim=read<int32_t>(result.field+0x30);result.owner_size=read<int32_t>(result.owner+0x58);
+        result.flags=read<uint64_t>(result.field+0x38);result.array_flags=read<uint8_t>(result.field+0x70);
+        if(result.dim!=1 || result.size!=16 || result.offset<0 || result.owner_size<16
+           || result.offset>result.owner_size-16)
+            throw HandlerError("unsupported_array_layout","Массив требует подтверждённый заголовок 16 байт внутри объекта");
+        result.inner=read<uintptr_t>(result.field+0x78);
+        if(!result.inner)throw HandlerError("unsupported_array_layout","Inner массива отсутствует");
+        result.inner_name=read<uint64_t>(result.inner+0x20);result.inner_class=read<uintptr_t>(result.inner+8);
+        result.stride=read<int32_t>(result.inner+0x34);result.inner_dim=read<int32_t>(result.inner+0x30);
+        result.inner_offset=read<int32_t>(result.inner+0x44);result.inner_flags=read<uint64_t>(result.inner+0x38);
+        result.element_type=game_memory::field_type(result.inner,[this](uint64_t value){return name(value);});
+        const auto& type=result.element_type;
+        const bool supported=(type=="IntProperty" && result.stride==4)
+            || (type=="Int64Property" && result.stride==8)
+            || (type=="UInt32Property" && result.stride==4)
+            || (type=="UInt64Property" && result.stride==8)
+            || (type=="FloatProperty" && result.stride==4)
+            || (type=="DoubleProperty" && result.stride==8)
+            || (type=="ByteProperty" && result.stride==1)
+            || (type=="NameProperty" && result.stride==8)
+            || (type=="ObjectProperty" && result.stride==8)
+            || (type=="ClassProperty" && result.stride==8)
+            || type=="BoolProperty" || type=="EnumProperty";
+        if(!supported || result.inner_dim!=1)
+            throw HandlerError("unsupported_array_element","Тип или ArrayDim элемента массива пока не поддержан");
+        if(type=="BoolProperty") {
+            const auto byte_offset=read<uint8_t>(result.inner+0x71),mask=read<uint8_t>(result.inner+0x73);
+            validate_bool_layout(result.stride,byte_offset,mask);
+            result.auxiliary={byte_offset,mask};
+        } else if(type=="ObjectProperty" || type=="ClassProperty") {
+            result.auxiliary={read<uintptr_t>(result.inner+0x70)};
+            validate_class(reinterpret_cast<void*>(result.auxiliary[0]));
+            if(type=="ClassProperty") {
+                result.auxiliary.push_back(read<uintptr_t>(result.inner+0x78));
+                validate_class(reinterpret_cast<void*>(result.auxiliary[1]));
+            }
+        } else if(type=="EnumProperty" || type=="ByteProperty") {
+            const auto layout=enum_layout(type,result.stride,result.inner);
+            result.auxiliary={reinterpret_cast<uintptr_t>(layout.object)};
+            if(type=="EnumProperty") {
+                const auto underlying=read<uintptr_t>(result.inner+0x70);
+                result.auxiliary.push_back(underlying);
+                result.auxiliary.push_back(read<uintptr_t>(underlying+8));
+                result.auxiliary.push_back(read<uint64_t>(read<uintptr_t>(underlying+8)));
+                result.auxiliary.push_back(read<int32_t>(underlying+0x34));
+                result.auxiliary.push_back(read<int32_t>(underlying+0x30));
+            }
+        }
+        return result;
+    };
+    const auto metadata=capture();
+    const auto object_address=reinterpret_cast<uintptr_t>(object);
+    if(object_address>std::numeric_limits<uintptr_t>::max()-static_cast<uintptr_t>(metadata.offset)-16)
+        throw HandlerError("invalid_array_header","Адрес заголовка массива переполнен");
+    const auto header_address=object_address+metadata.offset;
+    const auto header=read<ArrayHeader>(header_address);
+    const auto page=array_page(header,metadata.stride,metadata.inner_dim,offset,limit);
+    std::vector<std::byte> copied(page.bytes);
+    if(page.bytes && !game_memory::copy(copied.data(),reinterpret_cast<void*>(page.begin),page.bytes))
+        throw HandlerError("invalid_memory","Страница массива недоступна");
+    auto revalidate=[&]() {
+        const auto after=capture();
+        if(!same_serial_identity(serial_identity(initial),serial_identity(validate_object(object)))
+           || !same_serial_identity(serial_identity(metadata.owner_identity),serial_identity(after.owner_identity))
+           || !same_array_header(header,read<ArrayHeader>(header_address))
+           || metadata.field!=after.field || metadata.owner!=after.owner || metadata.field_class!=after.field_class
+           || metadata.inner!=after.inner || metadata.inner_class!=after.inner_class
+           || metadata.field_name!=after.field_name || metadata.inner_name!=after.inner_name
+           || metadata.flags!=after.flags || metadata.inner_flags!=after.inner_flags
+           || metadata.offset!=after.offset || metadata.size!=after.size || metadata.dim!=after.dim
+           || metadata.owner_size!=after.owner_size || metadata.stride!=after.stride
+           || metadata.inner_dim!=after.inner_dim || metadata.inner_offset!=after.inner_offset
+           || metadata.array_flags!=after.array_flags || metadata.element_type!=after.element_type
+           || metadata.auxiliary!=after.auxiliary)
+            throw HandlerError("array_changed","Объект, заголовок или раскладка массива изменились при чтении");
+        resolve(handle);
+    };
+    revalidate();
+    json items=json::array();bool partial=false;
+    for(int index=0;index<page.count;++index) {
+        json item={{"index",page.offset+index},{"supported",false}};
+        try {
+            const auto address=reinterpret_cast<uintptr_t>(copied.data()+static_cast<size_t>(index)*metadata.stride);
+            json value;
+            if(metadata.element_type=="EnumProperty" || metadata.element_type=="ByteProperty") {
+                const auto result=enum_property(address,metadata.element_type,metadata.stride,metadata.inner);
+                value=result.at("value");if(result.contains("enum"))item["enum"]=result.at("enum");
+            } else value=property_value(address,metadata.element_type,metadata.stride,metadata.inner);
+            if(value.is_null() && metadata.element_type!="ObjectProperty" && metadata.element_type!="ClassProperty")
+                throw HandlerError("unsupported_array_value","Значение элемента не поддержано");
+            if(value.dump().size()>16384)
+                throw HandlerError("array_value_too_large","Значение элемента превышает 16 КиБ");
+            item["value"]=std::move(value);item["supported"]=true;
+        } catch(const HandlerError& error) {
+            item["error"]={{"code",error.code()},{"message",error.what()}};partial=true;
+        }
+        items.push_back(std::move(item));
+    }
+    revalidate();
+    return {{"source","live_native"},{"session_id",handle_session_},{"process_id",GetCurrentProcessId()},
+        {"thread_id",GetCurrentThreadId()},{"tick_count",ticks_.load()},{"handle",handle},
+        {"property_name",property_name},{"element_type",metadata.element_type},{"element_size",metadata.stride},
+        {"array_dim",metadata.inner_dim},{"total_count",header.count},{"offset",page.offset},
+        {"next_offset",page.has_more?json(page.next_offset):json(nullptr)},{"has_more",page.has_more},
+        {"truncated",page.has_more},{"consistency","single_tick_sequential"},{"partial",partial},{"items",items}};
+}
+
+} // namespace g1r_mcp

@@ -47,6 +47,8 @@ NATIVE_TOOLS = (
     ("g1r_native_enable", "Включить очередь игрового Tick в уже загруженной DLL"),
     ("g1r_find_objects", "Поиск объектов текущего процесса игры"),
     ("g1r_object_properties", "Чтение отражённых скалярных свойств"),
+    ("g1r_read_array", "Ограниченное чтение страницы отражённого массива"),
+    ("g1r_read_struct", "Чтение трёх отражённых числовых компонентов структуры"),
     ("g1r_object_functions", "Список отражённых функций объекта"),
     ("g1r_invoke", "Один явный вызов отражённой функции"),
     ("g1r_snapshot", "Скопировать выбранные свойства объектов на одном Tick"),
@@ -208,18 +210,18 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
         }
 
     @server.tool(annotations=read_only)
-    def g1r_find_source_files(query: str, limit: int = 50) -> dict[str, Any]:
-        """Найти относительные пути .as в Script и примерах официального Modkit."""
+    def g1r_find_source_files(query: str, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        """Найти страницу относительных .as путей; продолжение через next_offset без атомарного снимка."""
         try:
-            return sources.search_files(query, limit)
+            return sources.search_files(query, limit, offset)
         except SourceError as error:
             raise _tool_failure(error) from None
 
     @server.tool(annotations=read_only)
-    def g1r_search_source(query: str, limit: int = 50, case_sensitive: bool = False) -> dict[str, Any]:
+    def g1r_search_source(query: str, limit: int = 50, case_sensitive: bool = False, offset: int = 0) -> dict[str, Any]:
         """Искать буквальный текст в официальных .as; вернуть ограниченные строки со ссылками."""
         try:
-            return sources.search_text(query, limit, case_sensitive=case_sensitive)
+            return sources.search_text(query, limit, case_sensitive=case_sensitive, offset=offset)
         except SourceError as error:
             raise _tool_failure(error) from None
 
@@ -232,10 +234,10 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             raise _tool_failure(error) from None
 
     @server.tool(annotations=read_only)
-    def g1r_list_source_types(query: str = "", limit: int = 50) -> dict[str, Any]:
+    def g1r_list_source_types(query: str = "", limit: int = 50, offset: int = 0) -> dict[str, Any]:
         """Найти лексические объявления class/struct/enum; не считать их компиляцией или reflection."""
         try:
-            return sources.list_types(query, limit)
+            return sources.list_types(query, limit, offset)
         except SourceError as error:
             raise _tool_failure(error) from None
 
@@ -393,6 +395,16 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     def g1r_object_properties(handle: str, limit: int = 50) -> dict[str, Any]:
         """Читать поддержанные свойства проверенной ссылки: скаляры, FName/enum и Object/Class-ссылки."""
         return native_request("properties", {"handle": handle, "limit": limit})
+
+    @server.tool(annotations=read_only)
+    def g1r_read_array(handle: str, property_name: str, offset: int = 0, limit: int = 64) -> dict[str, Any]:
+        """Скопировать страницу массива; между страницами нет атомарного снимка."""
+        return native_request("read_array", {"handle": handle, "property_name": property_name, "offset": offset, "limit": limit})
+
+    @server.tool(annotations=read_only)
+    def g1r_read_struct(handle: str, property_name: str) -> dict[str, Any]:
+        """Скопировать XYZ или Pitch/Yaw/Roll по фактической reflection без игровых записей."""
+        return native_request("read_struct", {"handle": handle, "property_name": property_name})
 
     @server.tool(annotations=read_only)
     def g1r_object_functions(handle: str, limit: int = 50, function_query: str = "") -> dict[str, Any]:
