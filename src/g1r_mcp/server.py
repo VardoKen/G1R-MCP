@@ -24,7 +24,7 @@ from .snapshots import SnapshotError, compare_snapshots
 from .development import DevelopmentError, DevelopmentService
 from .patches import PatchError, ScriptPatchBuilder
 from .session_ownership import SessionOwnership
-from .compile_diagnostics import read_report
+from .compile_diagnostics import read_report, read_runtime_report
 
 
 LOCAL_TOOLS = (
@@ -201,9 +201,12 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                 for name, description, effects in WORKSPACE_TOOLS
             ],
             "game_groups": [
+                {"name": "compile_diagnostics", "implemented": True, "available": False,
+                 "reason_code": "requires_live_native_status"},
+            ] + [
                 {"name": group, "implemented": False, "available": False,
                  "reason_code": "confirmed_operation_unavailable"}
-                for group in ("compile_diagnostics", "arbitrary_angelscript")
+                for group in ("arbitrary_angelscript",)
             ],
             "development_tools": {"implemented": True, "availability": "requires_windows_and_configured_game",
                                   "operations": list(DEVELOPMENT_TOOLS),
@@ -216,7 +219,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                               "requires": "explicit_companion_package_and_live_world_instance",
                                               "functions": ["GetHelperVersion", "HasWorld", "GetVisibilityTraceChannel", "TraceImpactPoint"]}},
             "compiler_reports": {"tool": "g1r_compile_diagnostics", "implemented": True,
-                                 "source": "caller_selected_workspace_file", "compiler_api_available": False,
+                                 "source": "native_formatter_or_caller_selected_workspace_file", "compiler_api_available": True,
                                  "absence_of_errors_proves_compile": False},
             "bootstrap": {
                 "game_sequence": [
@@ -516,11 +519,16 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             raise ToolError(json.dumps({"code": error.code, "message": str(error), "outcome_unknown": error.outcome_unknown}, ensure_ascii=False)) from None
 
     @server.tool(annotations=read_only)
-    def g1r_compile_diagnostics(relative_package: str, expected_manifest_sha256: str, report_path: str,
+    def g1r_compile_diagnostics(relative_package: str, expected_manifest_sha256: str, report_path: str | None = None,
                                 enable_ingame_tools: StrictBool = False,
                                 show_script_errors: StrictBool = False) -> dict[str, Any]:
-        """Прочитать UTF-8 .txt/.log из workspace: это предоставленный отчёт, не автоматический compiler API."""
+        """Получить диагностику native-компилятора; report_path выбирает предоставленный UTF-8 отчёт."""
         try:
+            if report_path is None:
+                return read_runtime_report(development_service(), relative_package, expected_manifest_sha256,
+                                           lambda: native_request("compile_diagnostics", {}),
+                                           enable_ingame_tools=enable_ingame_tools,
+                                           show_script_errors=show_script_errors)
             return read_report(development_service(), relative_package, expected_manifest_sha256, report_path,
                                enable_ingame_tools, show_script_errors=show_script_errors)
         except DevelopmentError as error:

@@ -139,6 +139,8 @@ constexpr uintptr_t kNames = 0x9de8d80;
 constexpr uintptr_t kTick = 0x3fbced0;
 constexpr uintptr_t kProcessEvent = 0x13a6ad0;
 constexpr uintptr_t kFree = 0x1081690;
+constexpr uintptr_t kAngelscriptManager = 0xa02fdb8;
+constexpr uintptr_t kFormatDiagnostics = 0x417d2b0;
 constexpr uintptr_t kStringConstruct = 0x10316e0;
 constexpr uintptr_t kObjectArrayRealloc = 0x108f6a0;
 constexpr uint8_t kObjectArrayReallocBytes[]={0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x74,0x24,0x10,0x57,0x48,0x83,0xec,0x20,0x48,
@@ -294,7 +296,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.26"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.27"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
             {"pump",{{"state",!observed?"not_observed":recent?"recent_tick":"tick_stale"},
                      {"last_tick_monotonic_ms",observed?json(observed):json(nullptr)},
@@ -315,7 +317,7 @@ json GameAccess::status() const {
                 {"retained_allocations",object_array_inputs_retained_count_.load()},
                 {"retained_bytes",object_array_inputs_retained_bytes_.load()},
                 {"max_inputs",32},{"max_elements",32},{"max_input_bytes",8192}}},
-            {"operations",{"status","enable_game","objects","properties","functions","invoke","read_array","read_struct",
+            {"operations",{"status","enable_game","compile_diagnostics","objects","properties","functions","invoke","read_array","read_struct",
                            "snapshot","watch_start","watch_read","watch_stop","watch_forget"}},
             {"snapshot_limits",{{"objects",16},{"properties_per_object",32},{"scan_fields_per_object",4096},
                                 {"property_value_bytes",16384},{"object_path_bytes",8192},
@@ -334,8 +336,45 @@ json GameAccess::status() const {
                               {"allocates_serial",false},{"zero_aba_protection",false}}},
             {"limitations",{"Экспериментальная привязка к одному EXE","Нулевые serial не защищают от ABA; появившийся serial отзывает прежнюю ссылку","Одно активное соединение; ссылки и наблюдения принадлежат его сессии","Смена мира не определяет отдельное поколение; проверяется объект перед каждым чтением","Без выгрузки DLL: завершение через закрытие игры"}}};
 }
+json GameAccess::compile_diagnostics() const {
+    if(file_hash()!=kHash)throw HandlerError("exe_hash_mismatch","Диагностика требует подтверждённую сборку игры");
+    const auto image_base=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    const auto manager=read<uintptr_t>(image_base+kAngelscriptManager);
+    if(!manager)throw HandlerError("compile_diagnostics_unavailable","Менеджер AngelScript ещё не создан");
+    auto* compilation_lock=reinterpret_cast<CRITICAL_SECTION*>(manager+0x390);
+    std::string text;
+    EnterCriticalSection(compilation_lock);
+    try {
+        StringHeader header{};
+        using Formatter=StringHeader*(__fastcall*)(void*,StringHeader*);
+        reinterpret_cast<Formatter>(image_base+kFormatDiagnostics)(reinterpret_cast<void*>(manager),&header);
+        text=copied_owned_string_return(header,[](const StringHeader& value) {
+            std::wstring copied(static_cast<size_t>(value.count),L'\0');
+            const auto bytes=static_cast<size_t>(value.count)*sizeof(wchar_t);
+            size_t offset=0;
+            while(offset<bytes) {
+                const auto count=std::min<size_t>(bytes-offset,1048576);
+                if(!copy_memory(reinterpret_cast<std::byte*>(copied.data())+offset,
+                                reinterpret_cast<const void*>(value.data+offset),count))
+                    throw HandlerError("invalid_memory","Текст диагностики недоступен");
+                offset+=count;
+            }
+            if(!copied.empty() && copied.back()==0)copied.pop_back();
+            return utf8(copied.data(),static_cast<int>(copied.size()));
+        },[image_base](uintptr_t data) {
+            return free_string(image_base+kFree,reinterpret_cast<void*>(data));
+        });
+        LeaveCriticalSection(compilation_lock);
+    } catch(...) {
+        LeaveCriticalSection(compilation_lock);
+        throw;
+    }
+    return {{"status","available"},{"source","FAngelscriptManager::FormatDiagnostics"},
+            {"process_id",GetCurrentProcessId()},{"text",std::move(text)}};
+}
 json GameAccess::request(const json& envelope) {
     if(envelope.at("op")=="status") return status();
+    if(envelope.at("op")=="compile_diagnostics") return compile_diagnostics();
     if(!enabled_) throw HandlerError("native_not_ready","Перехват игры не установлен: "+startup_error_);
     auto job=std::make_shared<Job>();job->request=envelope;auto future=job->result.get_future();
     {std::unique_lock lock(queue_mutex_,std::try_to_lock);

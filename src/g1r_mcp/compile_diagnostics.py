@@ -9,13 +9,71 @@ from .workspace import WorkspaceError, _read_bytes, _parts, _checked
 _FILE = r'''(?P<file>"[^"\r\n]+\.as"|'[^'\r\n]+\.as'|[^\r\n]+?\.as)'''
 _ANGEL = re.compile(r"^" + _FILE + r"\s*\((?P<line>\d+)\s*[:,]\s*(?P<column>\d+)\)\s*:\s*(?P<rest>.+)$", re.I)
 _COLON = re.compile(r"^" + _FILE + r":(?P<line>\d+)(?::(?P<column>\d+))?\s*:\s*(?P<rest>.+)$", re.I)
+_HEADER = re.compile(r"^<RichTextBlock\.Bold>(?P<file>.+)</>:$")
+_STYLE = re.compile(r"^\s*<(?P<style>Log\.Error|Log\.Warning|NormalText\.Subdued)>(?P<message>.*)$")
+_POSITION = re.compile(r"^\((?P<line>\d+):(?P<column>\d+)\) (?P<message>[\s\S]*)$")
 
 
 def parse_report(text: str, package_name: str, files: list[dict]) -> dict:
     known = {item["path"]: item["sha256"] for item in files if item["path"].lower().endswith(".as")}
     diagnostics = []
     unparsed = []
-    for raw in text.splitlines():
+    current_file = None
+
+    def append_diagnostic(location, line, column, severity, message):
+        if location and location[0] in ('"', "'") and location[-1] == location[0]:
+            location = location[1:-1]
+        location = location.replace("\\", "/") if location else None
+        # Абсолютный путь не публикуется. Связь определяется полным суффиксом, не basename.
+        options = [path for path in known if location == path
+                   or (location is not None and location.endswith("/" + package_name + "/" + path))]
+        bound = options[0] if len(options) == 1 else None
+        diagnostics.append({"file": bound, "line": line, "column": column,
+                            "severity": severity, "message": message, "message_truncated": False,
+                            "source_sha256": known.get(bound), "package_source_matched": bound is not None,
+                            "stage": "compiler_report"})
+
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        raw = lines[index]
+        index += 1
+        header = _HEADER.fullmatch(raw.strip())
+        if header:
+            current_file = header["file"]
+            continue
+        style = _STYLE.fullmatch(raw)
+        if style:
+            message = style["message"]
+            while not message.endswith("</>") and index < len(lines):
+                message += "\n" + lines[index]
+                index += 1
+            if not message.endswith("</>"):
+                unparsed.append(raw)
+                continue
+            message = message[:-3]
+            position = _POSITION.fullmatch(message)
+            line = column = None
+            if position:
+                try:
+                    line, column = int(position["line"]), int(position["column"])
+                except ValueError:
+                    unparsed.append(raw)
+                    continue
+                message = position["message"]
+            severity = {"Log.Error": "error", "Log.Warning": "warning", "NormalText.Subdued": "info"}[style["style"]]
+            append_diagnostic(current_file, line, column, severity, message)
+            continue
+        if current_file is not None:
+            message = raw.lstrip()
+            position = _POSITION.fullmatch(message)
+            if position and position["message"].startswith("Compiling "):
+                append_diagnostic(current_file, int(position["line"]), int(position["column"]),
+                                  "info", position["message"])
+                continue
+            if message.startswith("Compiling "):
+                append_diagnostic(current_file, None, None, "info", message)
+                continue
         match = _ANGEL.fullmatch(raw.strip()) or _COLON.fullmatch(raw.strip())
         if not match:
             if re.search(r"\b(error|warning|fatal)\b|ошибк", raw, re.I):
@@ -32,21 +90,8 @@ def parse_report(text: str, package_name: str, files: list[dict]) -> dict:
             continue
         rest = match["rest"]
         severity = "error" if re.match(r"(?:error|fatal)\b", rest, re.I) else "warning" if re.match(r"warning\b", rest, re.I) else "unknown"
-        location = match["file"]
-        if location[0] in ('"', "'") and location[-1] == location[0]:
-            location = location[1:-1]
-        location = location.replace("\\", "/")
-        # Абсолютный путь не публикуется. Связь определяется полным суффиксом, не basename.
-        options = [path for path in known if location == path
-                   or location.endswith("/" + package_name + "/" + path)]
-        bound = options[0] if len(options) == 1 else None
         message = re.sub(r"^(?:error|fatal|warning)\s*:\s*", "", rest, flags=re.I)
-        diagnostics.append({"file": bound, "line": line,
-                            "column": column,
-                            "severity": severity, "message": message,
-                            "message_truncated": False,
-                            "source_sha256": known.get(bound), "package_source_matched": bound is not None,
-                            "stage": "compiler_report"})
+        append_diagnostic(match["file"], line, column, severity, message)
     return {"diagnostics": diagnostics, "truncated": False,
             "unparsed_truncated": False,
             "unparsed_error_lines": unparsed, "compiled": False,
@@ -83,3 +128,27 @@ def read_report(service, relative_package: str, expected_manifest_sha256: str,
         raise DevelopmentError("package_changed", "Пакет изменился во время чтения диагностики")
     return {"package_name": before["package_name"], "manifest_sha256": before["manifest_sha256"],
             "report_sha256": hashlib.sha256(raw).hexdigest(), **parse_report(text, before["package_name"], before["files"])}
+
+
+def read_runtime_report(service, relative_package: str, expected_manifest_sha256: str, native_call,
+                        *, enable_ingame_tools: bool = False, show_script_errors: bool = False) -> dict:
+    before = service._manifest(relative_package, enable_ingame_tools=enable_ingame_tools,
+                               show_script_errors=show_script_errors)
+    if not isinstance(expected_manifest_sha256, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_manifest_sha256):
+        raise DevelopmentError("invalid_manifest_hash", "Нужен SHA-256 полного пакета development recipe")
+    if before["manifest_sha256"] != expected_manifest_sha256.lower():
+        raise DevelopmentError("package_changed", "Пакет изменился после подготовки рецепта")
+    native_report = native_call()
+    text = native_report["text"]
+    after = service._manifest(relative_package, enable_ingame_tools=enable_ingame_tools,
+                              show_script_errors=show_script_errors)
+    if after["manifest_sha256"] != before["manifest_sha256"]:
+        raise DevelopmentError("package_changed", "Пакет изменился во время чтения диагностики")
+    return {"package_name": before["package_name"], "manifest_sha256": before["manifest_sha256"],
+            "report_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            **parse_report(text, before["package_name"], before["files"]),
+            "text": text, "native_report": native_report, "process_id": native_report.get("process_id"),
+            "source": native_report.get("source"), "status": native_report.get("status"),
+            "compiler_api_available": True, "report_provenance": "native_compiler_formatter",
+            "source_current_correlation": "unknown", "compiled": False,
+            "report_matches_runtime_compile": False}

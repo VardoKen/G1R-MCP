@@ -30,6 +30,7 @@ public:
     void disconnect(const std::string& session);
 
 private:
+    nlohmann::json compile_diagnostics() const;
     struct Job {
         nlohmann::json request;
         std::promise<nlohmann::json> result;

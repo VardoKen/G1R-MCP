@@ -185,3 +185,74 @@ class CompileDiagnosticsTests(unittest.TestCase):
             self.assertFalse(report["diagnostics"][0]["message_truncated"])
             self.assertFalse(report["compiled"])
             self.assertFalse(report["report_matches_runtime_compile"])
+
+    def test_native_formatter_headers_bind_styled_diagnostics_and_preserve_message_markup(self):
+        # Формат текущего FormatDiagnostics, RVA 0x417d2b0: отдельный bold header,
+        # два пробела, известный style, опциональные координаты и закрывающее </>.
+        files = [{"path": "Script/Проба.as", "sha256": "a" * 64},
+                 {"path": "Script/Other.as", "sha256": "b" * 64}]
+        text = ("Angelscript code failed to compile at engine startup. Please fix the errors and save the script files to proceed.\n\n"
+                "<RichTextBlock.Bold>C:\\workspace\\Probe\\Script\\Проба.as</>:\n"
+                "  <Log.Error>(48:1) No matching symbol 'G1RMCP_CompilerErrorProbe_20261031'</>\n"
+                "  <Log.Warning>(12:3) Type TArray<AActor> contains <Log.Unknown> literal</>\n"
+                "  <NormalText.Subdued>(0:5) Note without a line</>\n"
+                "  Compiling Проба\n"
+                "\n<RichTextBlock.Bold>Script/Other.as</>:\n"
+                "  <Log.Error>Module error without coordinates</>\n"
+                "\n<RichTextBlock.Bold>C:/foreign/OtherPackage/Script/Проба.as</>:\n"
+                "  <Log.Warning>(1:0) Foreign file</>\n")
+        report = parse_report(text, "Probe", files)
+        self.assertEqual([item["file"] for item in report["diagnostics"]],
+                         ["Script/Проба.as"] * 4 + ["Script/Other.as", None])
+        self.assertEqual([item["severity"] for item in report["diagnostics"]],
+                         ["error", "warning", "info", "info", "error", "warning"])
+        self.assertEqual([item["line"] for item in report["diagnostics"]], [48, 12, 0, None, None, 1])
+        self.assertEqual([item["column"] for item in report["diagnostics"]], [1, 3, 5, None, None, 0])
+        self.assertEqual(report["diagnostics"][1]["message"],
+                         "Type TArray<AActor> contains <Log.Unknown> literal")
+        self.assertEqual([item["source_sha256"] for item in report["diagnostics"]],
+                         ["a" * 64] * 4 + ["b" * 64, None])
+        self.assertEqual(report["compilation_state"], "errors_reported")
+        self.assertFalse(report["truncated"])
+        self.assertFalse(report["compiled"])
+        self.assertFalse(report["report_matches_runtime_compile"])
+
+    def test_native_formatter_preserves_full_multiline_message(self):
+        files = [{"path": "Script/Probe.as", "sha256": "a" * 64}]
+        message = "Первое сообщение TArray<AActor>\n  continuation <Unknown.Style> literal\n" + "подробности 🐉 " * 1000
+        text = "<RichTextBlock.Bold>Script/Probe.as</>:\n  <Log.Error>(7:9) " + message + "</>\n"
+        report = parse_report(text, "Probe", files)
+        self.assertEqual(len(report["diagnostics"]), 1)
+        self.assertEqual(report["diagnostics"][0]["message"], message)
+        self.assertEqual(report["diagnostics"][0]["file"], "Script/Probe.as")
+        self.assertEqual(report["diagnostics"][0]["line"], 7)
+        self.assertEqual(report["diagnostics"][0]["column"], 9)
+        self.assertFalse(report["diagnostics"][0]["message_truncated"])
+        self.assertFalse(report["truncated"])
+
+    def test_native_formatter_does_not_assign_later_header_to_earlier_styled_message(self):
+        files = [{"path": "Script/Probe.as", "sha256": "a" * 64}]
+        text = ("  <Log.Error>(2:1) Unbound before header</>\n"
+                "<RichTextBlock.Bold>Script/Probe.as</>:\n"
+                "  <Log.Warning>(3:1) Bound after header</>\n")
+        report = parse_report(text, "Probe", files)
+        self.assertEqual([item["file"] for item in report["diagnostics"]], [None, "Script/Probe.as"])
+        self.assertEqual([item["source_sha256"] for item in report["diagnostics"]], [None, "a" * 64])
+
+    def test_actual_dev27_native_formatter_compiling_context_and_error_coordinates(self):
+        # 31.10.2026, artifacts/dev27-native-diagnostics-result.json:
+        # compiler_diagnostics.text; личный префикс пути заменён изолированным.
+        source_sha256 = "ba36d9f121fb9974a1707fce6dc9aad3aa4781bec9c7a357a75f479478ce297b"
+        files = [{"path": "Script/G1RMCPProbe.as", "sha256": source_sha256}]
+        text = ("\n<RichTextBlock.Bold>C:/isolated/artifacts/compiler-error-startup/G1RMCPProbe/Script/G1RMCPProbe.as</>:\n"
+                "  (7:5) Compiling int UG1RMCPCompileProbe::ReadProbeValue()\n"
+                "    <Log.Error>(9:16) 'G1RMCP_CompilerErrorProbe_20261031' is not declared</>\n")
+        report = parse_report(text, "G1RMCPProbe", files)
+        self.assertEqual(len(report["diagnostics"]), 2)
+        self.assertEqual([item["file"] for item in report["diagnostics"]], ["Script/G1RMCPProbe.as"] * 2)
+        self.assertEqual([item["source_sha256"] for item in report["diagnostics"]], [source_sha256] * 2)
+        self.assertEqual([item["severity"] for item in report["diagnostics"]], ["info", "error"])
+        self.assertEqual([(item["line"], item["column"]) for item in report["diagnostics"]], [(7, 5), (9, 16)])
+        self.assertEqual([item["message"] for item in report["diagnostics"]],
+                         ["Compiling int UG1RMCPCompileProbe::ReadProbeValue()",
+                          "'G1RMCP_CompilerErrorProbe_20261031' is not declared"])
