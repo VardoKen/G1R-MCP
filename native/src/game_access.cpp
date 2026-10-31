@@ -22,6 +22,7 @@
 #include "g1r_mcp/transform_arguments.hpp"
 #include "g1r_mcp/string_arguments.hpp"
 #include "g1r_mcp/string_input_lifetime.hpp"
+#include "g1r_mcp/object_array_input_lifetime.hpp"
 #include <MinHook.h>
 #include <bcrypt.h>
 #include <algorithm>
@@ -115,6 +116,9 @@ constexpr uintptr_t kTick = 0x3fbced0;
 constexpr uintptr_t kProcessEvent = 0x13a6ad0;
 constexpr uintptr_t kFree = 0x1081690;
 constexpr uintptr_t kStringConstruct = 0x10316e0;
+constexpr uintptr_t kObjectArrayRealloc = 0x108f6a0;
+constexpr uint8_t kObjectArrayReallocBytes[]={0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x74,0x24,0x10,0x57,0x48,0x83,0xec,0x20,0x48,
+    0x8b,0xf1,0x41,0x8b,0xd8,0x48,0x8b,0x0d,0x2c,0x16,0xd2,0x08,0x48,0x8b,0xfa,0x48};
 constexpr uint8_t kStringConstructBytes[]={0x48,0x89,0x6c,0x24,0x18,0x56,0x41,0x56,0x41,0x57,0x48,0x83,0xec,0x20,0x45,0x33,
     0xff,0x49,0x63,0xe8,0x4c,0x89,0x39,0x4c,0x8b,0xf2,0x4c,0x89,0x79,0x08,0x48,0x8b};
 constexpr uint8_t kStringFreeBytes[]={0x48,0x85,0xc9,0x74,0x2e,0x53,0x48,0x83,0xec,0x20,0x48,0x8b,0xd9,0x48,0x8b,0x0d,
@@ -145,6 +149,10 @@ bool free_string(uintptr_t free_address, void* memory) {
 }
 bool construct_string(uintptr_t constructor,g1r_mcp::StringHeader* header,const char16_t* text,int units) {
     __try {reinterpret_cast<void(__fastcall*)(g1r_mcp::StringHeader*,const char16_t*,int)>(constructor)(header,text,units);return true;}
+    __except(EXCEPTION_EXECUTE_HANDLER) {return false;}
+}
+bool allocate_object_array(uintptr_t allocator,size_t bytes,void** result) {
+    __try {*result=reinterpret_cast<void*(__fastcall*)(void*,size_t,uint32_t)>(allocator)(nullptr,bytes,8);return true;}
     __except(EXCEPTION_EXECUTE_HANDLER) {return false;}
 }
 std::string utf8(const wchar_t* value, int length) {
@@ -262,7 +270,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.21"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.22"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
             {"pump",{{"state",!observed?"not_observed":recent?"recent_tick":"tick_stale"},
                      {"last_tick_monotonic_ms",observed?json(observed):json(nullptr)},
@@ -278,6 +286,11 @@ json GameAccess::status() const {
                 {"retained_allocations",string_inputs_retained_count_.load()},
                 {"retained_bytes",string_inputs_retained_bytes_.load()},
                 {"max_inputs",32},{"max_utf16_units",32767},{"max_input_bytes",262144}}},
+            {"object_array_inputs",{{"quarantined",object_array_inputs_quarantined_.load()},
+                {"quarantine_cause",object_array_inputs_quarantine_cause_.load()},
+                {"retained_allocations",object_array_inputs_retained_count_.load()},
+                {"retained_bytes",object_array_inputs_retained_bytes_.load()},
+                {"max_inputs",32},{"max_elements",32},{"max_input_bytes",8192}}},
             {"operations",{"status","enable_game","objects","properties","functions","invoke","read_array","read_struct",
                            "snapshot","watch_start","watch_read","watch_stop","watch_forget"}},
             {"snapshot_limits",{{"objects",16},{"properties_per_object",32},{"scan_fields_per_object",4096},
@@ -803,12 +816,12 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
             if(parameter_direction::classify(flags)!=parameter_direction::Direction::output)
                 throw HandlerError("unsupported_signature","Скалярный параметр не является pure out");
             scalar_public=scalar_output_metadata(capture_scalar_output_layout(field,type,size,array_dim));
-        } else if(!returned && type!="StructProperty" && type!="StrProperty" && (flags&(0x100|kReferenceParm)))
+        } else if(!returned && type!="StructProperty" && type!="StrProperty" && type!="ArrayProperty" && (flags&(0x100|kReferenceParm)))
             throw HandlerError("unsupported_signature","Out/ref аргументы этого типа не поддержаны");
         if(returned && supported_scalar_output_type(type) && (flags&(kReferenceParm|kConstParm)))
             throw HandlerError("unsupported_signature","Const/ref скалярный возврат не поддержан");
         bool supported=false;
-        json vector_public=nullptr,transform_public=nullptr;std::string vector_direction;
+        json vector_public=nullptr,transform_public=nullptr,array_public=nullptr;std::string vector_direction;
         if(type=="BoolProperty") {
             const auto byte_offset=read<uint8_t>(field+0x71),mask=read<uint8_t>(field+0x73);
             validate_bool_layout(size,byte_offset,mask);
@@ -848,6 +861,12 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                 throw HandlerError("unsupported_signature","FString требует const reference input");
             if(!returned && !(flags&kConstParm))
                 throw HandlerError("unsupported_signature","FString вход по значению пока не поддержан");
+        }
+        else if(type=="ArrayProperty") {
+            if(returned || !(flags&kConstParm) || vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
+                throw HandlerError("unsupported_signature","Object array поддержан только как const reference input");
+            const auto array=capture_object_array_parameter(field,size,array_dim,flags);
+            captured["aux"]={{"object_array",array}};array_public=array.at("public");supported=true;
         }
         else if(type=="Int64Property" || type=="UInt64Property")supported=size==8;
         else if(type=="UInt32Property")supported=size==4;
@@ -904,6 +923,10 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
             public_parameter["direction"]="input";public_parameter["passing"]="const_reference";
             public_parameter["argument_constraints"]={{"max_utf16_units",32767},{"embedded_nul","rejected"},{"ownership","engine_owned_copy"}};
         }
+        if(!array_public.is_null()) {
+            public_parameter["array"]=array_public;public_parameter["direction"]="input";public_parameter["passing"]="const_reference";
+            public_parameter["argument_constraints"]={{"max_elements",32},{"element_form","null_or_handle"},{"ownership","engine_owned_pointer_copy"}};
+        }
         parameters.push_back(std::move(public_parameter));
         return captured;
     });
@@ -947,6 +970,9 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
             if(vector_snapshot_json(current)!=auxiliary.at("vector"))
                 throw HandlerError("signature_changed","FVector layout изменился при чтении сигнатуры");
             }
+        } else if(type=="ArrayProperty") {
+            const auto current=capture_object_array_parameter(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>(),captured.at("flags").get<uint64_t>());
+            if(current!=auxiliary.at("object_array"))throw HandlerError("signature_changed","Object array metadata изменились при чтении сигнатуры");
         } else if(type=="BoolProperty") {
             if(read<uint8_t>(field+0x70)!=auxiliary.at("field_size").get<uint8_t>()
                || read<uint8_t>(field+0x71)!=auxiliary.at("byte_offset").get<uint8_t>()
@@ -1140,7 +1166,8 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     struct ScalarOutput {uintptr_t field{};int offset{};uint64_t flags{};std::string key;scalar_outputs::Layout layout;};
     std::vector<ScalarOutput> scalar_parameters;
     json pod_function_contract=nullptr;
-    bool contains_vector=false,contains_transform=false,contains_scalar_output=false,contains_string_input=false;
+    bool contains_vector=false,contains_transform=false,contains_scalar_output=false,contains_string_input=false,contains_object_array=false;
+    bool has_string_return=false;
     for(const auto field:parameter_fields) {
         const auto type=field_type(field,[this](auto f){return name(f);});const auto flags=read<uint64_t>(field+0x38);
         if(type=="StructProperty") {
@@ -1149,8 +1176,12 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         }
         if(supported_scalar_output_type(type) && (flags&0x100) && !(flags&0x400))contains_scalar_output=true;
         if(type=="StrProperty" && !(flags&0x400))contains_string_input=true;
+        if(type=="StrProperty" && (flags&0x400))has_string_return=true;
+        if(type=="ArrayProperty")contains_object_array=true;
     }
-    const bool strict_pod_contract=contains_vector || contains_transform || contains_scalar_output || contains_string_input;
+    if(contains_object_array && (contains_string_input || has_string_return))
+        throw HandlerError("unsupported_signature","Object array входы пока не смешиваются с FString входом или возвратом");
+    const bool strict_pod_contract=contains_vector || contains_transform || contains_scalar_output || contains_string_input || contains_object_array;
     if(strict_pod_contract) {
         pod_function_contract=capture_function_contract(object,function_owner,function,target_handle);
         std::vector<std::pair<int,int>> intervals;
@@ -1163,10 +1194,105 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             intervals.emplace_back(offset,offset+size);
         }
     }
+    struct ArrayElement {std::string handle;ObjectSerialIdentity identity{};uintptr_t pointer{};};
+    struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::string key;json metadata;std::vector<ArrayElement> elements;ArrayHeader header{};};
+    std::vector<ObjectArrayInput> array_inputs;
+    object_array_input_lifetime::Ledger array_ledger;
+    bool array_cleanup_done=false,array_release_called=false;
+    object_array_input_lifetime::Cleanup array_cleanup_result{};
+    std::size_t extra_array_count{},extra_array_bytes{};
+    uint32_t array_quarantine_cause{};
+    auto quarantine_arrays=[&](uint32_t cause) {
+        array_ledger.mark_uncertain();object_array_inputs_quarantine_cause_=cause;
+        object_array_inputs_retained_count_=array_ledger.retained_count()+extra_array_count;
+        object_array_inputs_retained_bytes_=array_ledger.retained_bytes()+extra_array_bytes;
+        object_array_inputs_quarantined_=true;
+    };
+    auto release_arrays=[&] {
+        if(array_release_called)return array_cleanup_result;
+        array_release_called=true;
+        array_cleanup_result=array_ledger.release([this](uintptr_t memory){return free_string(base_+kFree,reinterpret_cast<void*>(memory));});
+        const auto& cleanup=array_cleanup_result;
+        array_cleanup_done=cleanup.confirmed;
+        if(!cleanup.confirmed)quarantine_arrays(array_quarantine_cause?array_quarantine_cause:5);
+        return cleanup;
+    };
+    if(contains_object_array) {
+        if(object_array_inputs_quarantined_)throw HandlerError("object_array_input_quarantined","Object array входы заблокированы после неподтверждённой очистки");
+        uint8_t realloc_bytes[sizeof(kObjectArrayReallocBytes)]{},free_bytes[sizeof(kStringFreeBytes)]{};
+        if(!copy_memory(realloc_bytes,reinterpret_cast<void*>(base_+kObjectArrayRealloc),sizeof(realloc_bytes))
+           || !copy_memory(free_bytes,reinterpret_cast<void*>(base_+kFree),sizeof(free_bytes))
+           || std::memcmp(realloc_bytes,kObjectArrayReallocBytes,sizeof(realloc_bytes))
+           || std::memcmp(free_bytes,kStringFreeBytes,sizeof(free_bytes)))
+            throw HandlerError("unsupported_array_allocator","Подписи Realloc или Free объектного массива не совпадают");
+        object_array_input_lifetime::InputBudget budget;
+        array_inputs.reserve(object_array_input_lifetime::max_arrays);
+        for(const auto field:parameter_fields) {
+            const auto flags=read<uint64_t>(field+0x38);
+            if(field_type(field,[this](auto value){return name(value);})!="ArrayProperty")continue;
+            const auto metadata=capture_object_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags);
+            const auto key=name(read<uint64_t>(field+0x20));
+            if(!arguments.contains(key))throw HandlerError("missing_argument","Не задан Object array аргумент "+key);
+            const auto& values=arguments.at(key);
+            if(!values.is_array() || values.size()>object_array_input_lifetime::max_elements)
+                throw HandlerError("invalid_argument","Object array требует JSON-массив не более 32 элементов");
+            budget.add(values.size());
+            ObjectArrayInput input{field,read<int32_t>(field+0x44),flags,key,metadata,{},{}};
+            input.elements.reserve(values.size());
+            const auto declared=reinterpret_cast<void*>(metadata.at("property_class").get<uintptr_t>());
+            for(const auto& value:values) {
+                auto handle=object_argument_handle(value);ArrayElement element{handle,{},0};
+                if(!handle.empty()) {
+                    auto object_value=resolve(handle);
+                    if(!is_compatible_object(object_value,declared))
+                        throw HandlerError("incompatible_object_argument","Элемент массива не соответствует PropertyClass");
+                    element.identity=serial_identity(validate_object(object_value));element.pointer=reinterpret_cast<uintptr_t>(object_value);
+                }
+                input.elements.push_back(std::move(element));
+            }
+            array_inputs.push_back(std::move(input));
+        }
+        require_same_function_contract(pod_function_contract,capture_function_contract(object,function_owner,function,target_handle));
+    }
+    auto validate_array_elements=[&] {
+        for(const auto& input:array_inputs) {
+            const auto declared=reinterpret_cast<void*>(input.metadata.at("property_class").get<uintptr_t>());
+            for(const auto& element:input.elements)if(!element.handle.empty()) {
+                auto current=resolve(element.handle);
+                if(reinterpret_cast<uintptr_t>(current)!=element.pointer
+                   || !same_serial_identity(element.identity,serial_identity(validate_object(current)))
+                   || !is_compatible_object(current,declared))
+                    throw HandlerError("stale_handle","Identity элемента Object array изменилась до вызова");
+            }
+        }
+    };
+    auto validate_array_inputs=[&] {
+        if(!contains_object_array)return;
+        for(size_t index=0;index<array_inputs.size();++index) {
+            const auto& input=array_inputs[index];ArrayHeader current{};
+            if(!copy_memory(&current,buffer+input.offset,sizeof(current))) {
+                array_ledger.mark_uncertain();array_quarantine_cause=3;
+                throw HandlerError("array_lifetime_unknown","Заголовок Object array недоступен");
+            }
+            array_ledger.validate_unchanged_input(index,current);
+            std::array<uintptr_t,object_array_input_lifetime::max_elements> pointers{};
+            if(current.count && !copy_memory(pointers.data(),reinterpret_cast<void*>(current.data),input.elements.size()*sizeof(uintptr_t))) {
+                array_ledger.mark_uncertain();array_quarantine_cause=3;
+                throw HandlerError("array_lifetime_unknown","Байты Object array недоступны");
+            }
+            for(size_t item=0;item<input.elements.size();++item)if(pointers[item]!=input.elements[item].pointer) {
+                array_ledger.mark_uncertain();array_quarantine_cause=3;
+                throw HandlerError("array_lifetime_unknown","Указатели const Object array изменились");
+            }
+        }
+        require_same_function_contract(pod_function_contract,capture_function_contract(object,function_owner,function,target_handle));
+    };
     struct StringInput {uintptr_t field{};int offset{};uint64_t flags{};std::string key;std::u16string source;StringHeader header{};};
     std::vector<StringInput> string_inputs;
     string_input_lifetime::Ledger string_ledger;
     bool string_event_started=false,string_event_completed=false,string_return_registered=false,string_cleanup_done=false;
+    bool string_release_called=false;
+    string_input_lifetime::Cleanup string_cleanup_result{};
     std::size_t extra_retained_count{},extra_retained_bytes{};
     uint32_t string_quarantine_cause{};
     auto quarantine_strings=[&](uint32_t cause) {
@@ -1177,7 +1303,10 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         string_inputs_quarantined_=true;
     };
     auto release_strings=[&] {
-        const auto cleanup=string_ledger.release([this](uintptr_t memory){return free_string(base_+kFree,reinterpret_cast<void*>(memory));});
+        if(string_release_called)return string_cleanup_result;
+        string_release_called=true;
+        string_cleanup_result=string_ledger.release([this](uintptr_t memory){return free_string(base_+kFree,reinterpret_cast<void*>(memory));});
+        const auto& cleanup=string_cleanup_result;
         string_cleanup_done=cleanup.confirmed;
         if(!cleanup.confirmed)quarantine_strings(string_quarantine_cause?string_quarantine_cause:5);
         return cleanup;
@@ -1293,6 +1422,13 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             auto input=std::find_if(string_inputs.begin(),string_inputs.end(),[field](const auto& value){return value.field==field;});
             if(input==string_inputs.end() || input->offset!=offset || input->flags!=flags || size!=16 || offset%8)
                 throw HandlerError("signature_changed","FString вход изменился после предварительной проверки");
+            ++input_count;continue;
+        }
+        if(type=="ArrayProperty") {
+            if(!contains_object_array)throw HandlerError("signature_changed","Object array появился после чтения полной сигнатуры");
+            auto input=std::find_if(array_inputs.begin(),array_inputs.end(),[field](const auto& value){return value.field==field;});
+            if(input==array_inputs.end() || input->offset!=offset || input->flags!=flags || size!=16 || offset%8)
+                throw HandlerError("signature_changed","Object array вход изменился после предварительной проверки");
             ++input_count;continue;
         }
         if(supported_scalar_output_type(type) && (flags&0x100)) {
@@ -1422,6 +1558,33 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         extra_retained_count=extra_retained_bytes=0;string_quarantine_cause=0;input.header=header;
         std::memcpy(buffer+input.offset,&header,sizeof(header));
     }
+    validate_array_elements();
+    for(auto& input:array_inputs) {
+        const auto allocator_contract=capture_function_contract(object,function_owner,function,target_handle);
+        require_same_function_contract(pod_function_contract,allocator_contract);
+        if(expected_token)require_same_function_contract(expected_contract,allocator_contract);
+        const auto count=static_cast<int32_t>(input.elements.size());ArrayHeader header{};
+        if(count) {
+            void* memory{};const auto allocation_bytes=static_cast<size_t>(count)*sizeof(uintptr_t);
+            if(!allocate_object_array(base_+kObjectArrayRealloc,allocation_bytes,&memory)) {
+                array_ledger.mark_uncertain();array_quarantine_cause=1;
+                extra_array_count=1;extra_array_bytes=allocation_bytes;
+                throw HandlerError("array_allocator_fault","Realloc Object array завершился native exception; владение неизвестно");
+            }
+            header={reinterpret_cast<uintptr_t>(memory),count,count};
+            extra_array_count=memory?1:0;extra_array_bytes=allocation_bytes;
+        }
+        array_quarantine_cause=4;array_ledger.add_input(header,input.elements.size());
+        extra_array_count=extra_array_bytes=0;array_quarantine_cause=0;input.header=header;
+        if(count) {
+            std::array<uintptr_t,object_array_input_lifetime::max_elements> pointers{};
+            for(size_t index=0;index<input.elements.size();++index)pointers[index]=input.elements[index].pointer;
+            if(!copy_memory(reinterpret_cast<void*>(header.data),pointers.data(),static_cast<size_t>(count)*sizeof(uintptr_t)))
+                throw HandlerError("invalid_memory","Игровой буфер Object array недоступен для заполнения");
+        }
+        std::memcpy(buffer+input.offset,&header,sizeof(header));
+    }
+    validate_array_elements();validate_array_inputs();
     validate_string_inputs();
     if(expected_token || strict_pod_contract) {
         auto current_class=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);
@@ -1448,6 +1611,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     string_event_started=true;
     if(!call_event(reinterpret_cast<void*>(process_event_),object,reinterpret_cast<void*>(function),buffer)) {
         if(contains_string_input){string_ledger.mark_uncertain();string_quarantine_cause=2;}
+        if(contains_object_array){array_ledger.mark_uncertain();array_quarantine_cause=2;}
         json details={{"executed",false},{"may_have_executed",true},{"do_not_retry",true}};
         if(return_type=="StrProperty") {
             details["cleanup_attempted"]=false;details["cleanup_confirmed"]=false;
@@ -1456,6 +1620,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         throw HandlerError("game_call_fault","Игровой вызов вызвал native exception; эффект неизвестен",std::move(details));
     }
     string_event_completed=true;
+    validate_array_inputs();
     validate_string_inputs();
     json result,return_enum,result_metadata=nullptr,out_parameters=json::object(),out_parameter_metadata=json::object();
     auto decode_vector_outputs=[&] {
@@ -1507,7 +1672,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     };
     auto decode_pod_outputs=[&] {
         auto require_transform_result_contract=[&] {
-        if(!contains_transform && !contains_string_input)return;
+            if(!contains_transform && !contains_string_input && !contains_object_array)return;
             if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(validate_object(object))))
                 throw HandlerError("stale_handle","Цель изменилась при обработке результата Transform вызова");
             require_same_function_contract(pod_function_contract,capture_function_contract(object,function_owner,function,target_handle));
@@ -1577,8 +1742,29 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         if(!cleanup.confirmed)throw HandlerError("game_result_error","Освобождение FString входов не подтверждено; не повторять запрос");
         response["cleanup_confirmed"]=true;response["input_cleanup_confirmed"]=true;
     }
+    if(contains_object_array) {
+        validate_array_inputs();const auto cleanup=release_arrays();
+        if(!cleanup.confirmed)throw HandlerError("game_result_error","Освобождение Object array входов не подтверждено; повтор запрещён");
+        response["cleanup_confirmed"]=true;response["array_input_cleanup_confirmed"]=true;
+    }
     return append_pod_results(std::move(response));
     } catch(const HandlerError& error) {
+        if(contains_object_array) {
+            if(string_event_completed && !array_cleanup_done && !array_ledger.uncertain()) {
+                try{validate_array_inputs();}
+                catch(...) {array_ledger.mark_uncertain();array_quarantine_cause=3;}
+            }
+            const auto cleanup=release_arrays();
+            json details={{"executed",string_event_completed},{"may_have_executed",string_event_started},
+                {"do_not_retry",string_event_started || !cleanup.confirmed},{"cause_code",error.code()},
+                {"cleanup_attempted",cleanup.attempted},{"cleanup_confirmed",cleanup.confirmed},
+                {"array_input_cleanup_confirmed",cleanup.confirmed},{"cleanup_state",cleanup.confirmed?"released":"unknown"},
+                {"object_array_input_quarantined",object_array_inputs_quarantined_.load()}};
+            if(string_event_started || !cleanup.confirmed)
+                throw HandlerError("game_result_error",string_event_completed?"Вызов выполнен; обработка или очистка Object array не завершена":
+                    string_event_started?"Эффект вызова неизвестен; владение Object array не подтверждено":"Вызов не выполнен; владение Object array не подтверждено",std::move(details));
+            throw HandlerError(error.code(),error.what(),std::move(details));
+        }
         if(!contains_string_input)throw;
         if(string_event_completed && !string_cleanup_done && !string_ledger.uncertain()) {
             try{validate_string_inputs();}
@@ -1601,6 +1787,18 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                 string_event_started?"Эффект вызова неизвестен; владение FString не подтверждено":"Вызов не выполнен; владение FString не подтверждено",std::move(details));
         throw HandlerError(error.code(),error.what(),std::move(details));
     } catch(...) {
+        if(contains_object_array) {
+            if(string_event_completed && !array_cleanup_done && !array_ledger.uncertain()) {
+                try{validate_array_inputs();}
+                catch(...) {array_ledger.mark_uncertain();array_quarantine_cause=3;}
+            }
+            const auto cleanup=release_arrays();
+            throw HandlerError("game_result_error","Обработка Object array не завершена; повтор запрещён",
+                {{"executed",string_event_completed},{"may_have_executed",string_event_started},{"do_not_retry",true},
+                 {"cause_code","result_processing_failed"},{"cleanup_attempted",cleanup.attempted},{"cleanup_confirmed",cleanup.confirmed},
+                 {"array_input_cleanup_confirmed",cleanup.confirmed},{"cleanup_state",cleanup.confirmed?"released":"unknown"},
+                 {"object_array_input_quarantined",object_array_inputs_quarantined_.load()}});
+        }
         if(!contains_string_input)throw;
         if(string_event_completed && !string_cleanup_done && !string_ledger.uncertain()) {
             try{validate_string_inputs();}

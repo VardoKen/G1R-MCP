@@ -62,6 +62,11 @@ private:
     std::atomic<std::size_t> string_inputs_retained_count_{0};
     std::atomic<std::size_t> string_inputs_retained_bytes_{0};
     std::atomic<uint32_t> string_inputs_quarantine_cause_{0};
+    // Смена MCP-сессии не снимает карантин собственного буфера массива.
+    std::atomic<bool> object_array_inputs_quarantined_{false};
+    std::atomic<std::size_t> object_array_inputs_retained_count_{0};
+    std::atomic<std::size_t> object_array_inputs_retained_bytes_{0};
+    std::atomic<uint32_t> object_array_inputs_quarantine_cause_{0};
     std::string startup_error_;
     mutable std::mutex queue_mutex_;
     std::deque<std::shared_ptr<Job>> queue_;
@@ -93,6 +98,7 @@ private:
     nlohmann::json read_struct(void* object, const std::string& handle, const std::string& property_name);
     vector_layout::Snapshot capture_vector_parameter(std::uintptr_t field,int size,int dim) const;
     transform_layout::Snapshot capture_transform_parameter(std::uintptr_t field,int size,int dim) const;
+    nlohmann::json capture_object_array_parameter(std::uintptr_t field,int size,int dim,std::uint64_t flags) const;
     struct EnumLayout {std::string underlying_type;int size;void* object;};
     struct EnumTable {Handle identity;std::string path;std::vector<g1r::enum_values::Entry> entries;};
     EnumLayout enum_layout(const std::string& type, int size, uintptr_t field) const;
