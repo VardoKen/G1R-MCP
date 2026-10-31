@@ -224,7 +224,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.17"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.18"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
             {"pump",{{"state",!observed?"not_observed":recent?"recent_tick":"tick_stale"},
                      {"last_tick_monotonic_ms",observed?json(observed):json(nullptr)},
@@ -828,6 +828,7 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
             {"reference",(flags&kReferenceParm)!=0},{"const",(flags&kConstParm)!=0}};
         if(!vector_public.is_null()) {
             public_parameter["struct"]=vector_public;public_parameter["direction"]=vector_direction;
+            if(vector_direction=="input")public_parameter["passing"]=(flags&kConstParm)?"const_reference":"value";
             if(vector_direction=="output")public_parameter["argument_marker"]={{"out",true}};
         }
         if(!scalar_public.is_null()) {

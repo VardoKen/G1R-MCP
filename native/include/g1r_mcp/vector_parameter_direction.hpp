@@ -12,9 +12,13 @@ inline constexpr auto reference_parm = parameter_direction::reference_parm;
 
 using Direction = parameter_direction::Direction;
 
-// Только FVector по значению или чистый FVector out. Const-ref/inout пока
-// запрещены: соответствующий AngelScript-контракт ещё не проверен в игре.
+// Const FVector input подтверждён по форме const T& в reflection: ConstParm
+// задаёт const, ReferenceParm либо OutParm задают ссылку. Для ProcessEvent
+// аргумент остаётся собственным inline POD. Mutable ref/inout запрещены.
 inline Direction classify(std::uint64_t flags) {
+    if((flags & parm) && (flags & const_parm)
+       && (flags & (reference_parm | out_parm)) && !(flags & return_parm))
+        return Direction::input;
     return parameter_direction::classify(flags);
 }
 

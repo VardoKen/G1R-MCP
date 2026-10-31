@@ -41,20 +41,35 @@ int main() {
         require(direction::classify(0x980)==direction::Direction::output,
                 "0x800 не является ReferenceParm и не превращает pure out в inout");
 
+        // Const FVector с Out/ref в reflection остаётся входом. Его значение
+        // читает encode(XYZ), а output-маркер и output decoder не выбираются.
+        for(const auto flags:std::vector<std::uint64_t>{0x182,0x982,0x08000082,0x08000182,
+                                                       0x08000882,0x08000982}) {
+            const auto classified=direction::classify(flags);
+            require(classified==direction::Direction::input,
+                    "Const FVector с Out или Reference должен быть input");
+            require(classified!=direction::Direction::output,
+                    "Const FVector input не должен требовать out-маркер или выдавать out_parameters");
+            rejects("unsupported_signature",[&]{g1r_mcp::parameter_direction::classify(flags);});
+        }
+
         // Возвращаемый FVector обрабатывается другим маршрутом, не input/out.
-        for(const auto flags:std::vector<std::uint64_t>{0x480,0x580,0x400,0x500,0x08000480})
+        // Return нельзя принять за const input даже при наличии Out или Ref.
+        for(const auto flags:std::vector<std::uint64_t>{0x480,0x580,0x400,0x500,0x08000480,
+                                                       0x482,0x582,0x08000482,0x08000582,0x08000d82})
             rejects("unsupported_signature",[&]{direction::classify(flags);});
 
         // Нельзя принять out либо reference без CPF_Parm за аргумент функции.
-        for(const auto flags:std::vector<std::uint64_t>{0,0x100,0x800,0x08000000,0x08000100})
+        for(const auto flags:std::vector<std::uint64_t>{0,0x100,0x800,0x08000000,0x08000100,
+                                                       0x102,0x902,0x08000002,0x08000102})
             rejects("unsupported_signature",[&]{direction::classify(flags);});
 
-        // Реальный ReferenceParm — высокий бит; input ref и inout пока запрещены.
+        // Mutable input ref и inout без ConstParm запрещены.
         for(const auto flags:std::vector<std::uint64_t>{0x08000080,0x08000180,0x08000880,0x08000980})
             rejects("unsupported_signature",[&]{direction::classify(flags);});
 
-        // ConstParm отвергается консервативно, в том числе без ReferenceParm.
-        for(const auto flags:std::vector<std::uint64_t>{0x82,0x182,0x882,0x982,0x08000082,0x08000182})
+        // ConstParm без подтверждающего Out/ref не является новым допустимым ABI.
+        for(const auto flags:std::vector<std::uint64_t>{0x82,0x882})
             rejects("unsupported_signature",[&]{direction::classify(flags);});
 
         const json marker={{"out",true}};
