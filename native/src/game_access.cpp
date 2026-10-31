@@ -25,6 +25,7 @@
 #include "g1r_mcp/object_array_input_lifetime.hpp"
 #include "g1r_mcp/linear_color_layout.hpp"
 #include "g1r_mcp/linear_color_arguments.hpp"
+#include "g1r_mcp/cleanup_once.hpp"
 #include <MinHook.h>
 #include <bcrypt.h>
 #include <algorithm>
@@ -293,7 +294,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.23"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.24"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
             {"pump",{{"state",!observed?"not_observed":recent?"recent_tick":"tick_stale"},
                      {"last_tick_monotonic_ms",observed?json(observed):json(nullptr)},
@@ -1237,8 +1238,8 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::string key;json metadata;std::vector<ArrayElement> elements;ArrayHeader header{};};
     std::vector<ObjectArrayInput> array_inputs;
     object_array_input_lifetime::Ledger array_ledger;
-    bool array_cleanup_done=false,array_release_called=false;
-    object_array_input_lifetime::Cleanup array_cleanup_result{};
+    bool array_cleanup_done=false;
+    CleanupOnce<object_array_input_lifetime::Cleanup> array_cleanup_once;
     std::size_t extra_array_count{},extra_array_bytes{};
     uint32_t array_quarantine_cause{};
     auto quarantine_arrays=[&](uint32_t cause) {
@@ -1248,13 +1249,12 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         object_array_inputs_quarantined_=true;
     };
     auto release_arrays=[&] {
-        if(array_release_called)return array_cleanup_result;
-        array_release_called=true;
-        array_cleanup_result=array_ledger.release([this](uintptr_t memory){return free_string(base_+kFree,reinterpret_cast<void*>(memory));});
-        const auto& cleanup=array_cleanup_result;
-        array_cleanup_done=cleanup.confirmed;
-        if(!cleanup.confirmed)quarantine_arrays(array_quarantine_cause?array_quarantine_cause:5);
-        return cleanup;
+        return array_cleanup_once.run([&]() noexcept -> object_array_input_lifetime::Cleanup {
+            const auto cleanup=array_ledger.release([this](uintptr_t memory){return free_string(base_+kFree,reinterpret_cast<void*>(memory));});
+            array_cleanup_done=cleanup.confirmed;
+            if(!cleanup.confirmed)quarantine_arrays(array_quarantine_cause?array_quarantine_cause:5);
+            return cleanup;
+        });
     };
     if(contains_object_array) {
         if(object_array_inputs_quarantined_)throw HandlerError("object_array_input_quarantined","Object array входы заблокированы после неподтверждённой очистки");
@@ -1330,8 +1330,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     std::vector<StringInput> string_inputs;
     string_input_lifetime::Ledger string_ledger;
     bool string_event_started=false,string_event_completed=false,string_return_registered=false,string_cleanup_done=false;
-    bool string_release_called=false;
-    string_input_lifetime::Cleanup string_cleanup_result{};
+    CleanupOnce<string_input_lifetime::Cleanup> string_cleanup_once;
     std::size_t extra_retained_count{},extra_retained_bytes{};
     uint32_t string_quarantine_cause{};
     auto quarantine_strings=[&](uint32_t cause) {
@@ -1342,13 +1341,12 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         string_inputs_quarantined_=true;
     };
     auto release_strings=[&] {
-        if(string_release_called)return string_cleanup_result;
-        string_release_called=true;
-        string_cleanup_result=string_ledger.release([this](uintptr_t memory){return free_string(base_+kFree,reinterpret_cast<void*>(memory));});
-        const auto& cleanup=string_cleanup_result;
-        string_cleanup_done=cleanup.confirmed;
-        if(!cleanup.confirmed)quarantine_strings(string_quarantine_cause?string_quarantine_cause:5);
-        return cleanup;
+        return string_cleanup_once.run([&]() noexcept -> string_input_lifetime::Cleanup {
+            const auto cleanup=string_ledger.release([this](uintptr_t memory){return free_string(base_+kFree,reinterpret_cast<void*>(memory));});
+            string_cleanup_done=cleanup.confirmed;
+            if(!cleanup.confirmed)quarantine_strings(string_quarantine_cause?string_quarantine_cause:5);
+            return cleanup;
+        });
     };
     if(contains_string_input) {
         if(string_inputs_quarantined_)throw HandlerError("string_input_quarantined","FString входы заблокированы после неподтверждённой очистки");
