@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
+import copy
 import hashlib
 import json
 import os
@@ -15,6 +17,7 @@ from pathlib import Path
 import re
 import subprocess
 import threading
+import uuid
 from typing import Callable
 
 from .packages import PackageError, validate_package
@@ -136,7 +139,8 @@ def _identity(value: object) -> dict:
 class DevelopmentService:
     def __init__(self, *, repository_root: str | Path, workspace_root: str | Path,
                  modkit_root: str | Path, game_root: str | Path,
-                 executor: Executor = execute_command, powershell: str | None = None):
+                 executor: Executor = execute_command, powershell: str | None = None,
+                 process_lease_factory: Callable[[dict], object] | None = None):
         try:
             self.repository = _checked(Path(repository_root), directory=True)
             self.game = _checked(Path(game_root), directory=True)
@@ -149,6 +153,90 @@ class DevelopmentService:
                                           "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
         self.inner_executable = self.game / "G1R" / "Binaries" / "Win64" / "G1R-Win64-Shipping.exe"
         self.bootstrap_executable = self.game / "G1R-Win64-Shipping.exe"
+        self._observation_lock = threading.RLock()
+        self._launch_observation: dict | None = None
+        self._process_lease = None
+        self._process_lease_factory = process_lease_factory
+        self._closed = False
+
+    def close(self) -> None:
+        """Освободить только удерживаемый read-only HANDLE; не завершать игру."""
+        with self._observation_lock:
+            if self._closed:
+                return
+            self._closed = True
+            try:
+                self._close_process_lease()
+            finally:
+                if self._launch_observation is not None:
+                    self._launch_observation["observer_closed"] = True
+                    if self._launch_observation["stage"] != "process_exited":
+                        self._launch_observation.update(stage="observation_closed", outcome_unknown=True)
+
+    def _close_process_lease(self) -> None:
+        lease, self._process_lease = self._process_lease, None
+        if lease is not None:
+            lease.close()
+
+    def _observe_launch(self, processes: list[dict]) -> dict | None:
+        record = self._launch_observation
+        if record is None:
+            return None
+        if self._closed or record.get("stage") == "process_exited":
+            return copy.deepcopy(record)
+        if self._process_lease is None and record["process"] is None and not record.get("capture_attempted"):
+            inner = [item for item in processes if os.path.normcase(item["executable"]) == os.path.normcase(str(self.inner_executable))]
+            if not inner:
+                record.update(stage="launch_unobserved", outcome_unknown=True)
+                return copy.deepcopy(record)
+            identity = inner[0]
+            # Не присваивать запоздалой заявке ранее существовавший процесс.
+            created = datetime.fromisoformat(identity["creation_time"].replace("Z", "+00:00"))
+            requested = datetime.fromisoformat(record["launch_request_started_at"])
+            if created < requested:
+                record.update(stage="capture_unavailable", capture_attempted=True,
+                              observation_error_code="process_predates_launch", outcome_unknown=True)
+                return copy.deepcopy(record)
+            record.update(capture_attempted=True, process=dict(identity), process_observed=True,
+                          process_correlation="first_inner_snapshot_after_launch")
+            try:
+                factory = self._process_lease_factory
+                if factory is None:
+                    from .process_observer import capture_checked_process
+                    factory = capture_checked_process
+                self._process_lease = factory(identity)
+            except Exception as error:
+                record.update(stage="capture_unavailable", outcome_unknown=True,
+                              observation_error_code=getattr(error, "code", "process_observer_unavailable"))
+                return copy.deepcopy(record)
+        if self._process_lease is not None:
+            try:
+                observed = self._process_lease.poll()
+                if not isinstance(observed, dict) or observed.get("process") != record["process"]:
+                    raise ValueError("observer identity mismatch")
+                state = observed.get("state")
+                if state == "running":
+                    record.update(stage="process_running", outcome_unknown=False)
+                elif state == "exited":
+                    exit_code = observed.get("exit_code")
+                    exit_time = observed.get("exit_time")
+                    if type(exit_code) is not int or not 0 <= exit_code <= 0xFFFFFFFF or not isinstance(exit_time, str):
+                        raise ValueError("invalid observer exit result")
+                    record.update(stage="process_exited", exit_code=exit_code, exit_time=exit_time,
+                                  outcome_unknown=False, termination_cause="unknown",
+                                  process_failed=exit_code != 0)
+                    try:
+                        self._close_process_lease()
+                    except Exception as error:
+                        # Не терять уже прочитанный exitcode из-за ошибки освобождения HANDLE.
+                        record["observer_close_error"] = getattr(error, "code", "process_handle_close_failed")
+                else:
+                    record.update(stage="observation_unknown", outcome_unknown=True,
+                                  observation_error_code=observed.get("error_code", "process_observation_failed"))
+            except Exception as error:
+                record.update(stage="observation_unknown", outcome_unknown=True,
+                              observation_error_code=getattr(error, "code", "process_observation_failed"))
+        return copy.deepcopy(record)
 
     def _command(self, script: str, arguments: list[str], *, mutating: bool) -> dict:
         try:
@@ -177,6 +265,10 @@ class DevelopmentService:
         return value
 
     def process_state(self) -> dict:
+        with self._observation_lock:
+            return self._process_state()
+
+    def _process_state(self) -> dict:
         value = self._command("game_process_state.ps1", ["-GameRoot", str(self.game)], mutating=False)
         processes = value.get("processes")
         if not isinstance(processes, list) or len(processes) > 2:
@@ -192,7 +284,8 @@ class DevelopmentService:
             raise DevelopmentError("tool_protocol_error", "Список процессов содержит повторный PID")
         if len({os.path.normcase(item["executable"]) for item in checked}) != len(checked):
             raise DevelopmentError("ambiguous_process", "Обнаружено несколько экземпляров одного игрового EXE")
-        return {"processes": checked, "running": bool(checked), "source": "windows_process_snapshot"}
+        return {"processes": checked, "running": bool(checked), "source": "windows_process_snapshot",
+                "launch_observation": self._observe_launch(checked)}
 
     def _manifest(self, relative_package: str, *, enable_ingame_tools: bool = False) -> dict:
         if type(enable_ingame_tools) is not bool:
@@ -324,6 +417,14 @@ class DevelopmentService:
 
     def start(self, relative_package: str, expected_manifest_sha256: str, *, restart: bool = False,
               expected_process: dict | None = None, enable_ingame_tools: bool = False) -> dict:
+        with self._observation_lock:
+            if self._closed:
+                raise DevelopmentError("service_closed", "Контур наблюдения уже закрыт")
+            return self._start(relative_package, expected_manifest_sha256, restart=restart,
+                               expected_process=expected_process, enable_ingame_tools=enable_ingame_tools)
+
+    def _start(self, relative_package: str, expected_manifest_sha256: str, *, restart: bool = False,
+               expected_process: dict | None = None, enable_ingame_tools: bool = False) -> dict:
         if not isinstance(expected_manifest_sha256, str) or not _SHA.fullmatch(expected_manifest_sha256):
             raise DevelopmentError("invalid_manifest_hash", "Нужен SHA-256 полного пакета из development recipe")
         if type(restart) is not bool:
@@ -344,17 +445,41 @@ class DevelopmentService:
             raise DevelopmentError("game_running", "Для работающей игры нужны restart и точная идентичность процесса")
         elif expected_process is not None:
             raise DevelopmentError("invalid_arguments", "expected_process используется только при restart")
+        try:
+            self._close_process_lease()
+        except Exception:
+            raise DevelopmentError("observer_close_failed", "Старый HANDLE не освобождён; новый запуск не выполнялся") from None
+        if self._launch_observation is not None and self._launch_observation["stage"] != "process_exited":
+            self._launch_observation.update(stage="observation_closed", observer_closed=True, outcome_unknown=True)
+        request_started_at = datetime.now(timezone.utc).isoformat()
         response = self._command("start_g1r_development.ps1", arguments, mutating=True)
         if response.get("state") != "launch_requested" or response.get("package_name") != manifest["package_name"]:
             raise DevelopmentError("tool_protocol_error", "Ответ запуска не подтвердил передачу выбранного пакета Steam",
                                    outcome_unknown=True)
+        self._launch_observation = {"launch_id": str(uuid.uuid4()),
+            "manifest_sha256": manifest["manifest_sha256"], "package_name": manifest["package_name"],
+            "relative_package": manifest["package_path"], "enable_ingame_tools": enable_ingame_tools,
+            "launch_request_started_at": request_started_at,
+            "launch_requested_at": datetime.now(timezone.utc).isoformat(),
+            "stage": "launch_unobserved", "process": None, "process_observed": False,
+            "capture_attempted": False, "exit_code": None, "exit_time": None,
+            "compiler_exit_on_error": True, "compiler_failure_confirmed": False,
+            "compiled_confirmed": False, "runtime_validation": "not_performed",
+            "manifest_provenance": "requested_package_bytes", "outcome_unknown": True}
         return {"state": "launch_requested", "manifest_sha256": manifest["manifest_sha256"],
                 "package_name": manifest["package_name"], "tool_result": response,
                 "enable_ingame_tools": enable_ingame_tools,
                 "compiled": False, "runtime_validation": "not_performed",
-                "game_ready": False, "outcome_unknown": False}
+                "game_ready": False, "outcome_unknown": False,
+                "launch_observation": copy.deepcopy(self._launch_observation)}
 
     def stop(self, expected_process: dict) -> dict:
+        with self._observation_lock:
+            if self._closed:
+                raise DevelopmentError("service_closed", "Контур наблюдения уже закрыт")
+            return self._stop(expected_process)
+
+    def _stop(self, expected_process: dict) -> dict:
         expected = self._expected_process(expected_process, self.process_state(), allow_bootstrap=True)
         response = self._command("stop_g1r_development.ps1", ["-GameRoot", str(self.game),
                                  "-ExpectedPid", str(expected["pid"]),
@@ -366,6 +491,12 @@ class DevelopmentService:
                 "outcome_unknown": False}
 
     def load_native(self, expected_process: dict, expected_dll_sha256: str) -> dict:
+        with self._observation_lock:
+            if self._closed:
+                raise DevelopmentError("service_closed", "Контур наблюдения уже закрыт")
+            return self._load_native(expected_process, expected_dll_sha256)
+
+    def _load_native(self, expected_process: dict, expected_dll_sha256: str) -> dict:
         if not isinstance(expected_dll_sha256, str) or not _SHA.fullmatch(expected_dll_sha256):
             raise DevelopmentError("invalid_dll_hash", "Нужен SHA-256 проверенной DLL")
         expected = self._expected_process(expected_process, self.process_state())

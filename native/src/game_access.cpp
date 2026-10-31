@@ -176,7 +176,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.14"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.15"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
             {"pump",{{"state",!observed?"not_observed":recent?"recent_tick":"tick_stale"},
                      {"last_tick_monotonic_ms",observed?json(observed):json(nullptr)},
@@ -718,8 +718,8 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         else if(type=="DoubleProperty")supported=size==8;
         else if(type=="NameProperty")supported=size==8;
         else if(type=="StrProperty")supported=returned && size==16;
-        else if(type=="Int64Property" || type=="UInt64Property")supported=returned && size==8;
-        else if(type=="UInt32Property")supported=returned && size==4;
+        else if(type=="Int64Property" || type=="UInt64Property")supported=size==8;
+        else if(type=="UInt32Property")supported=size==4;
         else if(type=="ClassProperty" || type=="ObjectProperty") {
             const auto declared=read<uintptr_t>(field+0x70);
             validate_class(reinterpret_cast<void*>(declared));
@@ -997,6 +997,9 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         }
         else if(type=="BoolProperty" && v.is_boolean()){auto bo=read<uint8_t>(field+0x71),mask=read<uint8_t>(field+0x73);validate_bool_layout(size,bo,mask);buffer[offset+bo]=v.get<bool>()?mask:0;}
         else if(type=="IntProperty" && size==4){*reinterpret_cast<int32_t*>(buffer+offset)=int32_argument(v);}
+        else if(type=="Int64Property" && size==8){const auto integer=int64_argument(v);std::memcpy(buffer+offset,&integer,sizeof(integer));}
+        else if(type=="UInt64Property" && size==8){const auto integer=uint64_argument(v);std::memcpy(buffer+offset,&integer,sizeof(integer));}
+        else if(type=="UInt32Property" && size==4){const auto integer=uint32_argument(v);std::memcpy(buffer+offset,&integer,sizeof(integer));}
         else if(type=="FloatProperty" && size==4){*reinterpret_cast<float*>(buffer+offset)=float_argument(v);}
         else if(type=="DoubleProperty" && size==8){*reinterpret_cast<double*>(buffer+offset)=double_argument(v);}
         else if(type=="EnumProperty" || type=="ByteProperty") {

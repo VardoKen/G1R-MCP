@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import sys
 import threading
+from contextlib import asynccontextmanager
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer, Context
@@ -118,8 +119,25 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                                  workspace_root=workspace_root, modkit_root=modkit_root,
                                                  game_root=configured_game_root)
             return development
+
+    @asynccontextmanager
+    async def server_lifespan(_server: MCPServer):
+        """Общие ресурсы закрываются при остановке сервера, а не HTTP-сессии."""
+        try:
+            yield
+        finally:
+            with native_lock:
+                current_native = native
+            with development_lock:
+                current_development = development
+            try:
+                current_native.close()
+            finally:
+                if current_development is not None:
+                    current_development.close()
     server = MCPServer(
         "G1R MCP", version=__version__, log_level="WARNING",
+        lifespan=server_lifespan,
         instructions=(
             "Мост разработки официальных AngelScript-пакетов GothicMod.json; это не UE4SS/Lua. "
             "Начните с g1r_status и g1r_capabilities: они не проверяют живую игру. "

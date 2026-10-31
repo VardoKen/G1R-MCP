@@ -8,8 +8,9 @@ from .workspace import WorkspaceError, _read_bytes, _parts, _checked
 
 MAX_REPORT_BYTES = 1024 * 1024
 MAX_DIAGNOSTICS = 200
-_ANGEL = re.compile(r"^(?P<file>.+?\.as)\s*\((?P<line>\d+)\s*[:,]\s*(?P<column>\d+)\)\s*:\s*(?P<rest>.+)$", re.I)
-_COLON = re.compile(r"^(?P<file>.+?\.as):(?P<line>\d+)(?::(?P<column>\d+))?\s*:\s*(?P<rest>.+)$", re.I)
+_FILE = r'''(?P<file>"[^"\r\n]+\.as"|'[^'\r\n]+\.as'|[^\r\n]+?\.as)'''
+_ANGEL = re.compile(r"^" + _FILE + r"\s*\((?P<line>\d+)\s*[:,]\s*(?P<column>\d+)\)\s*:\s*(?P<rest>.+)$", re.I)
+_COLON = re.compile(r"^" + _FILE + r":(?P<line>\d+)(?::(?P<column>\d+))?\s*:\s*(?P<rest>.+)$", re.I)
 
 
 def parse_report(text: str, package_name: str, files: list[dict]) -> dict:
@@ -17,15 +18,39 @@ def parse_report(text: str, package_name: str, files: list[dict]) -> dict:
     diagnostics = []
     unparsed = []
     matched = 0
+    message_truncated = False
+    unparsed_truncated = False
+
+    def add_unparsed(raw: str) -> None:
+        nonlocal unparsed_truncated
+        if len(unparsed) >= 20:
+            unparsed_truncated = True
+            return
+        if len(raw) > 2048:
+            unparsed_truncated = True
+        unparsed.append(raw[:2048])
+
     for raw in text.splitlines():
         match = _ANGEL.fullmatch(raw.strip()) or _COLON.fullmatch(raw.strip())
         if not match:
             if re.search(r"\b(error|warning|fatal)\b|ошибк", raw, re.I):
-                if len(unparsed) < 20: unparsed.append(raw[:2048])
+                add_unparsed(raw)
+            continue
+        try:
+            line = int(match["line"])
+            column = int(match["column"]) if match["column"] else None
+        except ValueError:
+            add_unparsed(raw)
+            continue
+        if line < 1 or (column is not None and column < 1):
+            add_unparsed(raw)
             continue
         matched += 1
         if len(diagnostics) >= MAX_DIAGNOSTICS: continue
-        location = match["file"].replace("\\", "/")
+        location = match["file"]
+        if location[0] in ('"', "'") and location[-1] == location[0]:
+            location = location[1:-1]
+        location = location.replace("\\", "/")
         # Абсолютный путь не публикуется. Связь определяется полным суффиксом, не basename.
         options = [path for path in known if location == path
                    or location.endswith("/" + package_name + "/" + path)]
@@ -33,12 +58,16 @@ def parse_report(text: str, package_name: str, files: list[dict]) -> dict:
         rest = match["rest"]
         severity = "error" if re.match(r"(?:error|fatal)\b", rest, re.I) else "warning" if re.match(r"warning\b", rest, re.I) else "unknown"
         message = re.sub(r"^(?:error|fatal|warning)\s*:\s*", "", rest, flags=re.I)
-        diagnostics.append({"file": bound, "line": int(match["line"]),
-                            "column": int(match["column"]) if match["column"] else None,
+        entry_truncated = len(message) > 4096
+        message_truncated = message_truncated or entry_truncated
+        diagnostics.append({"file": bound, "line": line,
+                            "column": column,
                             "severity": severity, "message": message[:4096],
+                            "message_truncated": entry_truncated,
                             "source_sha256": known.get(bound), "package_source_matched": bound is not None,
                             "stage": "compiler_report"})
-    return {"diagnostics": diagnostics, "truncated": matched > MAX_DIAGNOSTICS,
+    return {"diagnostics": diagnostics, "truncated": matched > MAX_DIAGNOSTICS or message_truncated or unparsed_truncated,
+            "unparsed_truncated": unparsed_truncated,
             "unparsed_error_lines": unparsed, "compiled": False,
             "compilation_state": "errors_reported" if any(d["severity"] == "error" for d in diagnostics) else "unknown",
             "compiler_api_available": False, "runtime_validation": "not_performed",

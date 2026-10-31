@@ -39,6 +39,8 @@ identities = json.loads(sys.argv[4])
 class FixtureDevelopment:
     def __init__(self):
         self.current = identities[0]
+    def close(self):
+        pass
     def stop(self, expected_process):
         if expected_process['pid'] == 998:
             raise DevelopmentError('operation_timeout', 'Исход остановки неизвестен', outcome_unknown=True)

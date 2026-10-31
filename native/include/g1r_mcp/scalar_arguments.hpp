@@ -36,6 +36,34 @@ inline std::int32_t int32_argument(const nlohmann::json& value) {
     return static_cast<std::int32_t>(integer);
 }
 
+inline std::int64_t int64_argument(const nlohmann::json& value) {
+    if (!value.is_number_integer())
+        throw HandlerError("invalid_argument", "Требуется целый int64 аргумент");
+    if (value.is_number_unsigned()) {
+        const auto integer=value.get<std::uint64_t>();
+        if(integer>static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+            throw HandlerError("invalid_argument", "Аргумент вне int64");
+        return static_cast<std::int64_t>(integer);
+    }
+    return value.get<std::int64_t>();
+}
+
+inline std::uint64_t uint64_argument(const nlohmann::json& value) {
+    if (!value.is_number_integer())
+        throw HandlerError("invalid_argument", "Требуется целый uint64 аргумент");
+    if(value.is_number_unsigned())return value.get<std::uint64_t>();
+    const auto integer=value.get<std::int64_t>();
+    if(integer<0)throw HandlerError("invalid_argument", "Отрицательный аргумент не входит в uint64");
+    return static_cast<std::uint64_t>(integer);
+}
+
+inline std::uint32_t uint32_argument(const nlohmann::json& value) {
+    const auto integer=uint64_argument(value);
+    if(integer>std::numeric_limits<std::uint32_t>::max())
+        throw HandlerError("invalid_argument", "Аргумент вне uint32");
+    return static_cast<std::uint32_t>(integer);
+}
+
 inline double double_argument(const nlohmann::json& value) {
     if (!value.is_number()) throw HandlerError("invalid_argument", "Требуется числовой double аргумент");
     const auto converted = value.get<double>();
