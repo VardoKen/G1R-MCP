@@ -20,7 +20,7 @@ from probe_scalar_out_contract import check_scalar
 from probe_vector_contract import check_parameter_vector_metadata
 
 HOST = "G1RMCPDevelopmentHelpers"
-VERSION = "1.0.0-dev.30"
+VERSION = "1.0.0-dev.31"
 METHODS = ("GetHelperVersion", "HasWorld", "GetVisibilityTraceChannel", "TraceImpactPoint")
 ENUM_PATH = "/Script/Engine.ETraceTypeQuery"
 

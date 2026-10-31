@@ -96,6 +96,16 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                         "type": "FName", "input_shape": {"name": "string"},
                         "source_property_input_shape": {"name_from": {
                             "handle": "session_handle", "property_name": "reflected_property_name"}}})
+                    self.assertEqual(catalog["invoke_returns"]["transform"], {
+                        "type": "FTransform", "return_type": "StructProperty",
+                        "struct_path": "/Script/CoreUObject.Transform", "passing": "value",
+                        "size": 96, "array_dim": 1, "result_shape": "object",
+                        "output_shape": {
+                            "Rotation": {"X": "finite_number", "Y": "finite_number", "Z": "finite_number", "W": "finite_number"},
+                            "Translation": {"X": "finite_number", "Y": "finite_number", "Z": "finite_number"},
+                            "Scale3D": {"X": "finite_number", "Y": "finite_number", "Z": "finite_number"}},
+                        "metadata_field": "result_metadata", "layout_source": "reflected_function_parameter",
+                        "requires_signature_validation": True, "reference_return_supported": False})
                     self.assertEqual(catalog["invoke_returns"]["scalar_struct"], {
                         "return_type": "StructProperty", "result_shape": "object",
                         "field_types": ["BoolProperty", "IntProperty", "Int64Property", "UInt32Property",

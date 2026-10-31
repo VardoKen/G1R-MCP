@@ -96,6 +96,37 @@ int main() {
         const auto later=transform_arguments::encode(canonical,modified);
         require(number(saved,32)==1.25 && number(later,32)==100,"EncodedTransform должен владеть независимой копией");
 
+        for(const auto& source:std::vector<json>{identity,arbitrary,finite}) {
+            const auto encoded=transform_arguments::encode(canonical,source);
+            require(transform_arguments::decode(canonical,encoded.bytes)==source,
+                    "FTransform return сохраняет все десять компонентов известной раскладки");
+        }
+        const auto swapped_encoded=transform_arguments::encode(swapped,arbitrary);
+        require(transform_arguments::decode(swapped,swapped_encoded.bytes)==arbitrary,
+                "Return читает именованные поля по reflection offsets при изменённом порядке метаданных");
+        const auto decoded_zero=transform_arguments::decode(canonical,zero_encoded.bytes);
+        require(std::signbit(decoded_zero["Rotation"]["X"].get<double>()) &&
+                std::signbit(decoded_zero["Translation"]["Y"].get<double>()),
+                "Return сохраняет отрицательный ноль quaternion и вектора");
+        {
+            auto raw=transform_arguments::encode(canonical,identity);
+            const double two=2.0,precise=1.0+std::numeric_limits<double>::epsilon(),tiny=std::numeric_limits<double>::denorm_min();
+            std::memcpy(raw.bytes.data()+24,&two,sizeof(two));
+            std::memcpy(raw.bytes.data()+32,&precise,sizeof(precise));
+            std::memcpy(raw.bytes.data()+80,&tiny,sizeof(tiny));
+            std::fill(raw.bytes.begin()+56,raw.bytes.begin()+64,std::byte{0xff});
+            std::fill(raw.bytes.begin()+88,raw.bytes.end(),std::byte{0xff});
+            const auto before=raw.bytes;
+            const auto decoded=transform_arguments::decode(canonical,raw.bytes);
+            require(decoded["Rotation"]["W"]==2.0 && decoded["Rotation"]["X"]==0.0,
+                    "Сырой конечный quaternion return не проходит проверку нормализации входного аргумента");
+            require(decoded["Translation"]["X"].get<double>()==precise && decoded["Scale3D"]["Z"].get<double>()==tiny,
+                    "Return сохраняет точность double и subnormal без промежуточного float");
+            auto expected=identity;expected["Rotation"]["W"]=two;expected["Translation"]["X"]=precise;expected["Scale3D"]["Z"]=tiny;
+            require(decoded==expected && raw.bytes==before,"Padding с произвольными битами игнорируется, собственная копия остаётся неизменной");
+            raw.bytes.fill(std::byte{});
+            require(decoded==expected,"JSON return владеет независимыми значениями после изменения исходного буфера");
+        }
         for(const char* group:{"Rotation","Translation","Scale3D"}) {
             const std::vector<std::string> keys=std::string(group)=="Rotation"?std::vector<std::string>{"X","Y","Z","W"}:
                 std::vector<std::string>{"X","Y","Z"};

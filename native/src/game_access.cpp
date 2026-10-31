@@ -333,7 +333,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.30"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.31"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
             {"pump",{{"state",!observed?"not_observed":recent?"recent_tick":"tick_stale"},
                      {"last_tick_monotonic_ms",observed?json(observed):json(nullptr)},
@@ -947,8 +947,11 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                 captured["aux"]={{"linear_color",linear_color_snapshot_json(color)}};
                 color_public=linear_color_snapshot_json(color,false);supported=true;
             } else if(structure_path=="/Script/CoreUObject.Transform") {
-                if(vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
-                    throw HandlerError("unsupported_signature","Transform требует вход по значению либо const reference; Out/Return не поддержаны");
+                if(returned) {
+                    if(flags&(kConstParm|kReferenceParm))
+                        throw HandlerError("unsupported_signature","Const/ref возврат Transform не поддержан");
+                } else if(vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
+                    throw HandlerError("unsupported_signature","Transform требует вход по значению либо const reference; Out не поддержан");
                 const auto transform=capture_transform_parameter(field,size,array_dim);
                 if(offset%transform.layout.min_alignment)
                     throw HandlerError("unsupported_transform_layout","Смещение Transform не соответствует отражённому выравниванию");
@@ -1037,9 +1040,9 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
             public_parameter["out_metadata"]=scalar_public;
         }
         if(!transform_public.is_null()) {
-            public_parameter["struct"]=transform_public;public_parameter["direction"]="input";
-            public_parameter["passing"]=(flags&kConstParm)?"const_reference":"value";
-            public_parameter["argument_constraints"]={{"rotation_normalization","required"},{"max_norm_squared_deviation",1e-6},{"normalization","none"}};
+            public_parameter["struct"]=transform_public;public_parameter["direction"]=returned?"return":"input";
+            public_parameter["passing"]=!returned && (flags&kConstParm)?"const_reference":"value";
+            if(!returned)public_parameter["argument_constraints"]={{"rotation_normalization","required"},{"max_norm_squared_deviation",1e-6},{"normalization","none"}};
         }
         if(type=="StrProperty" && !returned) {
             public_parameter["direction"]="input";public_parameter["passing"]="const_reference";
@@ -1311,6 +1314,8 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     std::vector<ColorParameter> color_parameters;
     struct ScalarOutput {uintptr_t field{};int offset{};uint64_t flags{};std::string key;scalar_outputs::Layout layout;};
     std::vector<ScalarOutput> scalar_parameters;
+    struct TransformReturn {uintptr_t field{};int offset{};transform_layout::Snapshot layout;};
+    std::optional<TransformReturn> transform_return;
     std::optional<scalar_struct_values::Snapshot> scalar_struct_return;
     json pod_function_contract=nullptr;
     bool contains_vector=false,contains_transform=false,contains_color=false,contains_scalar_struct=false,contains_scalar_output=false,contains_string_input=false,contains_object_array=false;
@@ -1519,9 +1524,15 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                     if(flags&(kConstParm|kReferenceParm))throw HandlerError("unsupported_signature","Const/ref возврат FLinearColor не поддержан");
                     const auto color=capture_linear_color_parameter(field,size,read<int32_t>(field+0x30));
                     color_parameters.push_back({field,offset,flags,color,true});
-                } else if(structure_path=="/Script/CoreUObject.Transform")
-                    throw HandlerError("unsupported_signature","Возврат Transform пока не поддержан");
-                else if(structure_path=="/Script/CoreUObject.Vector") {
+                } else if(structure_path=="/Script/CoreUObject.Transform") {
+                    if(!contains_transform)throw HandlerError("signature_changed","Transform возврат появился после чтения полной сигнатуры");
+                    if(flags&(kConstParm|kReferenceParm))throw HandlerError("unsupported_signature","Const/ref возврат Transform не поддержан");
+                    const auto transform=capture_transform_parameter(field,size,read<int32_t>(field+0x30));
+                    if(offset%transform.layout.min_alignment
+                       || reinterpret_cast<uintptr_t>(buffer+offset)%static_cast<uintptr_t>(transform.layout.min_alignment))
+                        throw HandlerError("unsupported_transform_layout","Буфер Transform не соответствует отражённому выравниванию");
+                    transform_return=TransformReturn{field,offset,transform};
+                } else if(structure_path=="/Script/CoreUObject.Vector") {
                     if(!contains_vector)throw HandlerError("signature_changed","FVector возврат появился после чтения полной сигнатуры");
                     if(flags&(kReferenceParm|kConstParm))
                         throw HandlerError("unsupported_signature","Const/ref возврат FVector не поддержан");
@@ -1857,6 +1868,21 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             result_metadata=linear_color_snapshot_json(color.layout,false);
         }
     };
+    auto decode_transform_return=[&] {
+        if(!transform_return)return;
+        const auto& saved=*transform_return;
+        if(read<int32_t>(saved.field+0x44)!=saved.offset
+           || !(capture_transform_parameter(saved.field,96,1)==saved.layout))
+            throw HandlerError("signature_changed","Transform возврат изменился после вызова");
+        std::array<std::byte,96> copied{};
+        if(!copy_memory(copied.data(),buffer+saved.offset,copied.size()))
+            throw HandlerError("invalid_struct_copy","Transform результат не скопирован");
+        const auto value=transform_arguments::decode(saved.layout.layout,copied);
+        if(read<int32_t>(saved.field+0x44)!=saved.offset
+           || !(capture_transform_parameter(saved.field,96,1)==saved.layout))
+            throw HandlerError("signature_changed","Transform metadata изменились при копировании результата");
+        result=value;result_metadata=transform_snapshot_json(saved.layout,false);
+    };
     auto decode_scalar_outputs=[&] {
         if(scalar_parameters.empty())return;
         if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(validate_object(object))))
@@ -1905,7 +1931,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             require_same_function_contract(pod_function_contract,capture_function_contract(object,function_owner,function,target_handle));
         };
         require_transform_result_contract();
-        decode_vector_outputs();decode_color_outputs();decode_scalar_outputs();decode_scalar_struct_return();
+        decode_vector_outputs();decode_color_outputs();decode_transform_return();decode_scalar_outputs();decode_scalar_struct_return();
         require_transform_result_contract();
     };
     auto append_pod_results=[&](json response) {

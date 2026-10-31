@@ -8,7 +8,9 @@
 #include <cstddef>
 #include <cstring>
 #include <initializer_list>
+#include <span>
 #include <string>
+#include <utility>
 
 namespace g1r_mcp::transform_arguments {
 
@@ -69,6 +71,23 @@ inline EncodedTransform encode(const transform_layout::Layout& layout,
     std::memcpy(result.bytes.data()+64,scale.bytes.data(),scale.size);
     // Padding 56..63 и 88..95 остаётся нулевым; значения quaternion не изменяются.
     return result;
+}
+
+inline nlohmann::json decode(const transform_layout::Layout& layout,std::span<const std::byte> bytes) {
+    transform_layout::validate_layout(layout);
+    if(bytes.size()!=static_cast<std::size_t>(layout.properties_size))
+        throw HandlerError("invalid_struct_copy","Размер копии Transform не совпадает с отражённой раскладкой");
+    auto rotation=nlohmann::json::object();
+    for(const auto& component:layout.rotation.components) {
+        double value{};
+        std::memcpy(&value,bytes.data()+component.offset,sizeof(value));
+        if(!std::isfinite(value))
+            throw HandlerError("invalid_struct_value","Компонент quaternion не является конечным числом");
+        rotation[component.name]=value;
+    }
+    return {{"Rotation",std::move(rotation)},
+        {"Translation",vector_arguments::decode(layout.translation,bytes.subspan(32,24))},
+        {"Scale3D",vector_arguments::decode(layout.scale3d,bytes.subspan(64,24))}};
 }
 
 } // namespace g1r_mcp::transform_arguments
