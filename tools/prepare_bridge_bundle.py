@@ -35,13 +35,14 @@ TOOLS = (
     "prepare_enum_probe.py", "probe_enum_mcp.py", "export_script_package.py",
     "prepare_lifecycle_probe.py", "probe_lifecycle_mcp.py", "prepare_pod_read_probe.py",
     "probe_array_mcp.py", "probe_struct_mcp.py",
+    "prepare_world_lifecycle_probe.py", "probe_world_lifecycle_mcp.py",
 )
-FIXTURE_DIRS = ("angelscript_probe", "object_probe", "class_probe", "name_probe", "patch_probe", "enum_probe", "lifecycle_probe", "pod_read_probe")
+FIXTURE_DIRS = ("angelscript_probe", "object_probe", "class_probe", "name_probe", "patch_probe", "enum_probe", "lifecycle_probe", "pod_read_probe", "world_lifecycle_probe")
 SOURCE_FILES = ("__init__.py", "server.py", "native_client.py", "development.py", "packages.py", "patches.py", "sources.py", "workspace.py", "snapshots.py")
 FIXTURE_SCRIPTS = {"angelscript_probe": "G1RMCPProbe.as", "object_probe": "G1RMCPObjectProbe.as",
                    "class_probe": "G1RMCPClassProbe.as", "name_probe": "G1RMCPNameProbe.as", "patch_probe": "G1RMCPPatchProbe.as",
                    "enum_probe": "G1RMCPEnumProbe.as", "lifecycle_probe": "G1RMCPLifecycleProbe.as",
-                   "pod_read_probe": "G1RMCPPODReadProbe.as"}
+                   "pod_read_probe": "G1RMCPPODReadProbe.as", "world_lifecycle_probe": "G1RMCPWorldLifecycleProbe.as"}
 DOCUMENTS = ("README.md", "pyproject.toml", "uv.lock")
 BINARIES = ("build/native/Release/G1R_MCP.dll", "build/native/Release/g1r_mcp_loader.exe")
 
@@ -242,6 +243,39 @@ Microsoft Visual C++ Redistributable x64. DLL и loader уже собраны;
 Неподтверждённые compiler API и применение ScriptPatches не считаются готовыми.
 Собственные проверочные пакеты готовятся отдельно из tests/fixtures в artifacts;
 рабочие моды пользователя и результаты прошлых экспериментов не включены.
+
+Для проверки полного цикла компиляции создать отдельную полную рабочую копию
+комплекта. Исходную папку сохранить для проверки manifest; рабочая копия получает
+собственный artifacts и после этого не проходит проверку исходного manifest.
+В PowerShell указать абсолютные пути: существующий комплект, новый соседний
+каталог рабочей копии, установленное окружение, официальный Modkit и игру.
+
+```powershell
+$bundlePath = "<абсолютный путь к исходному комплекту>"
+$workingPath = "<абсолютный путь к новой соседней рабочей копии>"
+$pythonPath = "<абсолютный путь к окружению>\\Scripts\\python.exe"
+$modkitPath = "<абсолютный путь к официальному G1R-Modkit>"
+$gamePath = "<абсолютный путь к установленной игре>"
+$env:PYTHONDONTWRITEBYTECODE = "1"
+$bundlePath = (Resolve-Path -LiteralPath $bundlePath).ProviderPath
+$workingPath = [IO.Path]::GetFullPath($workingPath)
+if (Test-Path -LiteralPath $workingPath) {{ throw "Рабочая копия уже существует" }}
+if ([IO.Path]::GetDirectoryName($workingPath) -ne [IO.Path]::GetDirectoryName($bundlePath)) {{ throw "Выберите соседний каталог" }}
+& $pythonPath -B "$bundlePath\\tools\\prepare_bridge_bundle.py" --verify-root $bundlePath
+if ($LASTEXITCODE -ne 0) {{ throw "Исходный комплект не прошёл проверку" }}
+Copy-Item -LiteralPath $bundlePath -Destination $workingPath -Recurse
+$env:UV_PROJECT_ENVIRONMENT = [IO.Path]::GetDirectoryName([IO.Path]::GetDirectoryName($pythonPath))
+uv sync --locked --project $workingPath
+if ($LASTEXITCODE -ne 0) {{ throw "Окружение рабочей копии не подготовлено" }}
+& $pythonPath -B "$workingPath\\tools\\prepare_compile_probe.py" --workspace-root "$workingPath\\artifacts\\compile-probe-baseline" --phase baseline
+if ($LASTEXITCODE -ne 0) {{ throw "Подготовка baseline не выполнена" }}
+& $pythonPath -B "$workingPath\\tools\\probe_development_mcp.py" --modkit-root $modkitPath --workspace-root $workingPath --game-root $gamePath --relative-package "artifacts/compile-probe-baseline/G1RMCPProbe" --expected-value 1
+```
+
+Последняя команда явно запускает собственную игровую сессию, загружает DLL,
+проверяет baseline-метод ReadProbeValue и закрывает эту сессию. Выполнять её
+только при разрешённом запуске игры. Ожидается значение 1; локальная reload-проба
+рабочей базы с ожидаемым значением 2 в комплект не включена.
 """
     return text.encode("utf-8")
 

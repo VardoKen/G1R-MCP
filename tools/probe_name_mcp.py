@@ -19,6 +19,9 @@ HOST = "G1RMCPNameProbe"
 PROPERTIES = {"StoredEntry": "Entry", "StoredNone": "None"}
 METHODS = {"ReadMarker": ("IntProperty", 4), "ReadEntry": ("NameProperty", 8), "ReadNone": ("NameProperty", 8),
            "ReadText": ("StrProperty", 16), "ReadEmptyText": ("StrProperty", 16)}
+INPUT_METHODS = {"ReadMarker": ([], ("IntProperty", 4)),
+                 "EchoName": ([("Input", "NameProperty", 8)], ("NameProperty", 8)),
+                 "ReadCallsCount": ([], ("IntProperty", 4)), "ResetProbe": ([], None)}
 
 
 def check_target(item: dict) -> dict:
@@ -62,6 +65,54 @@ def check_snapshot(snapshot: dict, target: dict, session_id: str) -> None:
         if (len(matches) != 1 or matches[0].get("type") != "NameProperty" or matches[0].get("supported") is not True
                 or matches[0].get("error") or type(matches[0].get("value")) is not str or matches[0]["value"] != expected):
             raise ProbeError("probe_name_property", "Не совпало ожидаемое значение собственного FName-свойства")
+
+
+def check_input_signature(functions: dict, method_name: str) -> dict:
+    if (method_name not in INPUT_METHODS or not isinstance(functions, dict) or
+            functions.get("truncated") is not False or functions.get("scan_complete") is not True or
+            functions.get("scan_truncated") is not False or not isinstance(functions.get("items"), list)):
+        raise ProbeError("probe_signature_invalid", "Не подтверждён полный каталог методов FName-входа")
+    methods = [item for item in functions["items"] if isinstance(item, dict) and item.get("name") == method_name]
+    if len(methods) != 1:
+        raise ProbeError("probe_signature_absent", "Метод FName-входа не найден однозначно")
+    method = methods[0]
+    params, size = method.get("parameters"), method.get("parameter_size")
+    expected_inputs, expected_return = INPUT_METHODS[method_name]
+    if (not isinstance(params, list) or type(size) is not int or not 0 <= size <= 32 or
+            method.get("parameters_truncated") is not False or any(not isinstance(param, dict) for param in params)):
+        raise ProbeError("probe_signature_mismatch", "Не подтверждена полная сигнатура FName-входа")
+    inputs = [param for param in params if param.get("return") is False]
+    returns = [param for param in params if param.get("return") is True]
+    if (len(inputs) != len(expected_inputs) or len(returns) != (expected_return is not None) or
+            len(params) != len(inputs) + len(returns)):
+        raise ProbeError("probe_signature_mismatch", "Количество параметров FName-входа не совпало")
+    for param, expected in zip(inputs, expected_inputs):
+        if (param.get("name"), param.get("type"), param.get("element_size")) != expected:
+            raise ProbeError("probe_signature_mismatch", "Не совпало имя, тип или размер FName-входа")
+    if expected_return is not None and (returns[0].get("type"), returns[0].get("element_size")) != expected_return:
+        raise ProbeError("probe_signature_mismatch", "Не совпал тип или размер возврата FName-входа")
+    for param in params:
+        offset, element_size = param.get("offset"), param.get("element_size")
+        if (type(offset) is not int or type(element_size) is not int or offset < 0 or element_size <= 0 or
+                offset + element_size > 32 or type(param.get("array_dim")) is not int or param["array_dim"] != 1 or
+                param.get("reference") is not False or type(param.get("out")) is not bool or
+                (param["return"] is False and (param["out"] is not False or offset + element_size > size))):
+            raise ProbeError("probe_signature_mismatch", "Не подтверждены FName ArrayDim, out/ref или буфер")
+    return method
+
+
+def input_snapshot_values(snapshot: dict, target: dict, session_id: str) -> tuple[str, str, int]:
+    check_snapshot(snapshot, target, session_id)
+    objects = snapshot["objects"]
+    if objects[0].get("partial") is not False or objects[0].get("truncated") is not False:
+        raise ProbeError("probe_snapshot_invalid", "Снимок FName-входа должен быть полным")
+    fields = objects[0].get("properties", [])
+    counts = [field for field in fields if isinstance(field, dict) and field.get("name") == "CallsCount"]
+    if (len(fields) != 3 or len(counts) != 1 or counts[0].get("type") != "IntProperty" or
+            counts[0].get("supported") is not True or "error" in counts[0] or
+            type(counts[0].get("value")) is not int or counts[0]["value"] < 0):
+        raise ProbeError("probe_counter_invalid", "Счётчик FName-вызовов не подтверждён")
+    return "Entry", "None", counts[0]["value"]
 
 
 async def exercise(call) -> dict:
@@ -149,6 +200,92 @@ async def exercise(call) -> dict:
     return report
 
 
+async def exercise_name_inputs(call) -> dict:
+    report = {"checks": [], "cleanup": [], "game_launched": False, "dll_loaded": False}
+    cleanup_required = False
+    failure = None
+    try:
+        status = await call("g1r_native_status", {})
+        session_id = status.get("session_id")
+        if status.get("ready") is not True or not isinstance(session_id, str) or not session_id:
+            raise ProbeError("game_not_ready", "Не подтверждены готовый Tick и текущая сессия")
+        found = await call("g1r_find_objects", {"query": "Default__" + HOST, "class_query": HOST,
+                           "exact_path": "/Script/Angelscript.Default__" + HOST, "limit": 2})
+        if not isinstance(found.get("items"), list) or len(found["items"]) != 1 or found.get("truncated") is not False:
+            raise ProbeError("probe_object_absent", "Точный CDO FName-входа не найден однозначно")
+        target = check_target(found["items"][0])
+        functions = await call("g1r_object_functions", {"handle": target["handle"], "limit": 50})
+        for method in INPUT_METHODS:
+            check_input_signature(functions, method)
+
+        async def invoke(method, arguments=None):
+            result = await call("g1r_invoke", {"handle": target["handle"], "function": method, "arguments": arguments or {}})
+            output = INPUT_METHODS[method][1]
+            if (result.get("executed") is not True or "result" not in result or
+                    (output is None and result["result"] is not None) or
+                    (output is not None and (result.get("return_type") != output[0] or
+                                            type(result["result"]) is not (str if output[0] == "NameProperty" else int)))):
+                raise ProbeError("probe_call_unconfirmed", "Метод FName-входа не подтвердил ожидаемый результат")
+            return result["result"]
+
+        async def snapshot():
+            value = await call("g1r_snapshot", {"targets": [{"handle": target["handle"], "properties": [*PROPERTIES, "CallsCount"]}]})
+            return input_snapshot_values(value, target, session_id)
+
+        if await invoke("ReadMarker") != 71:
+            raise ProbeError("probe_marker_mismatch", "CDO FName-входа не вернул маркер 71")
+        initial = await snapshot()
+        if initial != ("Entry", "None", 0) or await invoke("ReadCallsCount") != 0:
+            raise ProbeError("probe_initial_state", "Defaults FName/CallsCount не подтверждены до записи")
+        report["checks"].append("source_name_defaults_and_zero_counter_before_echo")
+        for property_name, expected in PROPERTIES.items():
+            before = await snapshot()
+            cleanup_required = True
+            value = await invoke("EchoName", {"Input": {"name_from": {"handle": target["handle"], "property_name": property_name}}})
+            after = await snapshot()
+            if value != expected or after != (before[0], before[1], before[2] + 1) or await invoke("ReadCallsCount") != after[2]:
+                raise ProbeError("probe_name_input_result", "EchoName не скопировал подтверждённое имя ровно один раз")
+        report["checks"].append("entry_and_none_copied_from_own_name_properties")
+        source = {"name_from": {"handle": target["handle"], "property_name": "StoredEntry"}}
+        rejected = [
+            ("Entry", "invalid_name_argument"), (None, "invalid_name_argument"),
+            (0, "invalid_name_argument"), ({"bits": 0}, "invalid_name_argument"),
+            ({"name_from": {"handle": target["handle"]}}, "invalid_name_argument"),
+            ({"name_from": {"handle": target["handle"], "property_name": "StoredEntry", "bits": 0}}, "invalid_name_argument"),
+            ({**source, "value": "Entry"}, "invalid_name_argument"),
+            ({"name_from": {"handle": target["handle"], "property_name": "CallsCount"}}, "unsupported_name_source"),
+            ({"name_from": {"handle": target["handle"], "property_name": "MissingProperty"}}, "property_not_found"),
+            ({"name_from": {"handle": "obj-missing-name-source", "property_name": "StoredEntry"}}, "stale_handle"),
+        ]
+        rejections = []
+        for argument, code in rejected:
+            before = await snapshot()
+            refusal = await call("g1r_invoke", {"handle": target["handle"], "function": "EchoName", "arguments": {"Input": argument}},
+                                 expected_error=code)
+            if refusal.get("code") != code or refusal.get("may_have_executed") is not False or await snapshot() != before:
+                raise ProbeError("probe_name_rejection_executed", "Неверный FName-вход не подтверждён как отказ до исполнения")
+            rejections.append(code)
+        report["rejections"] = rejections
+        report["checks"].append("raw_and_invalid_name_sources_rejected_without_counter_change")
+    except BaseException as error:
+        failure = error
+        raise
+    finally:
+        if cleanup_required:
+            async def finish_cleanup():
+                await invoke("ResetProbe")
+                if await snapshot() != ("Entry", "None", 0) or await invoke("ReadCallsCount") != 0:
+                    raise ProbeError("probe_cleanup_unconfirmed", "CallsCount и исходные FName после ResetProbe не подтверждены")
+                report["cleanup"].append("ResetProbe_and_confirmed_names_zero_counter")
+            try:
+                await settle_task(asyncio.create_task(finish_cleanup()), timeout=30, label="name input cleanup")
+            except BaseException as cleanup_error:
+                if failure is None:
+                    raise
+                failure.add_note("Не подтверждена очистка FName-входов: " + str(cleanup_error))
+    return report
+
+
 async def run_probe(args) -> dict:
     parameters = StdioServerParameters(command=sys.executable, args=["-m", "g1r_mcp.server", "--modkit-root", str(args.modkit_root),
         "--workspace-root", str(args.workspace_root), "--native-port", str(args.native_port)], cwd=str(REPOSITORY_ROOT))
@@ -156,6 +293,8 @@ async def run_probe(args) -> dict:
         async with ClientSession(incoming, outgoing) as client:
             initialized = await client.initialize()
             report = await exercise(_caller(client))
+            if getattr(args, "check_name_inputs", False):
+                report["name_inputs"] = await exercise_name_inputs(_caller(client))
             report["server_version"] = initialized.server_info.version
             return report
 
@@ -170,6 +309,7 @@ def main() -> int:
     parser.add_argument("--modkit-root", type=Path, default=REPOSITORY_ROOT.parent / "G1R-Modkit")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT)
     parser.add_argument("--native-port", type=int, default=27123)
+    parser.add_argument("--check-name-inputs", action="store_true", help="Также проверить копирование FName-входов собственной новой fixture")
     args = parser.parse_args()
     try:
         report = asyncio.run(_run_with_signals(args))

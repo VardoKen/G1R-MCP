@@ -1,0 +1,7 @@
+{
+  "name": "G1RMCPWorldLifecycleProbe",
+  "title": "G1R MCP World Lifecycle Probe",
+  "author": "G1R MCP",
+  "description": "Счётчик собственного PostInitialize без игровых действий и сохранений.",
+  "modVersion": "1.0.0"
+}

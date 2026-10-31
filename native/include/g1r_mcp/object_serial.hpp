@@ -15,6 +15,7 @@ struct ObjectSerialIdentity {
     std::int32_t class_index{};
     std::uint64_t class_name{};
     std::int32_t class_serial{};
+    bool operator==(const ObjectSerialIdentity&) const=default;
 };
 
 inline bool valid_observed_serial(std::int32_t serial) noexcept {

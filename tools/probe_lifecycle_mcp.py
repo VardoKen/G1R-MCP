@@ -77,7 +77,8 @@ def snapshot_counts(snapshot: dict, target: dict, session_id: str, fields: dict)
     return counts
 
 
-async def exercise(call, *, wait_seconds: float = 3, clock=time.monotonic, sleep=asyncio.sleep) -> dict:
+async def exercise(call, *, wait_seconds: float = 3, clock=time.monotonic, sleep=asyncio.sleep,
+                   positive_counter: str = "InitializeCount") -> dict:
     if type(wait_seconds) not in (int, float) or not math.isfinite(wait_seconds) or not 0 <= wait_seconds <= 10:
         raise ProbeError("invalid_wait", "Ожидание lifecycle ограничено десятью секундами")
     status = await call("g1r_native_status", {})
@@ -143,7 +144,7 @@ async def exercise(call, *, wait_seconds: float = 3, clock=time.monotonic, sleep
     while True:
         tool = await collect(TOOL)
         samples += 1
-        if any(item["counts"]["InitializeCount"] > 0 for item in tool["instances"]):
+        if any(item["counts"][positive_counter] > 0 for item in tool["instances"]):
             tool["status"] = "automatic_initialize_confirmed"
             break
         if clock() >= deadline:

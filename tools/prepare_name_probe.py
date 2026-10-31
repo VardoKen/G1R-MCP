@@ -32,15 +32,21 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
         "verification": "unverified_until_runtime_reflection_and_calls",
         "host_cdo": "Default__G1RMCPNameProbe", "marker": 71,
         "properties": [{"name": "StoredEntry", "source_type": "FName", "expected_text": "Entry"},
-                       {"name": "StoredNone", "source_type": "FName", "expected_text": "None"}],
+                       {"name": "StoredNone", "source_type": "FName", "expected_text": "None"},
+                       {"name": "CallsCount", "source_type": "int", "initial_value": 0}],
         "methods": [{"name": "ReadMarker", "inputs": [], "result": "int"},
                     {"name": "ReadEntry", "inputs": [], "result": "FName", "expected_text": "Entry"},
                     {"name": "ReadNone", "inputs": [], "result": "FName", "expected_text": "None"},
                     {"name": "ReadText", "inputs": [], "result": "FString", "expected_text": "G1R MCP dev7"},
-                    {"name": "ReadEmptyText", "inputs": [], "result": "FString", "expected_text": ""}],
+                    {"name": "ReadEmptyText", "inputs": [], "result": "FString", "expected_text": ""},
+                    {"name": "EchoName", "inputs": [{"name": "Input", "type": "FName"}], "result": "FName",
+                     "increments": "CallsCount"},
+                    {"name": "ReadCallsCount", "inputs": [], "result": "int"},
+                    {"name": "ResetProbe", "inputs": [], "result": "void"}],
     }
     result["limitations"] = ["Подготовка не доказывает компиляцию, загрузку класса или runtime-значения FName",
-                             "FName/FString входы не используются; пакет только читает собственные константы и свойства"]
+                             "FName входы копируются из собственных подтверждённых NameProperty; FString входы не используются",
+                             "EchoName меняет только CallsCount собственного CDO; ResetProbe восстанавливает его в ноль"]
     return result
 
 

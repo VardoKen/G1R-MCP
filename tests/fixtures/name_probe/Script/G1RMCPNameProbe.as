@@ -1,4 +1,4 @@
-// Только собственный объект, чтение констант и неизменных свойств.
+// Только собственный объект; EchoName изменяет лишь проверочный счётчик.
 UCLASS()
 class UG1RMCPNameProbe : UObject
 {
@@ -7,6 +7,9 @@ class UG1RMCPNameProbe : UObject
 
     UPROPERTY()
     FName StoredNone = n"";
+
+    UPROPERTY()
+    int CallsCount = 0;
 
     UFUNCTION(BlueprintCallable)
     int ReadMarker()
@@ -36,5 +39,24 @@ class UG1RMCPNameProbe : UObject
     FString ReadEmptyText()
     {
         return "";
+    }
+
+    UFUNCTION(BlueprintCallable)
+    FName EchoName(FName Input)
+    {
+        CallsCount += 1;
+        return Input;
+    }
+
+    UFUNCTION(BlueprintCallable)
+    int ReadCallsCount()
+    {
+        return CallsCount;
+    }
+
+    UFUNCTION(BlueprintCallable)
+    void ResetProbe()
+    {
+        CallsCount = 0;
     }
 }

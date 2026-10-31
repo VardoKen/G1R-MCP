@@ -6,6 +6,7 @@
 #include "g1r_mcp/object_query.hpp"
 #include "g1r_mcp/function_query.hpp"
 #include "g1r_mcp/name_return.hpp"
+#include "g1r_mcp/name_argument.hpp"
 #include "g1r_mcp/string_return.hpp"
 #include "g1r_mcp/enum_values.hpp"
 #include "g1r_mcp/enum_arguments.hpp"
@@ -156,7 +157,7 @@ void __fastcall GameAccess::hooked_tick(void* loop) {
     if(count<2)diagnostic("tick_pump_return");
 }
 json GameAccess::status() const {
-    return {{"version","1.0.0-dev.10"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.11"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&ticks_.load()>0},
             {"build_hash",kHash},{"startup_error",startup_error_},
             {"process_id",GetCurrentProcessId()},
@@ -697,6 +698,61 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     struct EnumArgument {uintptr_t field;std::string type;EnumLayout layout;
                          g1r::enum_values::Integer value;std::optional<Handle> enum_identity;};
     std::vector<EnumArgument> enum_inputs;
+    struct NameSource {
+        NameArgumentSource source;
+        ObjectSerialIdentity object_identity,owner_identity;
+        uintptr_t field{},field_next{},field_class{},owner{};
+        uint64_t field_name{},packed{};
+        int32_t offset{},size{},dim{},owner_size{};
+        std::string text;
+        bool operator==(const NameSource&) const=default;
+    };
+    auto capture_name=[this](const NameArgumentSource& source) {
+        NameSource result;result.source=source;
+        auto object=resolve(source.handle);
+        result.object_identity=serial_identity(validate_object(object));
+        auto klass=result.object_identity.object_class;
+        std::set<uintptr_t> classes,fields;int scanned=0;
+        for(int depth=0;klass && !result.field;klass=read<uintptr_t>(klass+0x40),++depth) {
+            if(depth>=64 || !classes.insert(klass).second)
+                throw HandlerError("name_source_scan_incomplete","Цепочка классов источника FName не завершена");
+            validate_class(reinterpret_cast<void*>(klass));
+            for(auto field=read<uintptr_t>(klass+0x50);field;field=read<uintptr_t>(field+0x18)) {
+                if(++scanned>4096 || !fields.insert(field).second)
+                    throw HandlerError("name_source_scan_incomplete","Список свойств источника FName не завершён");
+                if(name(read<uint64_t>(field+0x20))==source.property_name){result.field=field;result.owner=klass;break;}
+            }
+        }
+        if(!result.field)throw HandlerError("property_not_found","Свойство источника FName не найдено");
+        result.owner_identity=serial_identity(validate_object(reinterpret_cast<void*>(result.owner)));
+        result.field_next=read<uintptr_t>(result.field+0x18);result.field_class=read<uintptr_t>(result.field+8);
+        result.field_name=read<uint64_t>(result.field+0x20);
+        result.offset=read<int32_t>(result.field+0x44);result.size=read<int32_t>(result.field+0x34);
+        result.dim=read<int32_t>(result.field+0x30);result.owner_size=read<int32_t>(result.owner+0x58);
+        if(field_type(result.field,[this](uint64_t value){return name(value);})!="NameProperty"
+           || result.size!=8 || result.dim!=1 || result.offset<0
+           || result.owner_size<8 || result.offset>result.owner_size-8)
+            throw HandlerError("unsupported_name_source","Источник должен быть точным NameProperty размером 8 байт");
+        const auto address=reinterpret_cast<uintptr_t>(object)+static_cast<uintptr_t>(result.offset);
+        if(address<reinterpret_cast<uintptr_t>(object) || address>UINTPTR_MAX-sizeof(uint64_t))
+            throw HandlerError("unsupported_name_source","Адрес источника FName переполняется");
+        result.packed=read<uint64_t>(address);
+        result.text=name(result.packed);
+        if(result.packed!=read<uint64_t>(address)
+           || result.field_next!=read<uintptr_t>(result.field+0x18)
+           || result.field_class!=read<uintptr_t>(result.field+8)
+           || result.field_name!=read<uint64_t>(result.field+0x20)
+           || result.offset!=read<int32_t>(result.field+0x44) || result.size!=read<int32_t>(result.field+0x34)
+           || result.dim!=read<int32_t>(result.field+0x30) || result.owner_size!=read<int32_t>(result.owner+0x58)
+           || field_type(result.field,[this](uint64_t value){return name(value);})!="NameProperty"
+           || !same_serial_identity(result.owner_identity,serial_identity(validate_object(reinterpret_cast<void*>(result.owner))))
+           || !same_serial_identity(result.object_identity,serial_identity(validate_object(object))))
+            throw HandlerError("name_source_changed","Метаданные или identity источника FName изменились при копировании");
+        if(resolve(source.handle)!=object)throw HandlerError("stale_handle","Ссылка источника FName изменилась");
+        return result;
+    };
+    struct NameInput {uintptr_t field{};int32_t offset{};NameSource source;};
+    std::vector<NameInput> name_inputs;
     for(const auto field:parameter_fields) {
         auto flags=read<uint64_t>(field+0x38);if(!(flags&0x80))continue;
         auto type=field_type(field,[this](auto f){return name(f);});int offset=read<int32_t>(field+0x44),size=read<int32_t>(field+0x34);
@@ -716,9 +772,14 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             continue;
         }
         if(flags&(0x100|0x800))throw HandlerError("unsupported_signature","Out/ref параметры пока не поддержаны");
-        if(type=="NameProperty")reject_name_input();
+        if(type=="NameProperty")validate_name_argument_layout(size,read<int32_t>(field+0x30));
         auto key=name(read<uint64_t>(field+0x20));if(!arguments.contains(key))throw HandlerError("missing_argument","Не задан аргумент "+key);auto v=arguments.at(key);++input_count;
-        if(type=="BoolProperty" && v.is_boolean()){auto bo=read<uint8_t>(field+0x71),mask=read<uint8_t>(field+0x73);validate_bool_layout(size,bo,mask);buffer[offset+bo]=v.get<bool>()?mask:0;}
+        if(type=="NameProperty") {
+            const auto source=validated_name_argument(size,read<int32_t>(field+0x30),v,capture_name);
+            std::memcpy(buffer+offset,&source.packed,sizeof(source.packed));
+            name_inputs.push_back({field,offset,source});
+        }
+        else if(type=="BoolProperty" && v.is_boolean()){auto bo=read<uint8_t>(field+0x71),mask=read<uint8_t>(field+0x73);validate_bool_layout(size,bo,mask);buffer[offset+bo]=v.get<bool>()?mask:0;}
         else if(type=="IntProperty" && size==4){*reinterpret_cast<int32_t*>(buffer+offset)=int32_argument(v);}
         else if(type=="FloatProperty" && size==4){*reinterpret_cast<float*>(buffer+offset)=float_argument(v);}
         else if(type=="DoubleProperty" && size==8){*reinterpret_cast<double*>(buffer+offset)=double_argument(v);}
@@ -791,6 +852,14 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             if(!enum_arguments::contains_value(argument.value,table.entries))
                 throw HandlerError("unknown_enum_value","Enum аргумент больше не объявлен перед вызовом");
         }
+    }
+    for(const auto& input:name_inputs) {
+        if(field_type(input.field,[this](uint64_t value){return name(value);})!="NameProperty"
+           || read<int32_t>(input.field+0x44)!=input.offset)
+            throw HandlerError("unsupported_signature","Метаданные аргумента FName изменились до вызова");
+        validate_name_argument_layout(read<int32_t>(input.field+0x34),read<int32_t>(input.field+0x30));
+        if(!(capture_name(input.source.source)==input.source))
+            throw HandlerError("name_source_changed","Значение или метаданные источника FName изменились до вызова");
     }
     const auto invocation_after=validate_object(object);
     if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(invocation_after)))

@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import re
 import sys
+import threading
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
@@ -83,6 +84,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     patch_builder = ScriptPatchBuilder(modkit_root, revision=source_revision)
     workspace = PackageWorkspace(workspace_root, protected_roots=[modkit_root])
     native = NativeClient(port=native_port)
+    native_lock = threading.Lock()
     configured_game_root = game_root or Path(r"E:\SteamLibrary\steamapps\common\Gothic 1 Remake")
     development = None
     def development_service() -> DevelopmentService:
@@ -322,15 +324,32 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     def native_request(operation: str, params: dict[str, Any]) -> dict[str, Any]:
         try:
-            return native.request(operation, params)
+            with native_lock:
+                client = native
+            return client.request(operation, params)
         except NativeError as error:
             raise ToolError(json.dumps({"code": error.code, "message": str(error),
                                        "may_have_executed": error.may_have_executed,
                                        "request_id": error.request_id, "effect": error.details}, ensure_ascii=False)) from None
 
     def development_request(operation: str, **params: Any) -> dict[str, Any]:
+        nonlocal native
         try:
-            return getattr(development_service(), operation)(**params)
+            result = getattr(development_service(), operation)(**params)
+            stopped = result.get("tool_result")
+            if (operation == "stop" and result.get("state") == "stop_result"
+                    and result.get("outcome_unknown") is False and isinstance(stopped, dict)
+                    and stopped.get("state") == "stopped"
+                    and isinstance(result.get("process"), dict)
+                    and stopped.get("process") == result["process"]
+                    and isinstance(params.get("expected_process"), dict)
+                    and result["process"] == {key: params["expected_process"].get(key)
+                                              for key in ("pid", "creation_time", "executable")}):
+                with native_lock:
+                    previous_native = native
+                    native = NativeClient(port=native_port)
+                previous_native.close()
+            return result
         except DevelopmentError as error:
             raise ToolError(json.dumps({"code": error.code, "message": str(error),
                                        "outcome_unknown": error.outcome_unknown,
