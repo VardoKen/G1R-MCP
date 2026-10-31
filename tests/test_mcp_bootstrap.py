@@ -96,6 +96,19 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                         "type": "FName", "input_shape": {"name": "string"},
                         "source_property_input_shape": {"name_from": {
                             "handle": "session_handle", "property_name": "reflected_property_name"}}})
+                    self.assertEqual(catalog["invoke_returns"]["scalar_struct"], {
+                        "return_type": "StructProperty", "result_shape": "object",
+                        "field_types": ["BoolProperty", "IntProperty", "Int64Property", "UInt32Property",
+                                        "UInt64Property", "FloatProperty", "DoubleProperty"],
+                        "field_bytes": {"IntProperty": 4, "Int64Property": 8, "UInt32Property": 4,
+                                        "UInt64Property": 8, "FloatProperty": 4, "DoubleProperty": 8},
+                        "bool_layout": "reflected_bool_layout", "array_dim": 1,
+                        "metadata_field": "result_metadata", "layout_source": "reflected_function_parameter",
+                        "passing": "value", "own_fields_only": True,
+                        "lifecycle": "plain_default_copy", "custom_lifecycle_supported": False,
+                        "source_contract_required": True,
+                        "input_supported": False, "reference_return_supported": False,
+                        "nested_fields_supported": False, "string_fields_supported": False})
                     self.assertIn("session", bootstrap["ownership"])
                     self.assertIn("find_objects_again", bootstrap["reconnect"])
                     self.assertIn("never_automatically_retry", bootstrap["uncertain_effect"])

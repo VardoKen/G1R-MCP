@@ -21,7 +21,7 @@ class DevelopmentHelpersPackageTests(unittest.TestCase):
         source = SCRIPT.read_text(encoding="utf-8")
         version = re.search(r'FString\s+GetHelperVersion\(\)\s*\{\s*return\s+"([^"]+)";', source)
         self.assertIsNotNone(version)
-        self.assertEqual(version.group(1), "1.0.0-dev.29")
+        self.assertEqual(version.group(1), "1.0.0-dev.30")
 
     def test_public_helper_surface_and_world_guard(self):
         source = SCRIPT.read_text(encoding="utf-8")

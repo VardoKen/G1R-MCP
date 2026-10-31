@@ -17,6 +17,7 @@
 #include "g1r_mcp/vector_parameter_direction.hpp"
 #include "g1r_mcp/parameter_direction.hpp"
 #include "g1r_mcp/scalar_outputs.hpp"
+#include "g1r_mcp/scalar_struct_values.hpp"
 #include "g1r_mcp/aligned_parameter_buffer.hpp"
 #include "g1r_mcp/transform_layout.hpp"
 #include "g1r_mcp/transform_arguments.hpp"
@@ -59,6 +60,28 @@ json scalar_output_metadata(const scalar_outputs::Layout& layout) {
     json result={{"type",layout.type},{"element_size",layout.element_size},{"array_dim",layout.array_dim}};
     if(layout.type=="BoolProperty")result["bool_layout"]={{"field_size",layout.field_size},{"byte_offset",layout.byte_offset},
         {"byte_mask",layout.byte_mask},{"field_mask",layout.field_mask}};
+    return result;
+}
+json scalar_struct_snapshot_json(const scalar_struct_values::Snapshot& value,bool raw=true) {
+    json components=json::array();
+    for(const auto& child:value.components) {
+        auto item=scalar_output_metadata(child.component.layout);
+        item["name"]=child.component.name;item["offset"]=child.component.offset;
+        if(raw)item.update({{"pointer",child.pointer},{"next",child.next},{"field_class",child.field_class},
+            {"owner",child.owner},{"field_name",child.name},{"type_name",child.type_name},{"flags",child.flags}});
+        components.push_back(std::move(item));
+    }
+    json result={{"struct_path",value.path},{"struct_name",value.struct_name},{"properties_size",value.layout.properties_size},
+        {"min_alignment",value.layout.min_alignment},{"components",std::move(components)}};
+    if(raw) {
+        const auto& identity=value.identity;
+        result.update({{"field",value.field},{"next",value.next},{"field_class",value.field_class},{"field_owner",value.owner},
+            {"field_name",value.name},{"field_type_name",value.type_name},{"flags",value.flags},{"offset",value.offset},
+            {"structure",value.structure},{"head",value.head},{"super",value.super},{"element_size",value.element_size},
+            {"array_dim",value.array_dim},{"identity",{{"object",identity.object},{"object_class",identity.object_class},
+                {"index",identity.index},{"name",identity.name},{"serial",identity.serial},{"class_index",identity.class_index},
+                {"class_name",identity.class_name},{"class_serial",identity.class_serial}}}});
+    }
     return result;
 }
 json vector_snapshot_json(const vector_layout::Snapshot& value,bool raw=true) {
@@ -310,7 +333,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.29"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.30"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
             {"pump",{{"state",!observed?"not_observed":recent?"recent_tick":"tick_stale"},
                      {"last_tick_monotonic_ms",observed?json(observed):json(nullptr)},
@@ -854,6 +877,14 @@ json GameAccess::snapshot(const json& targets) {
     return result;
 }
 json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_t function,const std::string& target_handle) {
+    auto capture_scalar_struct=[this](uintptr_t field,int size,int dim) {
+        return scalar_struct_values::capture(field,size,dim,
+            []<class Value>(uintptr_t address){return read<Value>(address);},
+            [this](uint64_t value){return name(value);},
+            [this](uintptr_t value){return serial_identity(validate_object(reinterpret_cast<void*>(value)));},
+            [this](uintptr_t value){validate_class(reinterpret_cast<void*>(value));},
+            [this](uintptr_t value){return object_path(reinterpret_cast<void*>(value));});
+    };
     auto identity=[](const Handle& value) {
         const auto observed=serial_identity(value);
         return json{{"object",observed.object},{"object_class",observed.object_class},
@@ -897,7 +928,7 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         if(returned && supported_scalar_output_type(type) && (flags&(kReferenceParm|kConstParm)))
             throw HandlerError("unsupported_signature","Const/ref скалярный возврат не поддержан");
         bool supported=false;
-        json vector_public=nullptr,transform_public=nullptr,array_public=nullptr,color_public=nullptr;std::string vector_direction;
+        json vector_public=nullptr,transform_public=nullptr,array_public=nullptr,color_public=nullptr,scalar_struct_public=nullptr;std::string vector_direction;
         if(type=="BoolProperty") {
             const auto byte_offset=read<uint8_t>(field+0x71),mask=read<uint8_t>(field+0x73);
             validate_bool_layout(size,byte_offset,mask);
@@ -908,13 +939,14 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         else if(type=="DoubleProperty")supported=size==8;
         else if(type=="NameProperty")supported=size==8;
         else if(type=="StructProperty") {
-            if(size==16) {
+            const auto structure_path=object_path(reinterpret_cast<void*>(read<uintptr_t>(field+0x70)));
+            if(structure_path=="/Script/CoreUObject.LinearColor") {
                 if(flags&(kConstParm|kReferenceParm) || (!returned && (flags&0x100)))
                     throw HandlerError("unsupported_signature","FLinearColor поддержан только по значению, без Const/Ref/Out");
                 const auto color=capture_linear_color_parameter(field,size,array_dim);
                 captured["aux"]={{"linear_color",linear_color_snapshot_json(color)}};
                 color_public=linear_color_snapshot_json(color,false);supported=true;
-            } else if(size==96) {
+            } else if(structure_path=="/Script/CoreUObject.Transform") {
                 if(vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
                     throw HandlerError("unsupported_signature","Transform требует вход по значению либо const reference; Out/Return не поддержаны");
                 const auto transform=capture_transform_parameter(field,size,array_dim);
@@ -922,18 +954,26 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                     throw HandlerError("unsupported_transform_layout","Смещение Transform не соответствует отражённому выравниванию");
                 captured["aux"]={{"transform",transform_snapshot_json(transform)}};
                 transform_public=transform_snapshot_json(transform,false);supported=true;
+            } else if(structure_path=="/Script/CoreUObject.Vector") {
+                if(!returned) {
+                    const auto direction=vector_parameter_direction::classify(flags);
+                    vector_direction=direction==vector_parameter_direction::Direction::output?"output":"input";
+                } else {
+                    if(flags&(kReferenceParm|kConstParm))
+                        throw HandlerError("unsupported_signature","Const/ref возврат FVector не поддержан");
+                    vector_direction="return";
+                }
+                const auto vector=capture_vector_parameter(field,size,array_dim);
+                captured["aux"]={{"vector",vector_snapshot_json(vector)}};
+                vector_public=vector_snapshot_json(vector,false);supported=true;
             } else {
-            if(!returned) {
-                const auto direction=vector_parameter_direction::classify(flags);
-                vector_direction=direction==vector_parameter_direction::Direction::output?"output":"input";
-            } else {
-                if(flags&(kReferenceParm|kConstParm))
-                    throw HandlerError("unsupported_signature","Const/ref возврат FVector не поддержан");
-                vector_direction="return";
-            }
-            const auto vector=capture_vector_parameter(field,size,array_dim);
-            captured["aux"]={{"vector",vector_snapshot_json(vector)}};
-            vector_public=vector_snapshot_json(vector,false);supported=true;
+                if(!returned || (flags&(kConstParm|kReferenceParm)))
+                    throw HandlerError("unsupported_signature","Скалярный DTO поддержан только как возврат по значению");
+                const auto scalar_struct=capture_scalar_struct(field,size,array_dim);
+                if(offset%scalar_struct.layout.min_alignment)
+                    throw HandlerError("unsupported_scalar_struct_layout","Смещение DTO не соответствует отражённому выравниванию");
+                captured["aux"]={{"scalar_struct",scalar_struct_snapshot_json(scalar_struct)}};
+                scalar_struct_public=scalar_struct_snapshot_json(scalar_struct,false);supported=true;
             }
         }
         else if(type=="StrProperty") {
@@ -1012,6 +1052,9 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         if(!color_public.is_null()) {
             public_parameter["struct"]=color_public;public_parameter["direction"]=returned?"return":"input";public_parameter["passing"]="value";
         }
+        if(!scalar_struct_public.is_null()) {
+            public_parameter["struct"]=scalar_struct_public;public_parameter["direction"]="return";public_parameter["passing"]="value";
+        }
         parameters.push_back(std::move(public_parameter));
         return captured;
     });
@@ -1046,7 +1089,11 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         if(!captured.contains("aux"))continue;
         const auto& auxiliary=captured.at("aux");const auto type=captured.at("type").get<std::string>();
         if(type=="StructProperty") {
-            if(auxiliary.contains("linear_color")) {
+            if(auxiliary.contains("scalar_struct")) {
+                const auto current=capture_scalar_struct(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>());
+                if(scalar_struct_snapshot_json(current)!=auxiliary.at("scalar_struct"))
+                    throw HandlerError("signature_changed","Скалярный DTO изменился при чтении сигнатуры");
+            } else if(auxiliary.contains("linear_color")) {
                 const auto current=capture_linear_color_parameter(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>());
                 if(linear_color_snapshot_json(current)!=auxiliary.at("linear_color"))
                     throw HandlerError("signature_changed","FLinearColor metadata изменились при чтении сигнатуры");
@@ -1154,6 +1201,14 @@ json GameAccess::functions(void* object,int limit,const std::string& query,const
 json GameAccess::invoke(void* object,const std::string& function_name,const json& arguments,
                         const std::string& target_handle,const json* expected_token) {
     const auto invocation_identity=validate_object(object);
+    auto capture_scalar_struct=[this](uintptr_t field,int size,int dim) {
+        return scalar_struct_values::capture(field,size,dim,
+            []<class Value>(uintptr_t address){return read<Value>(address);},
+            [this](uint64_t value){return name(value);},
+            [this](uintptr_t value){return serial_identity(validate_object(reinterpret_cast<void*>(value)));},
+            [this](uintptr_t value){validate_class(reinterpret_cast<void*>(value));},
+            [this](uintptr_t value){return object_path(reinterpret_cast<void*>(value));});
+    };
     json expected_contract=nullptr;
     if(expected_token)expected_contract=checked_function_contract(signature_contracts_,*expected_token,handle_session_,target_handle,function_name);
     auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);uintptr_t function=0,function_owner=0;
@@ -1256,15 +1311,18 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     std::vector<ColorParameter> color_parameters;
     struct ScalarOutput {uintptr_t field{};int offset{};uint64_t flags{};std::string key;scalar_outputs::Layout layout;};
     std::vector<ScalarOutput> scalar_parameters;
+    std::optional<scalar_struct_values::Snapshot> scalar_struct_return;
     json pod_function_contract=nullptr;
-    bool contains_vector=false,contains_transform=false,contains_color=false,contains_scalar_output=false,contains_string_input=false,contains_object_array=false;
+    bool contains_vector=false,contains_transform=false,contains_color=false,contains_scalar_struct=false,contains_scalar_output=false,contains_string_input=false,contains_object_array=false;
     bool has_string_return=false;
     for(const auto field:parameter_fields) {
         const auto type=field_type(field,[this](auto f){return name(f);});const auto flags=read<uint64_t>(field+0x38);
         if(type=="StructProperty") {
-            if(read<int32_t>(field+0x34)==16)contains_color=true;
-            else if(read<int32_t>(field+0x34)==96)contains_transform=true;
-            else contains_vector=true;
+            const auto structure_path=object_path(reinterpret_cast<void*>(read<uintptr_t>(field+0x70)));
+            if(structure_path=="/Script/CoreUObject.LinearColor")contains_color=true;
+            else if(structure_path=="/Script/CoreUObject.Transform")contains_transform=true;
+            else if(structure_path=="/Script/CoreUObject.Vector")contains_vector=true;
+            else contains_scalar_struct=true;
         }
         if(supported_scalar_output_type(type) && (flags&0x100) && !(flags&0x400))contains_scalar_output=true;
         if(type=="StrProperty" && !(flags&0x400))contains_string_input=true;
@@ -1273,7 +1331,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     }
     if(contains_object_array && (contains_string_input || has_string_return))
         throw HandlerError("unsupported_signature","Object array входы пока не смешиваются с FString входом или возвратом");
-    const bool strict_pod_contract=contains_vector || contains_transform || contains_color || contains_scalar_output || contains_string_input || contains_object_array;
+    const bool strict_pod_contract=contains_vector || contains_transform || contains_color || contains_scalar_struct || contains_scalar_output || contains_string_input || contains_object_array;
     if(strict_pod_contract) {
         pod_function_contract=capture_function_contract(object,function_owner,function,target_handle);
         std::vector<std::pair<int,int>> intervals;
@@ -1452,22 +1510,32 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         if(flags&0x400){
             if(return_field)throw HandlerError("unsupported_signature","У функции обнаружено несколько возвращаемых параметров");
             return_field=field;return_type=type;return_size=size;return_offset=offset;
-            if(type=="StructProperty" && size==16) {
-                if(!contains_color)throw HandlerError("signature_changed","FLinearColor возврат появился после чтения полной сигнатуры");
-                if(flags&(kConstParm|kReferenceParm))throw HandlerError("unsupported_signature","Const/ref возврат FLinearColor не поддержан");
-                const auto color=capture_linear_color_parameter(field,size,read<int32_t>(field+0x30));
-                color_parameters.push_back({field,offset,flags,color,true});continue;
-            }
-            if(type=="StructProperty" && size==96)
-                throw HandlerError("unsupported_signature","Возврат Transform пока не поддержан");
             if(supported_scalar_output_type(type) && (flags&(kReferenceParm|kConstParm)))
                 throw HandlerError("unsupported_signature","Const/ref скалярный возврат не поддержан");
             if(type=="StructProperty") {
-                if(!contains_vector)throw HandlerError("signature_changed","FVector возврат появился после чтения полной сигнатуры");
-                if(flags&(kReferenceParm|kConstParm))
-                    throw HandlerError("unsupported_signature","Const/ref возврат FVector не поддержан");
-                const auto layout=capture_vector_parameter(field,size,read<int32_t>(field+0x30));
-                vector_parameters.push_back({field,offset,size,flags,name(read<uint64_t>(field+0x20)),layout,false,true});
+                const auto structure_path=object_path(reinterpret_cast<void*>(read<uintptr_t>(field+0x70)));
+                if(structure_path=="/Script/CoreUObject.LinearColor") {
+                    if(!contains_color)throw HandlerError("signature_changed","FLinearColor возврат появился после чтения полной сигнатуры");
+                    if(flags&(kConstParm|kReferenceParm))throw HandlerError("unsupported_signature","Const/ref возврат FLinearColor не поддержан");
+                    const auto color=capture_linear_color_parameter(field,size,read<int32_t>(field+0x30));
+                    color_parameters.push_back({field,offset,flags,color,true});
+                } else if(structure_path=="/Script/CoreUObject.Transform")
+                    throw HandlerError("unsupported_signature","Возврат Transform пока не поддержан");
+                else if(structure_path=="/Script/CoreUObject.Vector") {
+                    if(!contains_vector)throw HandlerError("signature_changed","FVector возврат появился после чтения полной сигнатуры");
+                    if(flags&(kReferenceParm|kConstParm))
+                        throw HandlerError("unsupported_signature","Const/ref возврат FVector не поддержан");
+                    const auto layout=capture_vector_parameter(field,size,read<int32_t>(field+0x30));
+                    vector_parameters.push_back({field,offset,size,flags,name(read<uint64_t>(field+0x20)),layout,false,true});
+                } else {
+                    if(!contains_scalar_struct)throw HandlerError("signature_changed","Скалярный DTO возврат появился после чтения полной сигнатуры");
+                    if(flags&(kConstParm|kReferenceParm))throw HandlerError("unsupported_signature","Const/ref возврат DTO не поддержан");
+                    auto scalar_struct=capture_scalar_struct(field,size,read<int32_t>(field+0x30));
+                    if(offset%scalar_struct.layout.min_alignment
+                       || reinterpret_cast<uintptr_t>(buffer+offset)%static_cast<uintptr_t>(scalar_struct.layout.min_alignment))
+                        throw HandlerError("unsupported_scalar_struct_layout","Буфер DTO не соответствует отражённому выравниванию");
+                    scalar_struct_return=std::move(scalar_struct);
+                }
                 continue;
             }
             if(type=="NameProperty")validate_name_return_layout(size,read<int32_t>(field+0x30));
@@ -1482,7 +1550,8 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             continue;
         }
         if(type=="StructProperty") {
-            if(size==16) {
+            const auto structure_path=object_path(reinterpret_cast<void*>(read<uintptr_t>(field+0x70)));
+            if(structure_path=="/Script/CoreUObject.LinearColor") {
                 if(!contains_color)throw HandlerError("signature_changed","FLinearColor вход появился после чтения полной сигнатуры");
                 if(flags&(kConstParm|kReferenceParm|0x100))throw HandlerError("unsupported_signature","FLinearColor вход поддержан только по значению");
                 const auto key=name(read<uint64_t>(field+0x20));
@@ -1491,7 +1560,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                 const auto encoded=linear_color_arguments::encode(color.layout,arguments.at(key));
                 std::memcpy(buffer+offset,encoded.bytes.data(),static_cast<size_t>(encoded.size));
                 color_parameters.push_back({field,offset,flags,color,false});++input_count;continue;
-            } else if(size==96) {
+            } else if(structure_path=="/Script/CoreUObject.Transform") {
                 if(!contains_transform)throw HandlerError("signature_changed","Transform появился после чтения полной сигнатуры");
                 if(vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
                     throw HandlerError("unsupported_signature","Transform требует вход по значению либо const reference; Out/Return не поддержаны");
@@ -1505,6 +1574,8 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                 std::memcpy(buffer+offset,encoded.bytes.data(),static_cast<size_t>(encoded.size));
                 ++input_count;continue;
             }
+            if(structure_path!="/Script/CoreUObject.Vector")
+                throw HandlerError("unsupported_signature","Скалярный DTO поддержан только как возврат по значению");
             if(!contains_vector)throw HandlerError("signature_changed","FVector параметр появился после чтения полной сигнатуры");
             const auto direction=vector_parameter_direction::classify(flags);
             const auto key=name(read<uint64_t>(field+0x20));
@@ -1811,15 +1882,30 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(validate_object(object))))
             throw HandlerError("stale_handle","Цель изменилась при копировании скалярного out результата");
     };
+    auto decode_scalar_struct_return=[&] {
+        if(!scalar_struct_return)return;
+        const auto& saved=*scalar_struct_return;
+        if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(validate_object(object))))
+            throw HandlerError("stale_handle","Цель изменилась при получении DTO результата");
+        const auto before=capture_scalar_struct(saved.field,saved.element_size,saved.array_dim);
+        if(!(before==saved))throw HandlerError("signature_changed","DTO возврат изменился после вызова");
+        std::vector<std::byte> copied(static_cast<size_t>(saved.element_size));
+        if(!copy_memory(copied.data(),buffer+saved.offset,copied.size()))
+            throw HandlerError("invalid_struct_copy","DTO результат не скопирован");
+        const auto value=scalar_struct_values::decode(saved.layout,copied);
+        if(!(capture_scalar_struct(saved.field,saved.element_size,saved.array_dim)==saved))
+            throw HandlerError("signature_changed","DTO metadata изменились при копировании результата");
+        result=value;result_metadata=scalar_struct_snapshot_json(saved,false);
+    };
     auto decode_pod_outputs=[&] {
         auto require_transform_result_contract=[&] {
-            if(!contains_transform && !contains_color && !contains_string_input && !contains_object_array)return;
+            if(!contains_transform && !contains_color && !contains_scalar_struct && !contains_string_input && !contains_object_array)return;
             if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(validate_object(object))))
-                throw HandlerError("stale_handle","Цель изменилась при обработке результата Transform вызова");
+                throw HandlerError("stale_handle","Цель изменилась при обработке POD результата вызова");
             require_same_function_contract(pod_function_contract,capture_function_contract(object,function_owner,function,target_handle));
         };
         require_transform_result_contract();
-        decode_vector_outputs();decode_color_outputs();decode_scalar_outputs();
+        decode_vector_outputs();decode_color_outputs();decode_scalar_outputs();decode_scalar_struct_return();
         require_transform_result_contract();
     };
     auto append_pod_results=[&](json response) {
