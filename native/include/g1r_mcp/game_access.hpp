@@ -15,6 +15,7 @@
 #include "g1r_mcp/object_serial.hpp"
 #include "g1r_mcp/job_state.hpp"
 #include "g1r_mcp/vector_layout.hpp"
+#include "g1r_mcp/transform_layout.hpp"
 
 namespace g1r_mcp {
 class GameAccess {
@@ -84,6 +85,7 @@ private:
     nlohmann::json read_array(const nlohmann::json& params);
     nlohmann::json read_struct(void* object, const std::string& handle, const std::string& property_name);
     vector_layout::Snapshot capture_vector_parameter(std::uintptr_t field,int size,int dim) const;
+    transform_layout::Snapshot capture_transform_parameter(std::uintptr_t field,int size,int dim) const;
     struct EnumLayout {std::string underlying_type;int size;void* object;};
     struct EnumTable {Handle identity;std::string path;std::vector<g1r::enum_values::Entry> entries;};
     EnumLayout enum_layout(const std::string& type, int size, uintptr_t field) const;

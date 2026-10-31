@@ -244,6 +244,13 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                 "script_patch_engine_apply_confirmed": False,
             },
             "invoke_arguments": {
+                "transform": {"type": "FTransform", "struct_path": "/Script/CoreUObject.Transform",
+                              "modes": ["input"], "passing": "value", "size": 96,
+                              "input_shape": {"Rotation": {"X": "finite_number", "Y": "finite_number", "Z": "finite_number", "W": "finite_number"},
+                                              "Translation": {"X": "finite_number", "Y": "finite_number", "Z": "finite_number"},
+                                              "Scale3D": {"X": "finite_number", "Y": "finite_number", "Z": "finite_number"}},
+                              "argument_constraints": {"rotation_normalization": "required", "max_norm_squared_deviation": 1e-6, "normalization": "none"},
+                              "layout_source": "reflected_function_parameter", "requires_signature_validation": True},
                 "scalar_outputs": {"types": ["BoolProperty", "IntProperty", "Int64Property", "UInt32Property",
                                                "UInt64Property", "FloatProperty", "DoubleProperty"],
                                    "argument_marker": {"out": True}, "output_field": "out_parameters",
