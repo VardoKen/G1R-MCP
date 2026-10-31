@@ -20,6 +20,8 @@
 #include "g1r_mcp/aligned_parameter_buffer.hpp"
 #include "g1r_mcp/transform_layout.hpp"
 #include "g1r_mcp/transform_arguments.hpp"
+#include "g1r_mcp/string_arguments.hpp"
+#include "g1r_mcp/string_input_lifetime.hpp"
 #include <MinHook.h>
 #include <bcrypt.h>
 #include <algorithm>
@@ -112,6 +114,11 @@ constexpr uintptr_t kNames = 0x9de8d80;
 constexpr uintptr_t kTick = 0x3fbced0;
 constexpr uintptr_t kProcessEvent = 0x13a6ad0;
 constexpr uintptr_t kFree = 0x1081690;
+constexpr uintptr_t kStringConstruct = 0x10316e0;
+constexpr uint8_t kStringConstructBytes[]={0x48,0x89,0x6c,0x24,0x18,0x56,0x41,0x56,0x41,0x57,0x48,0x83,0xec,0x20,0x45,0x33,
+    0xff,0x49,0x63,0xe8,0x4c,0x89,0x39,0x4c,0x8b,0xf2,0x4c,0x89,0x79,0x08,0x48,0x8b};
+constexpr uint8_t kStringFreeBytes[]={0x48,0x85,0xc9,0x74,0x2e,0x53,0x48,0x83,0xec,0x20,0x48,0x8b,0xd9,0x48,0x8b,0x0d,
+    0x44,0xf6,0xd2,0x08,0x48,0x85,0xc9,0x75,0x0c,0xe8,0x92,0x00,0x00,0x00,0x48,0x8b};
 constexpr const char* kHash = "0e369f64ba50aeb85925119ded60e0449dbc4917e38b46cf7251e533d422820b";
 constexpr uint8_t kTickBytes[] = {0x4c,0x8b,0xdc,0x55,0x57,0x41,0x54,0x49,0x8d,0xab,0x08,0xfc,0xff,0xff,0x48,0x81,0xec,0xe0,0x04,0x00,0x00};
 constexpr uint8_t kEventBytes[] = {0x40,0x55,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x81,0xec,0x70,0x01,0x00,0x00,0x48,0x8d,0x6c,0x24,0x30};
@@ -135,6 +142,10 @@ bool free_string(uintptr_t free_address, void* memory) {
     if (!memory) return true;
     __try { reinterpret_cast<void(__fastcall*)(void*)>(free_address)(memory); return true; }
     __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool construct_string(uintptr_t constructor,g1r_mcp::StringHeader* header,const char16_t* text,int units) {
+    __try {reinterpret_cast<void(__fastcall*)(g1r_mcp::StringHeader*,const char16_t*,int)>(constructor)(header,text,units);return true;}
+    __except(EXCEPTION_EXECUTE_HANDLER) {return false;}
 }
 std::string utf8(const wchar_t* value, int length) {
     if (length <= 0) return {};
@@ -251,7 +262,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.20"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.21"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
             {"pump",{{"state",!observed?"not_observed":recent?"recent_tick":"tick_stale"},
                      {"last_tick_monotonic_ms",observed?json(observed):json(nullptr)},
@@ -262,6 +273,11 @@ json GameAccess::status() const {
                          {"wait_timeout_ms",kRequestWaitMs},{"cancelled_jobs_can_execute",false}}},
             {"build_hash",kHash},{"startup_error",startup_error_},
             {"process_id",GetCurrentProcessId()},
+            {"string_inputs",{{"quarantined",string_inputs_quarantined_.load()},
+                {"quarantine_cause",string_inputs_quarantine_cause_.load()},
+                {"retained_allocations",string_inputs_retained_count_.load()},
+                {"retained_bytes",string_inputs_retained_bytes_.load()},
+                {"max_inputs",32},{"max_utf16_units",32767},{"max_input_bytes",262144}}},
             {"operations",{"status","enable_game","objects","properties","functions","invoke","read_array","read_struct",
                            "snapshot","watch_start","watch_read","watch_stop","watch_forget"}},
             {"snapshot_limits",{{"objects",16},{"properties_per_object",32},{"scan_fields_per_object",4096},
@@ -787,7 +803,7 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
             if(parameter_direction::classify(flags)!=parameter_direction::Direction::output)
                 throw HandlerError("unsupported_signature","Скалярный параметр не является pure out");
             scalar_public=scalar_output_metadata(capture_scalar_output_layout(field,type,size,array_dim));
-        } else if(!returned && type!="StructProperty" && (flags&(0x100|kReferenceParm)))
+        } else if(!returned && type!="StructProperty" && type!="StrProperty" && (flags&(0x100|kReferenceParm)))
             throw HandlerError("unsupported_signature","Out/ref аргументы этого типа не поддержаны");
         if(returned && supported_scalar_output_type(type) && (flags&(kReferenceParm|kConstParm)))
             throw HandlerError("unsupported_signature","Const/ref скалярный возврат не поддержан");
@@ -825,7 +841,14 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
             vector_public=vector_snapshot_json(vector,false);supported=true;
             }
         }
-        else if(type=="StrProperty")supported=returned && size==16;
+        else if(type=="StrProperty") {
+            supported=size==16;
+            if(offset%8)throw HandlerError("unsupported_signature","FString требует выравнивание параметра 8 байт");
+            if(!returned && vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
+                throw HandlerError("unsupported_signature","FString требует const reference input");
+            if(!returned && !(flags&kConstParm))
+                throw HandlerError("unsupported_signature","FString вход по значению пока не поддержан");
+        }
         else if(type=="Int64Property" || type=="UInt64Property")supported=size==8;
         else if(type=="UInt32Property")supported=size==4;
         else if(type=="ClassProperty" || type=="ObjectProperty") {
@@ -876,6 +899,10 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
             public_parameter["struct"]=transform_public;public_parameter["direction"]="input";
             public_parameter["passing"]=(flags&kConstParm)?"const_reference":"value";
             public_parameter["argument_constraints"]={{"rotation_normalization","required"},{"max_norm_squared_deviation",1e-6},{"normalization","none"}};
+        }
+        if(type=="StrProperty" && !returned) {
+            public_parameter["direction"]="input";public_parameter["passing"]="const_reference";
+            public_parameter["argument_constraints"]={{"max_utf16_units",32767},{"embedded_nul","rejected"},{"ownership","engine_owned_copy"}};
         }
         parameters.push_back(std::move(public_parameter));
         return captured;
@@ -1113,7 +1140,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     struct ScalarOutput {uintptr_t field{};int offset{};uint64_t flags{};std::string key;scalar_outputs::Layout layout;};
     std::vector<ScalarOutput> scalar_parameters;
     json pod_function_contract=nullptr;
-    bool contains_vector=false,contains_transform=false,contains_scalar_output=false;
+    bool contains_vector=false,contains_transform=false,contains_scalar_output=false,contains_string_input=false;
     for(const auto field:parameter_fields) {
         const auto type=field_type(field,[this](auto f){return name(f);});const auto flags=read<uint64_t>(field+0x38);
         if(type=="StructProperty") {
@@ -1121,8 +1148,9 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             else contains_vector=true;
         }
         if(supported_scalar_output_type(type) && (flags&0x100) && !(flags&0x400))contains_scalar_output=true;
+        if(type=="StrProperty" && !(flags&0x400))contains_string_input=true;
     }
-    const bool strict_pod_contract=contains_vector || contains_transform || contains_scalar_output;
+    const bool strict_pod_contract=contains_vector || contains_transform || contains_scalar_output || contains_string_input;
     if(strict_pod_contract) {
         pod_function_contract=capture_function_contract(object,function_owner,function,target_handle);
         std::vector<std::pair<int,int>> intervals;
@@ -1135,6 +1163,68 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             intervals.emplace_back(offset,offset+size);
         }
     }
+    struct StringInput {uintptr_t field{};int offset{};uint64_t flags{};std::string key;std::u16string source;StringHeader header{};};
+    std::vector<StringInput> string_inputs;
+    string_input_lifetime::Ledger string_ledger;
+    bool string_event_started=false,string_event_completed=false,string_return_registered=false,string_cleanup_done=false;
+    std::size_t extra_retained_count{},extra_retained_bytes{};
+    uint32_t string_quarantine_cause{};
+    auto quarantine_strings=[&](uint32_t cause) {
+        string_ledger.mark_uncertain();
+        string_inputs_quarantine_cause_=cause;
+        string_inputs_retained_count_=string_ledger.retained_count()+extra_retained_count;
+        string_inputs_retained_bytes_=string_ledger.retained_bytes()+extra_retained_bytes;
+        string_inputs_quarantined_=true;
+    };
+    auto release_strings=[&] {
+        const auto cleanup=string_ledger.release([this](uintptr_t memory){return free_string(base_+kFree,reinterpret_cast<void*>(memory));});
+        string_cleanup_done=cleanup.confirmed;
+        if(!cleanup.confirmed)quarantine_strings(string_quarantine_cause?string_quarantine_cause:5);
+        return cleanup;
+    };
+    if(contains_string_input) {
+        if(string_inputs_quarantined_)throw HandlerError("string_input_quarantined","FString входы заблокированы после неподтверждённой очистки");
+        uint8_t constructor_bytes[sizeof(kStringConstructBytes)]{},free_bytes[sizeof(kStringFreeBytes)]{};
+        if(!copy_memory(constructor_bytes,reinterpret_cast<void*>(base_+kStringConstruct),sizeof(constructor_bytes))
+           || !copy_memory(free_bytes,reinterpret_cast<void*>(base_+kFree),sizeof(free_bytes))
+           || std::memcmp(constructor_bytes,kStringConstructBytes,sizeof(constructor_bytes))
+           || std::memcmp(free_bytes,kStringFreeBytes,sizeof(free_bytes)))
+            throw HandlerError("unsupported_string_allocator","Подписи конструктора или освобождения FString не совпадают");
+        string_input_lifetime::InputBudget budget;
+        string_inputs.reserve(string_input_lifetime::max_inputs);
+        for(const auto field:parameter_fields) {
+            const auto flags=read<uint64_t>(field+0x38);
+            if((flags&0x400) || field_type(field,[this](auto value){return name(value);})!="StrProperty")continue;
+            const auto offset=read<int32_t>(field+0x44),size=read<int32_t>(field+0x34),dim=read<int32_t>(field+0x30);
+            if(size!=16 || dim!=1 || offset%8 || !(flags&kConstParm)
+               || vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
+                throw HandlerError("unsupported_signature","FString требует выровненный const reference input размером 16 байт");
+            const auto key=name(read<uint64_t>(field+0x20));
+            if(!arguments.contains(key))throw HandlerError("missing_argument","Не задан FString аргумент "+key);
+            auto source=string_arguments::encode(arguments.at(key));budget.add(source.size());
+            string_inputs.push_back({field,offset,flags,key,std::move(source),{}});
+        }
+        require_same_function_contract(pod_function_contract,capture_function_contract(object,function_owner,function,target_handle));
+    }
+    auto validate_string_inputs=[&] {
+        if(!contains_string_input)return;
+        for(size_t index=0;index<string_inputs.size();++index) {
+            const auto& input=string_inputs[index];StringHeader current{};
+            if(!copy_memory(&current,buffer+input.offset,sizeof(current))) {
+                string_ledger.mark_uncertain();string_quarantine_cause=3;
+                throw HandlerError("string_lifetime_unknown","Заголовок FString входа недоступен");
+            }
+            string_ledger.validate_unchanged_input(index,current);
+            std::u16string copied(input.source.size()+1,u'\0');
+            if(current.data && (!copy_memory(copied.data(),reinterpret_cast<void*>(current.data),copied.size()*sizeof(char16_t))
+               || copied.back()!=0 || !std::equal(input.source.begin(),input.source.end(),copied.begin()))) {
+                string_ledger.mark_uncertain();string_quarantine_cause=3;
+                throw HandlerError("string_lifetime_unknown","Байты FString const-входа изменились либо недоступны");
+            }
+        }
+        require_same_function_contract(pod_function_contract,capture_function_contract(object,function_owner,function,target_handle));
+    };
+    try {
     for(const auto field:parameter_fields) {
         auto flags=read<uint64_t>(field+0x38);if(!(flags&0x80))continue;
         auto type=field_type(field,[this](auto f){return name(f);});int offset=read<int32_t>(field+0x44),size=read<int32_t>(field+0x34);
@@ -1197,6 +1287,13 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             ++input_count;
             vector_parameters.push_back({field,offset,size,flags,key,layout,direction==vector_parameter_direction::Direction::output,false});
             continue;
+        }
+        if(type=="StrProperty") {
+            if(!contains_string_input)throw HandlerError("signature_changed","FString вход появился после чтения полной сигнатуры");
+            auto input=std::find_if(string_inputs.begin(),string_inputs.end(),[field](const auto& value){return value.field==field;});
+            if(input==string_inputs.end() || input->offset!=offset || input->flags!=flags || size!=16 || offset%8)
+                throw HandlerError("signature_changed","FString вход изменился после предварительной проверки");
+            ++input_count;continue;
         }
         if(supported_scalar_output_type(type) && (flags&0x100)) {
             if(!contains_scalar_output)throw HandlerError("signature_changed","Скалярный out появился после чтения полной сигнатуры");
@@ -1307,6 +1404,25 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     const auto invocation_after=validate_object(object);
     if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(invocation_after)))
         throw HandlerError("stale_handle","Identity цели изменилась до вызова; получите новую ссылку");
+    for(auto& input:string_inputs) {
+        const auto constructor_contract=capture_function_contract(object,function_owner,function,target_handle);
+        require_same_function_contract(pod_function_contract,constructor_contract);
+        if(expected_token)require_same_function_contract(expected_contract,constructor_contract);
+        StringHeader header{};
+        if(!construct_string(base_+kStringConstruct,&header,input.source.c_str(),static_cast<int>(input.source.size()))) {
+            string_ledger.mark_uncertain();string_quarantine_cause=1;
+            extra_retained_count=1;
+            extra_retained_bytes=header.capacity>0?static_cast<size_t>(header.capacity)*sizeof(char16_t):0;
+            throw HandlerError("string_constructor_fault","Конструктор FString завершился native exception; владение неизвестно");
+        }
+        extra_retained_count=header.data?1:0;
+        extra_retained_bytes=header.capacity>0?static_cast<size_t>(header.capacity)*sizeof(char16_t):0;
+        string_quarantine_cause=4;
+        string_ledger.add_input(header,input.source.size());
+        extra_retained_count=extra_retained_bytes=0;string_quarantine_cause=0;input.header=header;
+        std::memcpy(buffer+input.offset,&header,sizeof(header));
+    }
+    validate_string_inputs();
     if(expected_token || strict_pod_contract) {
         auto current_class=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);
         uintptr_t current_function{},current_owner{};std::set<uintptr_t> current_classes;
@@ -1329,7 +1445,9 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         if(expected_token)require_same_function_contract(expected_contract,final_contract);
         if(strict_pod_contract)require_same_function_contract(pod_function_contract,final_contract);
     }
+    string_event_started=true;
     if(!call_event(reinterpret_cast<void*>(process_event_),object,reinterpret_cast<void*>(function),buffer)) {
+        if(contains_string_input){string_ledger.mark_uncertain();string_quarantine_cause=2;}
         json details={{"executed",false},{"may_have_executed",true},{"do_not_retry",true}};
         if(return_type=="StrProperty") {
             details["cleanup_attempted"]=false;details["cleanup_confirmed"]=false;
@@ -1337,6 +1455,8 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         }
         throw HandlerError("game_call_fault","Игровой вызов вызвал native exception; эффект неизвестен",std::move(details));
     }
+    string_event_completed=true;
+    validate_string_inputs();
     json result,return_enum,result_metadata=nullptr,out_parameters=json::object(),out_parameter_metadata=json::object();
     auto decode_vector_outputs=[&] {
         if(vector_parameters.empty())return;
@@ -1387,7 +1507,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     };
     auto decode_pod_outputs=[&] {
         auto require_transform_result_contract=[&] {
-            if(!contains_transform)return;
+        if(!contains_transform && !contains_string_input)return;
             if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(validate_object(object))))
                 throw HandlerError("stale_handle","Цель изменилась при обработке результата Transform вызова");
             require_same_function_contract(pod_function_contract,capture_function_contract(object,function_owner,function,target_handle));
@@ -1408,6 +1528,15 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         if(!copy_memory(&header,buffer+return_offset,sizeof(header)))
             throw HandlerError("game_result_error","Вызов выполнен, но FString не прочитан; очистка не подтверждена",
                                string_cleanup_details(false,false,"invalid_string_storage"));
+        if(contains_string_input) {
+            string_ledger.add_return(header);string_return_registered=true;
+            result=copied_string(header);
+            decode_pod_outputs();validate_string_inputs();
+            const auto cleanup=release_strings();
+            if(!cleanup.confirmed)throw HandlerError("game_result_error","Освобождение FString не подтверждено; не повторять запрос");
+            return append_pod_results({{"function",function_name},{"return_type",return_type},{"result",result},{"executed",true},
+                {"thread_id",GetCurrentThreadId()},{"cleanup_confirmed",true},{"input_cleanup_confirmed",true}});
+        }
         result=copied_owned_string_return(header,
             [](const StringHeader& copied){return copied_string(copied);},
             [this](uintptr_t memory){return free_string(base_+kFree,reinterpret_cast<void*>(memory));});
@@ -1443,7 +1572,49 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     }
     json response={{"function",function_name},{"return_type",return_type},{"result",result},{"executed",true},{"thread_id",GetCurrentThreadId()}};
     if(!return_enum.is_null())response["return_enum"]=return_enum;
+    if(contains_string_input) {
+        validate_string_inputs();const auto cleanup=release_strings();
+        if(!cleanup.confirmed)throw HandlerError("game_result_error","Освобождение FString входов не подтверждено; не повторять запрос");
+        response["cleanup_confirmed"]=true;response["input_cleanup_confirmed"]=true;
+    }
     return append_pod_results(std::move(response));
+    } catch(const HandlerError& error) {
+        if(!contains_string_input)throw;
+        if(string_event_completed && !string_cleanup_done && !string_ledger.uncertain()) {
+            try{validate_string_inputs();}
+            catch(...) {string_ledger.mark_uncertain();string_quarantine_cause=3;}
+        }
+        if(string_event_completed && !string_cleanup_done && return_type=="StrProperty" && !string_return_registered && !string_ledger.uncertain()) {
+            StringHeader header{};
+            try {
+                if(!copy_memory(&header,buffer+return_offset,sizeof(header)))throw HandlerError("invalid_string_storage","FString результат недоступен");
+                string_ledger.add_return(header);string_return_registered=true;
+            } catch(...) {string_ledger.mark_uncertain();string_quarantine_cause=4;}
+        }
+        const auto cleanup=release_strings();
+        json details={{"executed",string_event_completed},{"may_have_executed",string_event_started},{"do_not_retry",string_event_started || !cleanup.confirmed},
+            {"cause_code",error.code()},{"cleanup_attempted",cleanup.attempted},{"cleanup_confirmed",cleanup.confirmed},
+            {"input_cleanup_confirmed",cleanup.confirmed},{"cleanup_state",cleanup.confirmed?"released":"unknown"},
+            {"string_input_quarantined",string_inputs_quarantined_.load()}};
+        if(string_event_started || !cleanup.confirmed)
+            throw HandlerError("game_result_error",string_event_completed?"Вызов выполнен; обработка или очистка FString не завершена":
+                string_event_started?"Эффект вызова неизвестен; владение FString не подтверждено":"Вызов не выполнен; владение FString не подтверждено",std::move(details));
+        throw HandlerError(error.code(),error.what(),std::move(details));
+    } catch(...) {
+        if(!contains_string_input)throw;
+        if(string_event_completed && !string_cleanup_done && !string_ledger.uncertain()) {
+            try{validate_string_inputs();}
+            catch(...) {string_ledger.mark_uncertain();string_quarantine_cause=3;}
+        }
+        if(string_event_completed && !string_cleanup_done && return_type=="StrProperty" && !string_return_registered) {
+            string_ledger.mark_uncertain();string_quarantine_cause=4;
+        }
+        const auto cleanup=release_strings();
+        throw HandlerError("game_result_error","Обработка FString не завершена; повтор запрещён",
+            {{"executed",string_event_completed},{"may_have_executed",string_event_started},{"do_not_retry",true},{"cause_code","result_processing_failed"},
+             {"cleanup_attempted",cleanup.attempted},{"cleanup_confirmed",cleanup.confirmed},{"input_cleanup_confirmed",cleanup.confirmed},
+             {"cleanup_state",cleanup.confirmed?"released":"unknown"},{"string_input_quarantined",string_inputs_quarantined_.load()}});
+    }
 }
 json GameAccess::execute(const json& request) {
     auto op=request.at("op").get<std::string>();auto params=request.at("params");
