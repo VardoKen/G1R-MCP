@@ -48,14 +48,15 @@ class ScriptPatchTests(unittest.TestCase):
             self.assertEqual(result["patch_text"], "")
             self.assertEqual(result["hunks"], 0)
             return result
-        self.assertTrue(result["patch_text"].startswith(f"--- a/{relative}\n+++ b/{relative}\n"))
+        patch_relative = relative.removeprefix("Script/")
+        self.assertTrue(result["patch_text"].startswith(f"--- a/{patch_relative}\n+++ b/{patch_relative}\n"))
         apply_root = self.root / "apply"
         apply_file = apply_root / relative
         apply_file.parent.mkdir(parents=True, exist_ok=True)
         apply_file.write_bytes(before)
         patch_file = self.root / "Changes.patch"
         patch_file.write_bytes(result["patch_text"].encode("utf-8"))
-        options = ["--unidiff-zero"] if context == 0 else []
+        options = ["--directory=Script", *(["--unidiff-zero"] if context == 0 else [])]
         checked = subprocess.run(["git", "-c", "core.autocrlf=false", "apply", "--check", *options, str(patch_file)], cwd=apply_root, capture_output=True)
         self.assertEqual(checked.returncode, 0, checked.stderr.decode(errors="replace"))
         applied = subprocess.run(["git", "-c", "core.autocrlf=false", "apply", *options, str(patch_file)], cwd=apply_root, capture_output=True)

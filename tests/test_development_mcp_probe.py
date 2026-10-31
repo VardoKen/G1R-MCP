@@ -127,7 +127,7 @@ class DevelopmentCycleTests(unittest.IsolatedAsyncioTestCase):
                 if status_calls[0] == 1:
                     raise probe.ProbeError("native_unavailable", "Init-поток ещё не открыл listener")
                 result["hook_installed"] = current_time[0] > .1
-                result["ready"] = current_time[0] >= 20
+                result["ready"] = current_time[0] >= 80
                 result["tick_count"] = 1 if result["ready"] else 0
             elif name == "g1r_native_enable":
                 result["hook_installed"] = True
@@ -135,8 +135,8 @@ class DevelopmentCycleTests(unittest.IsolatedAsyncioTestCase):
                 result["tick_count"] = 0
             return result
         result = await probe.development_cycle(call, "artifacts/probe", 2,
-                sleep=sleep, clock=lambda: current_time[0], ready_timeout=45)
-        self.assertGreaterEqual(current_time[0], 20)
+                sleep=sleep, clock=lambda: current_time[0], startup_timeout=90, ready_timeout=120)
+        self.assertGreaterEqual(current_time[0], 80)
         self.assertTrue(result["stop_confirmed"])
         self.assertEqual(sum(name == "g1r_native_load" for name, _ in fake.calls), 1)
         self.assertEqual(sum(name == "g1r_native_enable" for name, _ in fake.calls), 1)

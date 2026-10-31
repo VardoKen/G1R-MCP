@@ -256,10 +256,19 @@ scalar_outputs::Layout capture_scalar_output_layout(uintptr_t field,const std::s
 }
 
 GameAccess* GameAccess::active_{};
+uintptr_t GameAccess::ensure_image_base() {
+    if(base_)return base_;
+    if(file_hash()!=kHash) {
+        startup_error_="exe_hash_mismatch";
+        throw HandlerError("exe_hash_mismatch","Требуется подтверждённая сборка игры");
+    }
+    base_=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    return base_;
+}
 bool GameAccess::start() {
     if(enabled_) return true;
-    if(file_hash()!=kHash) {startup_error_="exe_hash_mismatch";return false;}
-    base_=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    try {ensure_image_base();}
+    catch(const HandlerError&) {return false;}
     uint8_t tick[sizeof(kTickBytes)]{},event[sizeof(kEventBytes)]{};
     if(!copy_memory(tick,reinterpret_cast<void*>(base_+kTick),sizeof(tick)) ||
        !copy_memory(event,reinterpret_cast<void*>(base_+kProcessEvent),sizeof(event)) ||
@@ -296,7 +305,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.27"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.28"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
             {"pump",{{"state",!observed?"not_observed":recent?"recent_tick":"tick_stale"},
                      {"last_tick_monotonic_ms",observed?json(observed):json(nullptr)},
@@ -336,9 +345,8 @@ json GameAccess::status() const {
                               {"allocates_serial",false},{"zero_aba_protection",false}}},
             {"limitations",{"Экспериментальная привязка к одному EXE","Нулевые serial не защищают от ABA; появившийся serial отзывает прежнюю ссылку","Одно активное соединение; ссылки и наблюдения принадлежат его сессии","Смена мира не определяет отдельное поколение; проверяется объект перед каждым чтением","Без выгрузки DLL: завершение через закрытие игры"}}};
 }
-json GameAccess::compile_diagnostics() const {
-    if(file_hash()!=kHash)throw HandlerError("exe_hash_mismatch","Диагностика требует подтверждённую сборку игры");
-    const auto image_base=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+json GameAccess::compile_diagnostics() {
+    const auto image_base=ensure_image_base();
     const auto manager=read<uintptr_t>(image_base+kAngelscriptManager);
     if(!manager)throw HandlerError("compile_diagnostics_unavailable","Менеджер AngelScript ещё не создан");
     auto* compilation_lock=reinterpret_cast<CRITICAL_SECTION*>(manager+0x390);

@@ -88,8 +88,9 @@ class ScriptPatchBuilder:
         def lines(text: str) -> list[str]:
             pieces = text.split("\n")
             return [piece + "\n" for piece in pieces[:-1]] + ([pieces[-1]] if pieces[-1] else [])
+        patch_path = path.removeprefix("Script/")
         generated = difflib.unified_diff(lines(before_text), lines(after_text),
-                                         fromfile="a/" + path, tofile="b/" + path,
+                                         fromfile="a/" + patch_path, tofile="b/" + patch_path,
                                          n=context_lines, lineterm="\n")
         chunks: list[str] = []
         hunks = 0

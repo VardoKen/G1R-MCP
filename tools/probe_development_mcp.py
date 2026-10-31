@@ -65,8 +65,8 @@ async def development_cycle(call: Call, relative_package: str, expected_value: i
                             enable_ingame_tools: bool = False,
                             companion_packages: list[str] | None = None,
                             show_script_errors: bool = False) -> dict[str, Any]:
-    if not 1 <= startup_timeout <= 45 or not 1 <= ready_timeout <= 60:
-        raise ProbeError("invalid_timeout", "Ожидание запуска ограничено 45 с, Tick — 60 с")
+    if startup_timeout <= 0 or ready_timeout <= 0:
+        raise ProbeError("invalid_timeout", "Ожидание запуска и Tick должно быть положительным")
     if type(enable_ingame_tools) is not bool:
         raise ProbeError("invalid_arguments", "enable_ingame_tools должен быть bool")
     if (companion_packages is not None and (not isinstance(companion_packages, list)

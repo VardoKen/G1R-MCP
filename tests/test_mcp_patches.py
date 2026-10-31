@@ -110,10 +110,10 @@ class MCPScriptPatchTests(unittest.IsolatedAsyncioTestCase):
             target = root / "apply" / read["path"]
             target.parent.mkdir(parents=True)
             target.write_bytes(before)
-            checked = subprocess.run(["git", "-c", "core.autocrlf=false", "apply", "--check", str(patch_file)],
+            checked = subprocess.run(["git", "-c", "core.autocrlf=false", "apply", "--check", "--directory=Script", str(patch_file)],
                                      cwd=root / "apply", capture_output=True)
             self.assertEqual(checked.returncode, 0, checked.stderr.decode(errors="replace"))
-            applied = subprocess.run(["git", "-c", "core.autocrlf=false", "apply", str(patch_file)],
+            applied = subprocess.run(["git", "-c", "core.autocrlf=false", "apply", "--directory=Script", str(patch_file)],
                                      cwd=root / "apply", capture_output=True)
             self.assertEqual(applied.returncode, 0, applied.stderr.decode(errors="replace"))
             self.assertEqual(target.read_bytes(), replacement.encode("utf-8"))
