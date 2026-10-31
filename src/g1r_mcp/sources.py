@@ -16,6 +16,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 
 from .source_functions import declarations as function_declarations
+from .source_identity import inspect as inspect_source_identity
 
 
 MAX_FILE_BYTES = 2 * 1024 * 1024
@@ -187,6 +188,10 @@ class SourceCatalog:
         if revision is not None and (not isinstance(revision, str) or len(revision) > 256 or any(ord(c) < 32 for c in revision)):
             raise SourceError("invalid_arguments", "Метка ревизии имеет неподдерживаемый формат")
         self.revision = revision
+
+    def source_identity(self) -> dict:
+        """Прочитать Git-идентичность выбранного Modkit отдельно от индекса исходников."""
+        return inspect_source_identity(self.root, self.revision)
 
     def _files(self) -> list[SourceFile]:
         _check_path(self.root, directory=True)

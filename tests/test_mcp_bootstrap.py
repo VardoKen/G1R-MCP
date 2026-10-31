@@ -57,16 +57,39 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                                       "g1r_read_package_file_exact", "reconnect", "не повтор"):
                         self.assertIn(important, instructions)
                     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-                    self.assertEqual(len(tools), 39)
+                    self.assertEqual(len(tools), 40)
                     self.assertTrue(tools["g1r_list_source_functions"].annotations.read_only_hint)
+                    self.assertTrue(tools["g1r_source_identity"].annotations.read_only_hint)
                     status = await self.call_ok(client, "g1r_status")
                     self.assertEqual(status["sources"]["root"], str(modkit))
+                    self.assertEqual(status["sources"]["identity_tool"], "g1r_source_identity")
                     self.assertEqual(status["workspace"]["root"], str(workspace))
                     self.assertEqual(status["game"]["configured_root"], str(game))
                     self.assertFalse(status["game"]["connection_checked"])
                     self.assertFalse(status["game"]["ready_known"])
                     self.assertFalse(game.exists())
                     catalog = await self.call_ok(client, "g1r_capabilities")
+                    self.assertEqual(catalog["source_identity"], {
+                        "tool": "g1r_source_identity", "snapshot_kind": "sequential_git_reads",
+                        "source_only": True, "revision_source": "caller_label",
+                        "worktree_scope": "repository", "game_compatibility_checked": False})
+                    identity = await self.call_ok(client, "g1r_source_identity")
+                    self.assertIsInstance(identity["inspected_at"], str)
+                    self.assertEqual(identity["snapshot_kind"], "sequential_git_reads")
+                    self.assertIsNone(identity["configured_revision"])
+                    self.assertEqual(identity["revision_source"], "caller_label")
+                    self.assertTrue(identity["source_only"])
+                    self.assertFalse(identity["game_compatibility_checked"])
+                    self.assertIsNone(identity["git"]["head"])
+                    self.assertIsNone(identity["git"]["working_tree_changed"])
+                    self.assertIsNone(identity["git"]["configured_revision_matches_head"])
+                    self.assertIn(identity["git"]["read_status"]["repository"], {"failed", "unavailable"})
+                    self.assertIn(identity["git"]["read_status"]["head"], {"not_inspected", "unavailable"})
+                    self.assertIn(identity["git"]["read_status"]["working_tree"], {"not_inspected", "unavailable"})
+                    native_catalog = {item["name"]: item for item in catalog["native_tools"]}
+                    for name in ("g1r_read_array", "g1r_read_struct"):
+                        self.assertTrue(native_catalog[name]["read_only_hint"])
+                        self.assertTrue(tools[name].annotations.read_only_hint)
                     self.assertEqual(catalog["source_functions"], {
                         "tool": "g1r_list_source_functions", "parser_kind": "lexical",
                         "result_field": "items", "prototype": "raw_source",

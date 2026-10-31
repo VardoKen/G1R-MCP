@@ -30,6 +30,7 @@ from .compile_diagnostics import read_report, read_runtime_report
 LOCAL_TOOLS = (
     ("g1r_status", "Состояние сервера и граница игрового канала"),
     ("g1r_capabilities", "Каталог реализованных и недоступных групп"),
+    ("g1r_source_identity", "Текущий Git HEAD Modkit и сравнение с меткой ревизии"),
     ("g1r_find_source_files", "Поиск файлов официального Modkit"),
     ("g1r_search_source", "Буквальный поиск строк AngelScript"),
     ("g1r_read_source", "Ограниченное чтение исходника Modkit"),
@@ -166,7 +167,8 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
         return {
             "server": {"name": "G1R MCP", "version": __version__, "transport": transport, "ready": True},
             "sources": {"kind": "official_modkit_static", "root": str(sources.root), "revision": source_revision,
-                        "revision_source": "caller_label", "validation": "source_only"},
+                        "revision_source": "caller_label", "validation": "source_only",
+                        "identity_tool": "g1r_source_identity"},
             "workspace": {"root": str(workspace.root), "format": "GothicMod.json/Script/ScriptPatches",
                           "installed_game_deployment": False},
             "game_session": ownership.status(),
@@ -194,7 +196,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                 for name, description in LOCAL_TOOLS
             ],
             "native_tools": [{"name": name, "description": description, "implemented": True,
-                              "read_only_hint": name in {"g1r_native_status", "g1r_find_objects", "g1r_object_properties", "g1r_object_functions", "g1r_snapshot", "g1r_watch_read"},
+                              "read_only_hint": name in {"g1r_native_status", "g1r_find_objects", "g1r_object_properties", "g1r_object_functions", "g1r_read_array", "g1r_read_struct", "g1r_snapshot", "g1r_watch_read"},
                               "availability": "requires_live_native_status"} for name, description in NATIVE_TOOLS],
             "workspace_tools": [
                 {"name": name, "description": description, "implemented": True,
@@ -227,6 +229,9 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                  "item_fields": ["name", "owner", "namespace", "kind", "prototype", "path",
                                                  "start_line", "end_line", "file_sha256", "root_kind"],
                                  "runtime_signature_confirmed": False},
+            "source_identity": {"tool": "g1r_source_identity", "snapshot_kind": "sequential_git_reads",
+                                "source_only": True, "revision_source": "caller_label",
+                                "worktree_scope": "repository", "game_compatibility_checked": False},
             "bootstrap": {
                 "game_sequence": [
                     {"tool": "g1r_development_recipe", "condition": "Проверить выбранный рабочий пакет и получить manifest/DLL SHA-256"},
@@ -361,6 +366,11 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                 "Проверка пакета не загружает мод и не проверяет алгоритм сравнения версий загрузчика",
             ],
         }
+
+    @server.tool(annotations=read_only)
+    def g1r_source_identity() -> dict[str, Any]:
+        """Прочитать Git HEAD и состояние Modkit; совпадение с установленной игрой не проверяется."""
+        return sources.source_identity()
 
     @server.tool(annotations=read_only)
     def g1r_find_source_files(query: str, limit: int = 50, offset: int = 0) -> dict[str, Any]:
