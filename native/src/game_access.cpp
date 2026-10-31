@@ -142,6 +142,7 @@ constexpr uintptr_t kFree = 0x1081690;
 constexpr uintptr_t kAngelscriptManager = 0xa02fdb8;
 constexpr uintptr_t kFormatDiagnostics = 0x417d2b0;
 constexpr uintptr_t kStringConstruct = 0x10316e0;
+constexpr uintptr_t kNameConstruct = 0x11b37a0;
 constexpr uintptr_t kObjectArrayRealloc = 0x108f6a0;
 constexpr uint8_t kObjectArrayReallocBytes[]={0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x74,0x24,0x10,0x57,0x48,0x83,0xec,0x20,0x48,
     0x8b,0xf1,0x41,0x8b,0xd8,0x48,0x8b,0x0d,0x2c,0x16,0xd2,0x08,0x48,0x8b,0xfa,0x48};
@@ -175,6 +176,10 @@ bool free_string(uintptr_t free_address, void* memory) {
 }
 bool construct_string(uintptr_t constructor,g1r_mcp::StringHeader* header,const char16_t* text,int units) {
     __try {reinterpret_cast<void(__fastcall*)(g1r_mcp::StringHeader*,const char16_t*,int)>(constructor)(header,text,units);return true;}
+    __except(EXCEPTION_EXECUTE_HANDLER) {return false;}
+}
+bool construct_name(uintptr_t constructor,uint64_t* value,const char16_t* text) {
+    __try {reinterpret_cast<uint64_t*(__fastcall*)(uint64_t*,const char16_t*,uint32_t)>(constructor)(value,text,1);return true;}
     __except(EXCEPTION_EXECUTE_HANDLER) {return false;}
 }
 bool allocate_object_array(uintptr_t allocator,size_t bytes,void** result) {
@@ -305,7 +310,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.28"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.29"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
             {"pump",{{"state",!observed?"not_observed":recent?"recent_tick":"tick_stale"},
                      {"last_tick_monotonic_ms",observed?json(observed):json(nullptr)},
@@ -1546,9 +1551,30 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         if(type=="NameProperty")validate_name_argument_layout(size,read<int32_t>(field+0x30));
         auto key=name(read<uint64_t>(field+0x20));if(!arguments.contains(key))throw HandlerError("missing_argument","Не задан аргумент "+key);auto v=arguments.at(key);++input_count;
         if(type=="NameProperty") {
-            const auto source=validated_name_argument(size,read<int32_t>(field+0x30),v,capture_name);
-            std::memcpy(buffer+offset,&source.packed,sizeof(source.packed));
-            name_inputs.push_back({field,offset,source});
+            if(v.is_object() && v.contains("name")) {
+                if(v.size()!=1 || !v.at("name").is_string())
+                    throw HandlerError("invalid_name_argument","Текстовый FName требует только {name:строка}");
+                const auto& text=v.at("name").get_ref<const std::string&>();
+                if(text.find('\0')!=std::string::npos)
+                    throw HandlerError("invalid_name_argument","Текстовый FName не принимает встроенный NUL");
+                std::wstring encoded;
+                if(!text.empty()) {
+                    const auto length=static_cast<int>(text.size());
+                    const auto units=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text.data(),length,nullptr,0);
+                    if(!units)throw HandlerError("invalid_name_argument","Текстовый FName содержит неверный UTF-8");
+                    encoded.resize(static_cast<size_t>(units));
+                    if(MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text.data(),length,encoded.data(),units)!=units)
+                        throw HandlerError("invalid_name_argument","Текстовый FName не удалось преобразовать в UTF-16");
+                }
+                uint64_t packed{};
+                if(!construct_name(base_+kNameConstruct,&packed,reinterpret_cast<const char16_t*>(encoded.c_str())))
+                    throw HandlerError("name_constructor_fault","Конструктор FName вызвал native exception");
+                std::memcpy(buffer+offset,&packed,sizeof(packed));
+            } else {
+                const auto source=validated_name_argument(size,read<int32_t>(field+0x30),v,capture_name);
+                std::memcpy(buffer+offset,&source.packed,sizeof(source.packed));
+                name_inputs.push_back({field,offset,source});
+            }
         }
         else if(type=="BoolProperty" && v.is_boolean()){auto bo=read<uint8_t>(field+0x71),mask=read<uint8_t>(field+0x73);validate_bool_layout(size,bo,mask);buffer[offset+bo]=v.get<bool>()?mask:0;}
         else if(type=="IntProperty" && size==4){*reinterpret_cast<int32_t*>(buffer+offset)=int32_argument(v);}

@@ -91,7 +91,11 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(target["properties"])
                     self.assertEqual(examples["g1r_list_package_files"]["offset"], 0)
                     self.assertEqual(examples["g1r_invoke"]["arguments"], {"use_reflected_parameter_name": None})
-                    self.assertFalse(bootstrap["script_patch_engine_apply_confirmed"])
+                    self.assertTrue(bootstrap["script_patch_engine_apply_confirmed"])
+                    self.assertEqual(catalog["invoke_arguments"]["name"], {
+                        "type": "FName", "input_shape": {"name": "string"},
+                        "source_property_input_shape": {"name_from": {
+                            "handle": "session_handle", "property_name": "reflected_property_name"}}})
                     self.assertIn("session", bootstrap["ownership"])
                     self.assertIn("find_objects_again", bootstrap["reconnect"])
                     self.assertIn("never_automatically_retry", bootstrap["uncertain_effect"])

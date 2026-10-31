@@ -251,9 +251,12 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                 "reconnect": "discard_old_handles_and_watches_then_find_objects_again",
                 "uncertain_effect": "never_automatically_retry_outcome_unknown_may_have_executed_do_not_retry",
                 "package_format": "GothicMod.json/Script/ScriptPatches",
-                "script_patch_engine_apply_confirmed": False,
+                "script_patch_engine_apply_confirmed": True,
             },
             "invoke_arguments": {
+                "name": {"type": "FName", "input_shape": {"name": "string"},
+                         "source_property_input_shape": {"name_from": {"handle": "session_handle",
+                                                                         "property_name": "reflected_property_name"}}},
                 "linear_color": {"type": "FLinearColor", "struct_path": "/Script/CoreUObject.LinearColor",
                                  "element_size": 16, "min_alignment": 4,
                                  "input_shape": {"R": "finite_float32", "G": "finite_float32",
