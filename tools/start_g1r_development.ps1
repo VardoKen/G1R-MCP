@@ -29,6 +29,8 @@ param(
     [string[]]$Mods,
     [string]$ScriptDirectory,
     [switch]$ShowScriptErrors,
+
+    [switch]$EnableIngameTools,
     [uint32]$ExpectedPid,
     [string]$ExpectedCreationTime,
     [switch]$Json,
@@ -170,6 +172,7 @@ $steamArguments = @(
     '-as-ignore-precompiled-data'
 )
 if (-not $ShowScriptErrors) { $steamArguments += '-as-exit-on-error' }
+if ($EnableIngameTools) { $steamArguments += '-ingametools' }
 $steamArguments += $packageOptions + $scriptOptions
 $operation = if ($runningProcesses.Count -gt 0) {
     'Штатно закрыть игру и запустить режим разработки через Steam'

@@ -11,6 +11,7 @@
 #include <nlohmann/json.hpp>
 #include "g1r_mcp/observations.hpp"
 #include "g1r_mcp/enum_values.hpp"
+#include "g1r_mcp/object_serial.hpp"
 
 namespace g1r_mcp {
 class GameAccess {
@@ -32,7 +33,13 @@ private:
         void* object_class{};
         int index{};
         uint64_t name{};
+        int32_t serial{};
+        int32_t class_index{};
+        uint64_t class_name{};
+        int32_t class_serial{};
     };
+    struct SlotIdentity {void* object{};int32_t serial{};};
+    static ObjectSerialIdentity serial_identity(const Handle& value);
     using TickFn = void(__fastcall*)(void*);
     using ProcessEventFn = void(__fastcall*)(void*, void*, void*);
     TickFn original_tick_{};
@@ -71,6 +78,7 @@ private:
     EnumTable enum_table(void* object) const;
     void* resolve(const std::string& id);
     void* slot(int index) const;
+    SlotIdentity slot_identity(int index) const;
     nlohmann::json object_info(void* object, int index);
     nlohmann::json properties(void* object, int limit);
     nlohmann::json selected_properties(void* object, const nlohmann::json& names);

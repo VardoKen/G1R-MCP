@@ -1,0 +1,7 @@
+{
+  "name": "G1RMCPLifecycleProbe",
+  "title": "G1R MCP Lifecycle Probe",
+  "author": "G1R MCP",
+  "description": "Счётчик собственного Initialize инструмента без игровых изменений.",
+  "modVersion": "1.0.0"
+}

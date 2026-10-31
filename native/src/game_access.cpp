@@ -156,7 +156,7 @@ void __fastcall GameAccess::hooked_tick(void* loop) {
     if(count<2)diagnostic("tick_pump_return");
 }
 json GameAccess::status() const {
-    return {{"version","1.0.0-dev.8"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.9"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&ticks_.load()>0},
             {"build_hash",kHash},{"startup_error",startup_error_},
             {"process_id",GetCurrentProcessId()},
@@ -173,7 +173,11 @@ json GameAccess::status() const {
                              {"due_watches_per_tick",1}}},
             {"snapshot_consistency","single_tick_sequential"},
             {"world_generation_supported",false},
-            {"limitations",{"Экспериментальная привязка к одному EXE","Serial UObject не подтверждён: handle проверяет слот, указатель, класс и имя","Одно активное соединение; ссылки и наблюдения принадлежат его сессии","Смена мира не определяет отдельное поколение; проверяется объект перед каждым чтением","Без выгрузки DLL: завершение через закрытие игры"}}};
+            {"serial_guard",{{"policy","strict_observed_equality_including_zero"},
+                              {"checks",{"object_serial","class_identity","class_serial"}},
+                              {"coverage","conditional_on_observed_nonzero_object_and_class_serial"},
+                              {"allocates_serial",false},{"zero_aba_protection",false}}},
+            {"limitations",{"Экспериментальная привязка к одному EXE","Нулевые serial не защищают от ABA; появившийся serial отзывает прежнюю ссылку","Одно активное соединение; ссылки и наблюдения принадлежат его сессии","Смена мира не определяет отдельное поколение; проверяется объект перед каждым чтением","Без выгрузки DLL: завершение через закрытие игры"}}};
 }
 json GameAccess::request(const json& envelope) {
     if(envelope.at("op")=="status") return status();
@@ -255,20 +259,34 @@ std::string GameAccess::object_path(void* object) const {
     std::string result;auto ptr=reinterpret_cast<uintptr_t>(object);
     for(int depth=0;ptr && depth<32;++depth) {auto part=object_name(reinterpret_cast<void*>(ptr));result=result.empty()?part:part+"."+result;ptr=read<uintptr_t>(ptr+0x20);}return result;
 }
-void* GameAccess::slot(int index) const {
+GameAccess::SlotIdentity GameAccess::slot_identity(int index) const {
     auto count=read<int32_t>(base_+kObjects+0x14);auto chunks=read<uintptr_t>(base_+kObjects);
-    if(count<0 || count>4000000 || index<0 || index>=count)return nullptr;
+    if(count<0 || count>4000000 || index<0 || index>=count)return {};
     auto chunk_count=read<int32_t>(base_+kObjects+0x1c);
-    if((index>>16)>=chunk_count || chunk_count<1 || chunk_count>64)return nullptr;
+    if((index>>16)>=chunk_count || chunk_count<1 || chunk_count>64 || !chunks)return {};
     auto chunk=read<uintptr_t>(chunks+(index>>16)*8ull);
-    return reinterpret_cast<void*>(read<uintptr_t>(chunk+(index&65535)*24ull));
+    if(!chunk)return {};
+    const auto item=chunk+(index&65535)*24ull;
+    const auto object=read<uintptr_t>(item);
+    if(!object)return {};
+    const auto serial=read<int32_t>(item+0x10);
+    if(!valid_observed_serial(serial))throw HandlerError("unsupported_serial_value","Наблюдаемый serial слота не поддержан");
+    if(read<uintptr_t>(item)!=object || read<int32_t>(item+0x10)!=serial)
+        throw HandlerError("stale_handle","Identity слота изменилась при чтении; получите новую ссылку");
+    return {reinterpret_cast<void*>(object),serial};
+}
+void* GameAccess::slot(int index) const {
+    return slot_identity(index).object;
+}
+ObjectSerialIdentity GameAccess::serial_identity(const Handle& value) {
+    return {reinterpret_cast<uintptr_t>(value.object),reinterpret_cast<uintptr_t>(value.object_class),
+            value.index,value.name,value.serial,value.class_index,value.class_name,value.class_serial};
 }
 std::string GameAccess::handle_for(void* object,int index) {
     const auto identity=validate_object(object);
     if(identity.index!=index)throw HandlerError("stale_handle","Индекс объекта изменился");
     for(const auto& [id,existing]:handles_) {
-        if(same_object_identity({reinterpret_cast<uintptr_t>(existing.object),reinterpret_cast<uintptr_t>(existing.object_class),existing.index,existing.name},
-                                {reinterpret_cast<uintptr_t>(identity.object),reinterpret_cast<uintptr_t>(identity.object_class),identity.index,identity.name}))return id;
+        if(same_serial_identity(serial_identity(existing),serial_identity(identity)))return id;
     }
     if(handles_.size()>=4096)throw HandlerError("handle_limit","Реестр ссылок заполнен; существующие ссылки сохранены");
     auto id="obj-"+std::to_string(++next_handle_);
@@ -278,17 +296,29 @@ GameAccess::Handle GameAccess::validate_object(void* object) const {
     if(!object)throw HandlerError("invalid_object","Указатель объекта отсутствует");
     const auto ptr=reinterpret_cast<uintptr_t>(object);
     const auto index=read<int32_t>(ptr+0xc);
-    if(index<0 || slot(index)!=object)throw HandlerError("stale_handle","Объект не соответствует слоту реестра");
+    const auto item=slot_identity(index);
+    if(index<0 || item.object!=object)throw HandlerError("stale_handle","Объект не соответствует слоту реестра");
     if(read<uint32_t>(ptr+8)&0x18000)throw HandlerError("object_destroying","Объект уничтожается");
     const auto object_class=read<uintptr_t>(ptr+0x10);
     if(!object_class)throw HandlerError("invalid_object_class","У объекта отсутствует класс");
     const auto class_index=read<int32_t>(object_class+0xc);
-    if(class_index<0 || slot(class_index)!=reinterpret_cast<void*>(object_class)
+    const auto class_item=slot_identity(class_index);
+    if(class_index<0 || class_item.object!=reinterpret_cast<void*>(object_class)
        || (read<uint32_t>(object_class+8)&0x18000))
         throw HandlerError("invalid_object_class","Класс объекта не соответствует живому слоту");
     const auto object_fname=read<uint64_t>(ptr+0x18);
-    name(object_fname);name(read<uint64_t>(object_class+0x18));
-    return {object,reinterpret_cast<void*>(object_class),index,object_fname};
+    const auto class_fname=read<uint64_t>(object_class+0x18);
+    name(object_fname);name(class_fname);
+    const auto item_after=slot_identity(index),class_after=slot_identity(class_index);
+    if(item_after.object!=object || item_after.serial!=item.serial
+       || class_after.object!=reinterpret_cast<void*>(object_class) || class_after.serial!=class_item.serial
+       || read<int32_t>(ptr+0xc)!=index || read<uintptr_t>(ptr+0x10)!=object_class
+       || read<uint64_t>(ptr+0x18)!=object_fname || read<int32_t>(object_class+0xc)!=class_index
+       || read<uint64_t>(object_class+0x18)!=class_fname)
+        throw HandlerError("stale_handle","Identity объекта или класса изменилась при чтении; получите новую ссылку");
+    if((read<uint32_t>(ptr+8)|read<uint32_t>(object_class+8))&0x18000)
+        throw HandlerError("object_destroying","Объект или класс уничтожается");
+    return {object,reinterpret_cast<void*>(object_class),index,object_fname,item.serial,class_index,class_fname,class_item.serial};
 }
 void GameAccess::validate_class(void* object_class) const {
     // Точная identity metaclass подтверждена read-only в текущей игре:
@@ -343,8 +373,7 @@ json GameAccess::object_descriptor(void* object,void* expected_class) {
         {"name",object_name(object)},{"path",path},{"class",object_name(identity.object_class)},
         {"session_id",handle_session_}};
     const auto after=validate_object(object);
-    if(!same_object_identity({reinterpret_cast<uintptr_t>(identity.object),reinterpret_cast<uintptr_t>(identity.object_class),identity.index,identity.name},
-                             {reinterpret_cast<uintptr_t>(after.object),reinterpret_cast<uintptr_t>(after.object_class),after.index,after.name}))
+    if(!same_serial_identity(serial_identity(identity),serial_identity(after)))
         throw HandlerError("stale_handle","Объектное значение изменилось при копировании");
     return result;
 }
@@ -409,8 +438,7 @@ GameAccess::EnumTable GameAccess::enum_table(void* object) const {
            || read<int32_t>(ptr+0x4c)!=capacity)
             throw HandlerError("enum_table_changed","Таблица enum изменилась при копировании");
         const auto after=validate_object(object);
-        if(!same_object_identity({reinterpret_cast<uintptr_t>(identity.object),enum_class,identity.index,identity.name},
-            {reinterpret_cast<uintptr_t>(after.object),reinterpret_cast<uintptr_t>(after.object_class),after.index,after.name}))
+        if(!same_serial_identity(serial_identity(identity),serial_identity(after)))
             throw HandlerError("stale_handle","Enum изменился при копировании");
         auto entries=g1r::enum_values::decode_entries(copied,count,capacity);
         return {identity,path,std::move(entries)};
@@ -475,11 +503,10 @@ json GameAccess::enum_property(uintptr_t address,const std::string& type,int siz
 }
 void* GameAccess::resolve(const std::string& id) {
     auto found=handles_.find(id);if(found==handles_.end())throw HandlerError("stale_handle","Ссылка неизвестна или истекла");
-    auto& h=found->second;auto ptr=reinterpret_cast<uintptr_t>(h.object);
-    if(slot(h.index)!=h.object || read<int32_t>(ptr+0xc)!=h.index || read<uintptr_t>(ptr+0x10)!=reinterpret_cast<uintptr_t>(h.object_class) || read<uint64_t>(ptr+0x18)!=h.name)
-        throw HandlerError("stale_handle","Объект ссылки изменился");
-    if(read<uint32_t>(ptr+8)&0x18000)throw HandlerError("object_destroying","Объект начал или завершил уничтожение");
-    validate_object(h.object);
+    const auto& h=found->second;
+    const auto current=validate_object(h.object);
+    if(!same_serial_identity(serial_identity(h),serial_identity(current)))
+        throw HandlerError("stale_handle","Наблюдаемая identity объекта или класса изменилась; получите новую ссылку");
     return h.object;
 }
 json GameAccess::object_info(void* object,int index) {
@@ -640,6 +667,7 @@ json GameAccess::functions(void* object,int limit,const std::string& query) {
             {"scan_complete",!truncated && !scan_truncated}};
 }
 json GameAccess::invoke(void* object,const std::string& function_name,const json& arguments) {
+    const auto invocation_identity=validate_object(object);
     auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);uintptr_t function=0;
     for(int depth=0;klass && depth<64 && !function;klass=read<uintptr_t>(klass+0x40),++depth) {
         auto field=read<uintptr_t>(klass+0x48);
@@ -758,14 +786,15 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         if(argument.enum_identity) {
             const auto table=enum_table(current.object);
             const auto& before=*argument.enum_identity;
-            if(!same_object_identity({reinterpret_cast<uintptr_t>(before.object),reinterpret_cast<uintptr_t>(before.object_class),before.index,before.name},
-                {reinterpret_cast<uintptr_t>(table.identity.object),reinterpret_cast<uintptr_t>(table.identity.object_class),table.identity.index,table.identity.name}))
+            if(!same_serial_identity(serial_identity(before),serial_identity(table.identity)))
                 throw HandlerError("unsupported_signature","Объявленный UEnum изменился до вызова");
             if(!enum_arguments::contains_value(argument.value,table.entries))
                 throw HandlerError("unknown_enum_value","Enum аргумент больше не объявлен перед вызовом");
         }
     }
-    validate_object(object);
+    const auto invocation_after=validate_object(object);
+    if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(invocation_after)))
+        throw HandlerError("stale_handle","Identity цели изменилась до вызова; получите новую ссылку");
     if(!call_event(reinterpret_cast<void*>(process_event_),object,reinterpret_cast<void*>(function),buffer)) {
         json details={{"executed",false},{"may_have_executed",true},{"do_not_retry",true}};
         if(return_type=="StrProperty") {
@@ -837,8 +866,9 @@ json GameAccess::execute(const json& request) {
             throw HandlerError("invalid_query","exact_path превышает 8 КиБ или содержит NUL");
         auto count=read<int32_t>(base_+kObjects+0x14);if(count<0||count>4000000)throw HandlerError("invalid_registry","Некорректный реестр объектов");
         json items=json::array();int scanned=0,skipped=0;
-        for(int index=0;index<count;++index){++scanned;auto object=slot(index);if(!object)continue;
+        for(int index=0;index<count;++index){++scanned;
             try {
+                auto object=slot(index);if(!object)continue;
                 const auto ptr=reinterpret_cast<uintptr_t>(object);
                 if(read<int32_t>(ptr+0xc)!=index)continue;
                 const auto n=object_name(object),c=object_name(reinterpret_cast<void*>(read<uintptr_t>(ptr+0x10)));

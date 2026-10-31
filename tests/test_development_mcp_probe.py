@@ -281,6 +281,68 @@ class DevelopmentCycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["stop_confirmed"])
         self.assertNotIn("g1r_find_objects", [name for name, _ in fake.calls])
 
+    async def test_ingame_tools_flag_is_consistent_across_recipe_and_start(self):
+        fake = FakeMCP()
+        async def callback(call):
+            return {"read_only_lifecycle": True}
+        result = await probe.development_cycle(fake.call, "artifacts/probe", 2,
+                                               probe=callback, enable_ingame_tools=True)
+        flags = [args["enable_ingame_tools"] for name, args in fake.calls
+                 if name in {"g1r_development_recipe", "g1r_development_start"}]
+        self.assertEqual(flags, [True, True, True])
+        self.assertTrue(result["stop_confirmed"])
+        invalid = FakeMCP()
+        with self.assertRaises(probe.ProbeError):
+            await probe.development_cycle(invalid.call, "artifacts/probe", 2, enable_ingame_tools="yes")
+        self.assertEqual(invalid.calls, [])
+
+    async def test_owned_process_already_exited_confirms_empty_without_stop_retry(self):
+        fake = FakeMCP()
+        async def callback(call):
+            fake.stopped = True
+            return {"probe_finished": True}
+        async def call(name, args):
+            if name == "g1r_development_stop":
+                fake.calls.append((name, copy.deepcopy(args)))
+                raise probe.ProbeError("process_changed", "Исходный процесс уже завершён")
+            return await fake.call(name, args)
+        result = await probe.development_cycle(call, "artifacts/probe", 2, probe=callback)
+        self.assertTrue(result["stop_confirmed"])
+        self.assertEqual(result["stop_outcome"], "already_exited")
+        self.assertEqual(sum(name == "g1r_development_stop" for name, _ in fake.calls), 1)
+
+    async def test_primary_failure_preserved_when_game_already_exited(self):
+        fake = FakeMCP()
+        async def callback(call):
+            fake.stopped = True
+            raise probe.ProbeError("compile_failed", "Компилятор завершил игру")
+        async def call(name, args):
+            if name == "g1r_development_stop":
+                fake.calls.append((name, copy.deepcopy(args)))
+                raise probe.ProbeError("process_changed", "Исходный процесс уже завершён")
+            return await fake.call(name, args)
+        with self.assertRaises(probe.ProbeError) as captured:
+            await probe.development_cycle(call, "artifacts/probe", 2, probe=callback)
+        self.assertEqual(captured.exception.code, "compile_failed")
+        self.assertEqual(sum(name == "g1r_development_stop" for name, _ in fake.calls), 1)
+
+    async def test_other_game_after_owned_exit_keeps_cleanup_failure(self):
+        fake = FakeMCP()
+        replacement = {**fake.process, "pid": 99}
+        async def callback(call):
+            fake.process = replacement
+            return {"probe_finished": True}
+        async def call(name, args):
+            if name == "g1r_development_stop":
+                fake.calls.append((name, copy.deepcopy(args)))
+                raise probe.ProbeError("process_changed", "Игра заменена")
+            return await fake.call(name, args)
+        with self.assertRaises(probe.ProbeError) as captured:
+            await probe.development_cycle(call, "artifacts/probe", 2, probe=callback)
+        self.assertEqual(captured.exception.code, "process_changed")
+        stop = next(args for name, args in fake.calls if name == "g1r_development_stop")
+        self.assertEqual(stop["expected_process"]["pid"], 52)
+
     def test_inner_selection_ignores_bootstrap_and_preserves_timestamp(self):
         fake = FakeMCP()
         bootstrap = {**fake.process, "pid": 41, "executable": "E:/Game/G1R.exe"}

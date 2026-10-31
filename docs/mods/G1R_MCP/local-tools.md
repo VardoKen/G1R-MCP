@@ -1,4 +1,4 @@
-# Локальные MCP-инструменты — 1.0.0-dev.8
+# Локальные MCP-инструменты — 1.0.0-dev.9
 
 Дата: **31.10.2026**. Э4 PLAN-001: поиск официальных источников, рабочие пакеты и управление development-сеансом. Код серверной части: `src/g1r_mcp/`, официальный Python SDK `mcp==2.3.0`, stdio. Игровой доступ описан отдельно в [нативном маршруте](native-route.md); операции запуска, остановки и загрузки DLL имеют явно обозначенный эффект.
 
@@ -19,9 +19,9 @@
 | `g1r_read_package_file_exact` | `relative_path`, `file_path` | Полное содержимое рабочего файла без нормализации текста |
 | `g1r_write_package_file` | `relative_path`, `file_path`, `content`, `expected_sha256` | Создание отсутствующего файла либо замена после проверки ожидаемого хеша |
 | `g1r_compare_snapshots` | `before`, `after`, `limit` | Сравнение копий снимков: значения, типы, охват и неизвестные результаты |
-| `g1r_development_recipe` | `relative_package` | Полный manifest пакета, процессы, SHA-256 DLL и параметры development-запуска |
+| `g1r_development_recipe` | `relative_package`, `enable_ingame_tools=false` | Полный manifest пакета, процессы, SHA-256 DLL и параметры development-запуска |
 | `g1r_development_processes` | Нет | Точные PID, времена создания и пути процессов выбранной игры |
-| `g1r_development_start` | `relative_package`, `expected_manifest_sha256`, `restart`, `expected_process` | Явный запрос запуска проверенного пакета; restart требует исходную идентичность |
+| `g1r_development_start` | `relative_package`, `expected_manifest_sha256`, `restart`, `expected_process`, `enable_ingame_tools=false` | Явный запрос запуска проверенного пакета; restart требует исходную идентичность |
 | `g1r_development_stop` | `expected_process` | Завершение только проверенной игровой сессии через удерживаемые HANDLE |
 | `g1r_native_load` | `expected_process`, `expected_dll_sha256` | Однократная загрузка закреплённой DLL в проверенный игровой процесс |
 | `g1r_build_script_patch` | `source_path`, `replacement_content`, `expected_source_sha256`, `context_lines` | Стандартный unified diff официального `Script/` без изменения файлов |
@@ -31,6 +31,10 @@
 Development-рецепт связывает проверенный дескриптор с полным SHA-256 manifest: максимум 10 000 файлов/каталогов, 16 МиБ на файл, 64 МиБ суммарно и 768 КиБ сериализованного manifest; частичный рецепт не возвращается. Start проверяет ожидаемый manifest, stop/load — PID, точное время создания и полный EXE, load дополнительно закрепляет SHA-256 и открытый файл DLL. Фиксированные инструменты вызываются без shell с пределом 30 секунд и ограниченным выводом; при неопределённом исходе операция автоматически не повторяется. `launch_requested` подтверждает только запрос Steam, `loaded` — загрузку DLL; компиляция, Tick и активация пакета проверяются отдельно. Development file watcher подтверждён для изменения тела функции, но запись файла не выдаётся за завершённый hot reload.
 
 Initialize-инструкция и `g1r_capabilities.bootstrap` дают реальные имена и порядок запуска/загрузки/Tick/сигнатуры/вызова/остановки, примеры форм аргументов и правила владения. `g1r_status` сообщает настроенные корни, но сохраняет `connection_checked: false` и `ready_known: false`: живую готовность проверяет `g1r_native_status`. Полный каталог содержит все 32 инструмента, включая локальное сравнение снимков.
+
+В dev.9 `enable_ingame_tools` принимает только JSON bool и по умолчанию равен `false`. Значение хранится в `launch_options.enable_ingame_tools` и входит в manifest SHA-256: для смены флага после рецепта требуется новый рецепт/хеш. Игровая MCP-проба 31.10.2026 с `true` подтвердила автоматический `Initialize` собственного `UIngameTool` в главном меню; CDO остался неинициализированным, callback вручную не вызывался. World lifecycle этим не подтверждён: runtime-компилятор отклонил override отдельной world-fixture.
+
+Дескриптор объекта dev.9 проверяет строгое равенство наблюдаемых serial объекта и класса вместе с identity класса, включая zero. `serial_guard.policy = strict_observed_equality_including_zero`, `coverage = conditional_on_observed_nonzero_object_and_class_serial`, `zero_aba_protection = false`, `allocates_serial = false`. Переход zero к ненулевому serial отзывает старый handle; смена мира ещё не имеет отдельного подтверждённого поколения.
 
 ## Создание и редактирование пакета
 

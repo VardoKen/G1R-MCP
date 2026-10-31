@@ -213,9 +213,13 @@ def _instructions(version: str) -> bytes:
 
 1. Поместить всю папку в выбранный рабочий каталог Windows x64; игру и официальный
    G1R-Modkit оставить отдельно. Не переносить старую `.venv`.
-2. Из корня выполнить `python tools/prepare_bridge_bundle.py --verify-root .`.
-3. Установить Python 3.11+ и uv, затем выполнить `uv sync --locked`.
-4. MCP-клиенту задать command `.venv\\Scripts\\python.exe`, cwd — корень этой папки,
+2. Из корня выполнить `python -B tools/prepare_bridge_bundle.py --verify-root .`.
+   `-B` запрещает создание __pycache__ внутри проверяемой папки.
+3. Установить Python 3.11+ и uv. Разместить окружение рядом с комплектом:
+   `$env:UV_PROJECT_ENVIRONMENT = "<отдельный абсолютный путь к окружению>"`,
+   `$env:PYTHONDONTWRITEBYTECODE = "1"`, затем выполнить `uv sync --locked`.
+   Окружение не создавать внутри комплекта: строгая проверка отвергает новые файлы.
+4. MCP-клиенту задать command `<окружение>\\Scripts\\python.exe`, cwd — корень этой папки,
    args: `-B -m g1r_mcp.server --modkit-root <официальный Modkit> --workspace-root
    <рабочие пакеты> --game-root <установленная игра>`. Пути задать абсолютными.
 5. Проверить EXE игры

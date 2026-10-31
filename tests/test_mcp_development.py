@@ -123,6 +123,59 @@ class MCPDevelopmentTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(args[args.index("-ExpectedCreationTime") + 1], self.identity["creation_time"])
         self.assertEqual(mutations[1][0][mutations[1][0].index("-ExpectedDllSha256") + 1], self.dll_sha256)
 
+    async def test_ingame_tools_is_optional_boolean_in_public_schema(self):
+        tools = {tool.name: tool for tool in await self.server.list_tools()}
+        for name in ("g1r_development_recipe", "g1r_development_start"):
+            with self.subTest(tool=name):
+                schema = tools[name].input_schema
+                option = schema["properties"]["enable_ingame_tools"]
+                self.assertEqual(option["type"], "boolean")
+                self.assertIs(option["default"], False)
+                self.assertNotIn("enable_ingame_tools", schema.get("required", []))
+
+    async def test_ingame_tools_defaults_and_true_are_bound_to_manifest_and_launcher(self):
+        default = await self.tool("g1r_development_recipe", {"relative_package": "Nested/Probe"})
+        disabled = await self.tool("g1r_development_recipe", {"relative_package": "Nested/Probe",
+                                                              "enable_ingame_tools": False})
+        enabled = await self.tool("g1r_development_recipe", {"relative_package": "Nested/Probe",
+                                                             "enable_ingame_tools": True})
+        self.assertEqual(default["manifest"]["manifest_sha256"], disabled["manifest"]["manifest_sha256"])
+        self.assertEqual(default["manifest"]["launch_options"], {"enable_ingame_tools": False})
+        self.assertEqual(enabled["manifest"]["launch_options"], {"enable_ingame_tools": True})
+        self.assertNotEqual(default["manifest"]["manifest_sha256"], enabled["manifest"]["manifest_sha256"])
+
+        await self.error("g1r_development_start", {"relative_package": "Nested/Probe",
+                         "expected_manifest_sha256": default["manifest"]["manifest_sha256"],
+                         "enable_ingame_tools": True}, "package_changed")
+        await self.error("g1r_development_start", {"relative_package": "Nested/Probe",
+                         "expected_manifest_sha256": enabled["manifest"]["manifest_sha256"]}, "package_changed")
+        self.assertEqual(self.mutation_calls(), [])
+
+        started = await self.tool("g1r_development_start", {"relative_package": "Nested/Probe",
+                                  "expected_manifest_sha256": enabled["manifest"]["manifest_sha256"],
+                                  "enable_ingame_tools": True})
+        self.assertIs(started["enable_ingame_tools"], True)
+        enabled_arguments, _ = self.mutation_calls()[-1]
+        self.assertEqual(enabled_arguments.count("-EnableIngameTools"), 1)
+        await self.tool("g1r_development_start", {"relative_package": "Nested/Probe",
+                        "expected_manifest_sha256": default["manifest"]["manifest_sha256"]})
+        disabled_arguments, _ = self.mutation_calls()[-1]
+        self.assertNotIn("-EnableIngameTools", disabled_arguments)
+
+    async def test_ingame_tools_non_booleans_are_rejected_before_executor(self):
+        recipe = await self.tool("g1r_development_recipe", {"relative_package": "Nested/Probe"})
+        manifest_hash = recipe["manifest"]["manifest_sha256"]
+        for value in (0, 1, "true", "false", None, [], {}):
+            for name in ("g1r_development_recipe", "g1r_development_start"):
+                with self.subTest(tool=name, value=value):
+                    arguments = {"relative_package": "Nested/Probe", "enable_ingame_tools": value}
+                    if name == "g1r_development_start":
+                        arguments["expected_manifest_sha256"] = manifest_hash
+                    calls_before = list(self.calls)
+                    with self.assertRaises(ToolError):
+                        await self.server.call_tool(name, arguments)
+                    self.assertEqual(self.calls, calls_before)
+
     async def test_changed_manifest_process_and_dll_refuse_before_mutation(self):
         recipe = await self.tool("g1r_development_recipe", {"relative_package": "Nested/Probe"})
         self.script.write_text("class UChangedProbe {}\n", encoding="utf-8")

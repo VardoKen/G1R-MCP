@@ -15,6 +15,7 @@ from . import __version__
 from .packages import PackageError, validate_package
 from .sources import SourceCatalog, SourceError
 from .native_client import NativeClient, NativeError
+from pydantic import StrictBool
 from .workspace import PackageWorkspace, WorkspaceError
 from .snapshots import SnapshotError, compare_snapshots
 from .development import DevelopmentError, DevelopmentService
@@ -334,9 +335,10 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                        "retry": "only_explicit_new_request"}, ensure_ascii=False)) from None
 
     @server.tool(annotations=read_only)
-    def g1r_development_recipe(relative_package: str) -> dict[str, Any]:
+    def g1r_development_recipe(relative_package: str, enable_ingame_tools: StrictBool = False) -> dict[str, Any]:
         """Проверить полный манифест рабочего пакета, процессы и SHA-256 DLL без запуска игры."""
-        return development_request("recipe", relative_package=relative_package)
+        return development_request("recipe", relative_package=relative_package,
+                                   enable_ingame_tools=enable_ingame_tools)
 
     @server.tool(annotations=read_only)
     def g1r_development_processes() -> dict[str, Any]:
@@ -347,11 +349,13 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                             idempotentHint=False, openWorldHint=True))
     def g1r_development_start(relative_package: str, expected_manifest_sha256: str,
                                restart: bool = False,
-                               expected_process: dict[str, Any] | None = None) -> dict[str, Any]:
+                             expected_process: dict[str, Any] | None = None,
+                             enable_ingame_tools: StrictBool = False) -> dict[str, Any]:
         """Запросить development-запуск проверенного пакета; restart требует точную идентичность процесса."""
         return development_request("start", relative_package=relative_package,
                                    expected_manifest_sha256=expected_manifest_sha256,
-                                   restart=restart, expected_process=expected_process)
+                                   restart=restart, expected_process=expected_process,
+                                   enable_ingame_tools=enable_ingame_tools)
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True,
                                             idempotentHint=False, openWorldHint=True))

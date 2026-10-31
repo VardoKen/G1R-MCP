@@ -61,9 +61,12 @@ async def development_cycle(call: Call, relative_package: str, expected_value: i
                             sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
                             clock: Callable[[], float] = time.monotonic,
                             progress: Callable[[str], None] | None = None,
-                            probe: Callable[[Call], Awaitable[dict[str, Any]]] | None = None) -> dict[str, Any]:
+                            probe: Callable[[Call], Awaitable[dict[str, Any]]] | None = None,
+                            enable_ingame_tools: bool = False) -> dict[str, Any]:
     if not 1 <= startup_timeout <= 45 or not 1 <= ready_timeout <= 60:
         raise ProbeError("invalid_timeout", "Ожидание запуска ограничено 45 с, Tick — 60 с")
+    if type(enable_ingame_tools) is not bool:
+        raise ProbeError("invalid_arguments", "enable_ingame_tools должен быть bool")
     report: dict[str, Any] = {"source": "real_stdio_development_cycle", "stages": []}
 
     def stage(name: str) -> None:
@@ -71,7 +74,8 @@ async def development_cycle(call: Call, relative_package: str, expected_value: i
         if progress is not None:
             progress(name)
 
-    recipe = await call("g1r_development_recipe", {"relative_package": relative_package})
+    recipe_arguments = {"relative_package": relative_package, "enable_ingame_tools": enable_ingame_tools}
+    recipe = await call("g1r_development_recipe", recipe_arguments)
     manifest = recipe.get("manifest")
     artifact = recipe.get("native_artifact")
     if (not isinstance(manifest, dict) or not isinstance(manifest.get("game_root"), str)
@@ -92,7 +96,8 @@ async def development_cycle(call: Call, relative_package: str, expected_value: i
         try:
             launch = await call("g1r_development_start", {
                 "relative_package": relative_package,
-                "expected_manifest_sha256": manifest["manifest_sha256"], "restart": False})
+                "expected_manifest_sha256": manifest["manifest_sha256"], "restart": False,
+                "enable_ingame_tools": enable_ingame_tools})
             if launch.get("state") != "launch_requested" or launch.get("outcome_unknown") is not False:
                 raise ProbeError("launch_unconfirmed", "Запрос запуска не подтверждён; автоматически не повторяется")
             stage("launch_requested")
@@ -122,7 +127,7 @@ async def development_cycle(call: Call, relative_package: str, expected_value: i
     try:
         await settle_task(asyncio.create_task(start_and_identify()), min(115, 65 + startup_timeout), "development startup")
         # Повторная проверка recipe связывает загрузку с текущими пакетом и DLL.
-        current = await call("g1r_development_recipe", {"relative_package": relative_package})
+        current = await call("g1r_development_recipe", recipe_arguments)
         if current.get("manifest", {}).get("manifest_sha256") != manifest["manifest_sha256"]:
             raise ProbeError("package_changed", "Пакет изменился во время запуска")
         current_artifact = current.get("native_artifact", {})
@@ -204,14 +209,26 @@ async def development_cycle(call: Call, relative_package: str, expected_value: i
         cleanup_process = owned if owned is not None else owned_bootstrap
         if cleanup_process is not None:
             async def stop_owned() -> None:
-                stopped = await call("g1r_development_stop", {"expected_process": cleanup_process})
-                if (stopped.get("state") != "stop_result" or stopped.get("process") != cleanup_process
-                        or stopped.get("tool_result", {}).get("state") != "stopped"):
-                    raise ProbeError("stop_unconfirmed", "Остановка собственного процесса не подтверждена")
+                try:
+                    stopped = await call("g1r_development_stop", {"expected_process": cleanup_process})
+                    if (stopped.get("state") != "stop_result" or stopped.get("process") != cleanup_process
+                            or stopped.get("tool_result", {}).get("state") != "stopped"):
+                        raise ProbeError("stop_unconfirmed", "Остановка собственного процесса не подтверждена")
+                except Exception:
+                    # Компилятор может завершить игру раньше stop. Пустой снимок
+                    # подтверждает отсутствие игры, но не успешность запроса stop.
+                    after_error = await call("g1r_development_processes", {})
+                    if after_error.get("processes") != []:
+                        raise
+                    report["stop_confirmed"] = True
+                    report["stop_outcome"] = "already_exited"
+                    stage("game_already_exited")
+                    return
                 state = await call("g1r_development_processes", {})
                 if state.get("processes") != []:
                     raise ProbeError("game_lingering", "После остановки остались игровые процессы")
                 report["stop_confirmed"] = True
+                report["stop_outcome"] = "stopped"
                 stage("game_stopped")
             try:
                 await settle_task(asyncio.create_task(stop_owned()), 45, "development stop")
@@ -258,7 +275,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                 print(f"MCP development: {stage}", file=sys.stderr, flush=True)
 
             report = await development_cycle(call, args.relative_package, args.expected_value,
-                    startup_timeout=args.startup_timeout, ready_timeout=args.ready_timeout, progress=progress)
+                    startup_timeout=args.startup_timeout, ready_timeout=args.ready_timeout, progress=progress,
+                    enable_ingame_tools=args.enable_ingame_tools)
             return {"server_version": initialized.server_info.version, "tool_count": len(tools), **report}
 
 
@@ -272,6 +290,8 @@ def main() -> int:
     parser.add_argument("--expected-value", type=int, choices=(1, 2), default=2)
     parser.add_argument("--startup-timeout", type=float, default=45)
     parser.add_argument("--ready-timeout", type=float, default=45)
+    parser.add_argument("--enable-ingame-tools", action="store_true",
+                        help="Передать документированный -ingametools только в эту игровую сессию")
     args = parser.parse_args()
     try:
         async def protected_run():

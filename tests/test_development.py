@@ -100,6 +100,58 @@ class DevelopmentTests(unittest.TestCase):
         self.assertEqual(captured.exception.code, "package_changed")
         self.assertEqual(len(self.calls), before)
 
+    def test_ingame_tools_default_and_explicit_false_bind_the_same_manifest(self):
+        default = self.service.recipe("Nested/Probe")
+        disabled = self.service.recipe("Nested/Probe", enable_ingame_tools=False)
+        enabled = self.service.recipe("Nested/Probe", enable_ingame_tools=True)
+        self.assertEqual(default["manifest"]["launch_options"], {"enable_ingame_tools": False})
+        self.assertEqual(disabled["manifest"]["launch_options"], {"enable_ingame_tools": False})
+        self.assertEqual(enabled["manifest"]["launch_options"], {"enable_ingame_tools": True})
+        self.assertEqual(default["manifest"]["manifest_sha256"], disabled["manifest"]["manifest_sha256"])
+        self.assertNotEqual(default["manifest"]["manifest_sha256"], enabled["manifest"]["manifest_sha256"])
+        self.assertEqual(default["manifest"]["files"], enabled["manifest"]["files"])
+        self.assertFalse(enabled["compiled"])
+
+    def test_ingame_tools_option_is_strict_bool_before_executor_dispatch(self):
+        digest = self.service.recipe("Nested/Probe")["manifest"]["manifest_sha256"]
+        invalid_values = (None, 0, 1, -1, 1.0, "false", "true", [], {})
+        for value in invalid_values:
+            with self.subTest(operation="recipe", value=value):
+                before = len(self.calls)
+                with self.assertRaises(DevelopmentError) as captured:
+                    self.service.recipe("Nested/Probe", enable_ingame_tools=value)
+                self.assertEqual(captured.exception.code, "invalid_arguments")
+                self.assertEqual(len(self.calls), before)
+            with self.subTest(operation="start", value=value):
+                before = len(self.calls)
+                with self.assertRaises(DevelopmentError) as captured:
+                    self.service.start("Nested/Probe", digest, enable_ingame_tools=value)
+                self.assertEqual(captured.exception.code, "invalid_arguments")
+                self.assertEqual(len(self.calls), before)
+
+    def test_ingame_tools_manifest_mismatch_refuses_before_any_executor_call(self):
+        digests = {flag: self.service.recipe("Nested/Probe", enable_ingame_tools=flag)["manifest"]["manifest_sha256"]
+                   for flag in (False, True)}
+        for requested in (False, True):
+            with self.subTest(enable_ingame_tools=requested):
+                before = len(self.calls)
+                with self.assertRaises(DevelopmentError) as captured:
+                    self.service.start("Nested/Probe", digests[not requested], enable_ingame_tools=requested)
+                self.assertEqual(captured.exception.code, "package_changed")
+                self.assertEqual(len(self.calls), before)
+
+    def test_ingame_tools_start_passes_exactly_one_switch_only_when_enabled(self):
+        for requested in (False, True):
+            with self.subTest(enable_ingame_tools=requested):
+                recipe = self.service.recipe("Nested/Probe", enable_ingame_tools=requested)
+                result = self.service.start("Nested/Probe", recipe["manifest"]["manifest_sha256"],
+                                            enable_ingame_tools=requested)
+                self.assertEqual(result["state"], "launch_requested")
+                arguments = self.calls[-1][0]
+                self.assertEqual(arguments.count("-EnableIngameTools"), 1 if requested else 0)
+                self.assertEqual(arguments[arguments.index("-Mods") + 1], "Probe")
+                self.assertFalse(result["compiled"])
+
     def test_restart_requires_current_exact_process_identity(self):
         self.processes = [self.identity]
         recipe = self.recipe()

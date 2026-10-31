@@ -194,7 +194,9 @@ class DevelopmentService:
             raise DevelopmentError("ambiguous_process", "Обнаружено несколько экземпляров одного игрового EXE")
         return {"processes": checked, "running": bool(checked), "source": "windows_process_snapshot"}
 
-    def _manifest(self, relative_package: str) -> dict:
+    def _manifest(self, relative_package: str, *, enable_ingame_tools: bool = False) -> dict:
+        if type(enable_ingame_tools) is not bool:
+            raise DevelopmentError("invalid_arguments", "enable_ingame_tools должен быть bool")
         try:
             package, normalized = self.workspace._package(relative_package)
             if normalized == ".":
@@ -269,7 +271,8 @@ class DevelopmentService:
                 raise DevelopmentError("package_changed", "Дескриптор или структура пакета изменились во время проверки manifest")
             payload = {"package_path": normalized, "package_name": name,
                        "workspace_root": str(self.workspace.root), "modkit_root": str(self.modkit),
-                       "game_root": str(self.game), "files": entries}
+                       "game_root": str(self.game), "files": entries,
+                       "launch_options": {"enable_ingame_tools": enable_ingame_tools}}
             serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
             if len(serialized) > MAX_MANIFEST_BYTES:
                 raise DevelopmentError("manifest_limit", "Полный manifest превышает предел 768 КиБ")
@@ -292,8 +295,8 @@ class DevelopmentService:
         return {"path": str(dll), "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw),
                 "loaded": False, "runtime_validation": "not_performed"}
 
-    def recipe(self, relative_package: str) -> dict:
-        manifest = self._manifest(relative_package)
+    def recipe(self, relative_package: str, *, enable_ingame_tools: bool = False) -> dict:
+        manifest = self._manifest(relative_package, enable_ingame_tools=enable_ingame_tools)
         package = self.workspace.root / manifest["package_path"]
         try:
             artifact = {"available": True, **self.native_artifact()}
@@ -301,6 +304,7 @@ class DevelopmentService:
             artifact = {"available": False, "reason_code": error.code}
         return {"manifest": manifest, "process_state": self.process_state(), "native_artifact": artifact,
                 "launch": {"mods_directory": str(package.parent), "mods": [manifest["package_name"]],
+                           "enable_ingame_tools": enable_ingame_tools,
                            "effects": "Заменить выбор пакетов только в запускаемой игровой сессии",
                            "compilation_trigger": "game_startup", "hot_reload": "function_bodies_file_watch"},
                 "diagnostics_available": False, "dedicated_compile_command": False,
@@ -319,17 +323,19 @@ class DevelopmentService:
         return expected
 
     def start(self, relative_package: str, expected_manifest_sha256: str, *, restart: bool = False,
-              expected_process: dict | None = None) -> dict:
+              expected_process: dict | None = None, enable_ingame_tools: bool = False) -> dict:
         if not isinstance(expected_manifest_sha256, str) or not _SHA.fullmatch(expected_manifest_sha256):
             raise DevelopmentError("invalid_manifest_hash", "Нужен SHA-256 полного пакета из development recipe")
         if type(restart) is not bool:
             raise DevelopmentError("invalid_arguments", "restart должен быть bool")
-        manifest = self._manifest(relative_package)
+        manifest = self._manifest(relative_package, enable_ingame_tools=enable_ingame_tools)
         if manifest["manifest_sha256"] != expected_manifest_sha256.lower():
             raise DevelopmentError("package_changed", "Пакет изменился после подготовки рецепта")
         state = self.process_state()
         arguments = ["-GameRoot", str(self.game), "-ModsDirectory",
                      str((self.workspace.root / manifest["package_path"]).parent), "-Mods", manifest["package_name"]]
+        if enable_ingame_tools:
+            arguments.append("-EnableIngameTools")
         if restart:
             expected = self._expected_process(expected_process, state)
             arguments += ["-Restart", "-ExpectedPid", str(expected["pid"]),
@@ -344,6 +350,7 @@ class DevelopmentService:
                                    outcome_unknown=True)
         return {"state": "launch_requested", "manifest_sha256": manifest["manifest_sha256"],
                 "package_name": manifest["package_name"], "tool_result": response,
+                "enable_ingame_tools": enable_ingame_tools,
                 "compiled": False, "runtime_validation": "not_performed",
                 "game_ready": False, "outcome_unknown": False}
 
