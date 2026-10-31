@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | [G1R-Modkit](../../../../../G1R-Modkit/README.md) | `619c2e6d6cc908678c20d63fd4965156b2cbbca9` | Официальные игровые скрипты AngelScript, руководства и примеры; локальная копия не имела изменений при сверке. |
 | [MCP to UE4SS](<C:/Users/Vardo/GPTProject/MCP to UE4SS/mods/MCP_to_UE4SS/README.md>) | `ed318a86657a914107eec39a1804979a80fa686d` | Протокол, сервер, каталог возможностей, выполнения и наблюдения; рабочий репозиторий не имел изменений при сверке. |
-| [Существующий Lua Bridge](../../../../../docs/mods/G1R_UE4SS_LUA_Bridge_to_MCP/README.md) | Основной репозиторий: `06eb89bc5d81add2cb826bea0d1a4db1b1d0a7bbe` | Существующая связь с игрой, жизненный цикл транспорта и история принятых решений. SHA фиксирует снимок основного репозитория на момент сверки. |
+| [Существующий Lua Bridge](../../../../../UE4SS%20Mods/docs/mods/G1R_UE4SS_LUA_Bridge_to_MCP/README.md) | Основной репозиторий: `06eb89bc5d81add2cb826bea0d1a4db1b1d0a7bbe` | Существующая связь с игрой, жизненный цикл транспорта и история принятых решений. SHA фиксирует снимок основного репозитория на момент сверки. |
 
 Локальные пути — ссылки на источники исследования, а не зависимости уже существующей реализации. Эти репозитории не скопированы в подпроект.
 
@@ -22,7 +22,7 @@
 - [Каталог внешнего сервера](<C:/Users/Vardo/GPTProject/MCP to UE4SS/mods/MCP_to_UE4SS/source/server/src/mcp_to_ue4ss_server/environment_server.py>).
 - [Нативный диспетчер](<C:/Users/Vardo/GPTProject/MCP to UE4SS/mods/MCP_to_UE4SS/source/native/src/core/dispatcher.cpp>).
 
-История отказа прежнего моста от файлового mailbox: [рабочий журнал, запись 11.09.2026](../../../../../docs/mods/G1R_UE4SS_LUA_Bridge_to_MCP/work-log.md) и [текущая архитектура](../../../../../docs/mods/G1R_UE4SS_LUA_Bridge_to_MCP/architecture.md). Это факт истории старой реализации, а не доказательство невозможности файлового API в Modkit.
+История отказа прежнего моста от файлового mailbox: [рабочий журнал, запись 11.09.2026](../../../../../UE4SS%20Mods/docs/mods/G1R_UE4SS_LUA_Bridge_to_MCP/work-log.md) и [текущая архитектура](../../../../../UE4SS%20Mods/docs/mods/G1R_UE4SS_LUA_Bridge_to_MCP/architecture.md). Это факт истории старой реализации, а не доказательство невозможности файлового API в Modkit.
 
 Для подготовки PLAN-001 дополнительно сверены материалы той же ревизии Modkit:
 
