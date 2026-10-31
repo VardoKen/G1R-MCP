@@ -251,7 +251,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.19"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.20"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
             {"pump",{{"state",!observed?"not_observed":recent?"recent_tick":"tick_stale"},
                      {"last_tick_monotonic_ms",observed?json(observed):json(nullptr)},
@@ -804,8 +804,8 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         else if(type=="NameProperty")supported=size==8;
         else if(type=="StructProperty") {
             if(size==96) {
-                if(flags&(0x100|kConstParm|kReferenceParm|0x400))
-                    throw HandlerError("unsupported_signature","Transform поддержан только как вход по значению без Out/Const/Ref/Return");
+                if(vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
+                    throw HandlerError("unsupported_signature","Transform требует вход по значению либо const reference; Out/Return не поддержаны");
                 const auto transform=capture_transform_parameter(field,size,array_dim);
                 if(offset%transform.layout.min_alignment)
                     throw HandlerError("unsupported_transform_layout","Смещение Transform не соответствует отражённому выравниванию");
@@ -873,7 +873,8 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
             public_parameter["out_metadata"]=scalar_public;
         }
         if(!transform_public.is_null()) {
-            public_parameter["struct"]=transform_public;public_parameter["direction"]="input";public_parameter["passing"]="value";
+            public_parameter["struct"]=transform_public;public_parameter["direction"]="input";
+            public_parameter["passing"]=(flags&kConstParm)?"const_reference":"value";
             public_parameter["argument_constraints"]={{"rotation_normalization","required"},{"max_norm_squared_deviation",1e-6},{"normalization","none"}};
         }
         parameters.push_back(std::move(public_parameter));
@@ -1169,8 +1170,8 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         if(type=="StructProperty") {
             if(size==96) {
                 if(!contains_transform)throw HandlerError("signature_changed","Transform появился после чтения полной сигнатуры");
-                if(flags&(0x100|kConstParm|kReferenceParm|0x400))
-                    throw HandlerError("unsupported_signature","Transform поддержан только как вход по значению без Out/Const/Ref/Return");
+                if(vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
+                    throw HandlerError("unsupported_signature","Transform требует вход по значению либо const reference; Out/Return не поддержаны");
                 const auto key=name(read<uint64_t>(field+0x20));
                 if(!arguments.contains(key))throw HandlerError("missing_argument","Не задан Transform аргумент "+key);
                 const auto transform=capture_transform_parameter(field,size,read<int32_t>(field+0x30));

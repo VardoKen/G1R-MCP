@@ -1,0 +1,1 @@
+{"name":"G1RMCPConstTransformProbe","title":"G1R MCP Const Transform Probe","author":"G1R MCP","description":"Изолированный const FTransform ref-вход на собственном UObject с независимым чтением компонентов и проверочным счётчиком.","modVersion":"1.0.0"}

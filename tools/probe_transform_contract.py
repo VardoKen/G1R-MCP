@@ -82,8 +82,10 @@ def check_transform_metadata(metadata) -> dict:
     return metadata
 
 
-def check_signature(listing: dict, name: str) -> tuple[dict, str]:
-    if (name not in METHODS or not isinstance(listing, dict) or listing.get("truncated") is not False
+def check_signature(listing: dict, name: str, *, const_reference=False) -> tuple[dict, str]:
+    accept_name = "AcceptConstTransform" if const_reference else "AcceptTransform"
+    methods = tuple(accept_name if method == "AcceptTransform" else method for method in METHODS)
+    if (name not in methods or not isinstance(listing, dict) or listing.get("truncated") is not False
             or listing.get("scan_complete") is not True or listing.get("scan_truncated") is not False
             or not isinstance(listing.get("items"), list)):
         raise ProbeError("probe_signature_invalid", "Не подтверждён полный каталог Transform методов")
@@ -99,8 +101,8 @@ def check_signature(listing: dict, name: str) -> tuple[dict, str]:
     returned = [field for field in fields if field.get("return") is True]
     inputs = [field for field in fields if field.get("return") is False]
     expected = {"ReadMarker": ("IntProperty", 4), "ReadCallsCount": ("IntProperty", 4),
-                "AcceptTransform": ("BoolProperty", 1), **{getter: ("StructProperty", 24) for getter in GETTERS}}.get(name)
-    if (len(returned) != (expected is not None) or len(inputs) != (name == "AcceptTransform")
+                accept_name: ("BoolProperty", 1), **{getter: ("StructProperty", 24) for getter in GETTERS}}.get(name)
+    if (len(returned) != (expected is not None) or len(inputs) != (name == accept_name)
             or len(fields) != len(returned) + len(inputs)
             or returned and (returned[0].get("type"), returned[0].get("element_size")) != expected):
         raise ProbeError("probe_signature_mismatch", "Не совпали Transform input и exact безопасный возврат")
@@ -111,20 +113,24 @@ def check_signature(listing: dict, name: str) -> tuple[dict, str]:
                 or offset < 0 or width < 1 or offset + width > 128 or type(field.get("array_dim")) is not int
                 or field["array_dim"] != 1 or type(flags) is not int or not 0 <= flags < 2**64 or not flags & 0x80
                 or bool(flags & 0x400) is not field["return"] or bool(flags & 0x100) is not field.get("out")
-                or field.get("reference") is not False or field.get("const") is not False or flags & (0x2 | 0x08000000)
+                or bool(flags & 0x08000000) is not field.get("reference") or bool(flags & 0x2) is not field.get("const")
                 or field["return"] is False and offset + width > size):
             raise ProbeError("probe_signature_flags", "CPF-флаги или границы Transform input не подтверждены")
         if any(offset < end and start < offset + width for start, end in spans):
             raise ProbeError("probe_signature_mismatch", "Диапазоны Transform параметров пересекаются")
         spans.append((offset, offset + width))
         if field["return"]:
+            if flags & (0x2 | 0x08000000):
+                raise ProbeError("probe_signature_flags", "Возврат Transform getter должен быть по значению без const/ref")
             if field["type"] == "StructProperty":
                 check_parameter_vector_metadata(field, 24, "return")
         else:
             if (field["name"] != "Input" or field.get("type") != "StructProperty" or width != 96
-                    or field.get("out") is not False or flags & 0x100 or field.get("direction") != "input"
-                    or field.get("passing") != "value" or "argument_marker" in field):
-                raise ProbeError("probe_transform_policy", "Transform должен быть единственным Input по значению без out/ref/const")
+                    or field.get("direction") != "input" or "argument_marker" in field
+                    or const_reference and (not flags & 0x2 or not flags & (0x100 | 0x08000000)
+                                            or field.get("passing") != "const_reference")
+                    or not const_reference and (flags & (0x100 | 0x2 | 0x08000000) or field.get("passing") != "value")):
+                raise ProbeError("probe_transform_policy", "Transform input не подтвердил выбранный value/const-reference контракт")
             metadata = check_transform_metadata(field.get("struct"))
             if offset % metadata["min_alignment"]:
                 raise ProbeError("probe_transform_layout", "Offset Transform не соответствует public alignment")
@@ -141,7 +147,11 @@ def check_euler(value, expected) -> None:
         raise ProbeError("probe_transform_rotation", "Rotation не сохранил ожидаемую Euler-семантику в пределах 1e-4 градуса")
 
 
-async def exercise(call) -> dict:
+async def exercise(call, *, const_reference=False, native_probe=None) -> dict:
+    host = "G1RMCPConstTransformProbe" if const_reference else HOST
+    marker = 201 if const_reference else MARKER
+    accept_name = "AcceptConstTransform" if const_reference else "AcceptTransform"
+    method_names = tuple(accept_name if method == "AcceptTransform" else method for method in METHODS)
     cleanup_required, failure = False, None
     report = {"checks": [], "accepted": [], "rejections": [], "cleanup": [], "reflected_functions": {},
               "game_launched": False, "dll_loaded": False, "transform_return": "not_tested", "transform_out": "not_tested",
@@ -152,16 +162,24 @@ async def exercise(call) -> dict:
         session_id = status.get("session_id")
         if status.get("ready") is not True or not isinstance(session_id, str) or not session_id:
             raise ProbeError("game_not_ready", "Не подтверждены Tick и native-сессия")
-        found = await call("g1r_find_objects", {"query": "Default__" + HOST, "class_query": HOST,
-            "exact_path": "/Script/Angelscript.Default__" + HOST, "limit": 2})
+        found = await call("g1r_find_objects", {"query": "Default__" + host, "class_query": host,
+            "exact_path": "/Script/Angelscript.Default__" + host, "limit": 2})
         if (found.get("truncated") is not False or not isinstance(found.get("items"), list) or len(found["items"]) != 1):
             raise ProbeError("probe_object_absent", "Exact собственный Transform CDO не найден однозначно")
-        target = check_target(found["items"][0])
+        item = found["items"][0]
+        if const_reference:
+            if (not isinstance(item, dict) or item.get("name") != "Default__" + host or item.get("class") != host
+                    or item.get("path") != "/Script/Angelscript.Default__" + host or not isinstance(item.get("handle"), str)
+                    or not item["handle"].startswith("obj-")):
+                raise ProbeError("unsafe_probe_target", "Не подтверждён exact собственный const Transform CDO")
+            target = item
+        else:
+            target = check_target(item)
         handle, methods, tokens = target["handle"], {}, {}
-        for name in METHODS:
+        for name in method_names:
             listing = await call("g1r_object_functions", {"handle": handle, "function_query": name, "limit": 10})
             report["reflected_functions"][name] = listing
-            methods[name], tokens[name] = check_signature(listing, name)
+            methods[name], tokens[name] = check_signature(listing, name, const_reference=const_reference)
         if len(set(tokens.values())) != len(tokens):
             raise ProbeError("probe_signature_token_alias", "Разные Transform методы получили один токен")
 
@@ -180,17 +198,18 @@ async def exercise(call) -> dict:
                 if getter == "GetRotationEuler": check_euler(result.get("result"), expected)
                 else: check_vector(result.get("result"), expected)
 
-        check_scalar(await invoke("ReadMarker"), "IntProperty", MARKER)
+        check_scalar(await invoke("ReadMarker"), "IntProperty", marker)
         check_scalar(await invoke("ReadCallsCount"), "IntProperty", 0)
         await verify(ZERO, ONE, ZERO)
         report.update(session_id=session_id, handle=handle, signature_tokens=tokens)
-        report["checks"].append("own_marker191_counter0_identity_exact_transform96_quat32_vectors24_full_reflection")
+        report["checks"].append(f"own_marker{marker}_counter0_identity_exact_transform96_quat32_vectors24_full_reflection")
+        report["passing"] = "const_reference" if const_reference else "value"
         value = {"Rotation": {"X": 0, "Y": 0, "Z": math.sqrt(0.5), "W": math.sqrt(0.5)},
                  "Translation": {"X": 1.25, "Y": -2.5, "Z": 3.75}, "Scale3D": {"X": 2, "Y": 0.5, "Z": -1}}
         count = 0
         for accepted, euler in ((copy.deepcopy(IDENTITY), ZERO), (value, {"X": 0, "Y": 90, "Z": 0})):
             cleanup_required = True
-            check_scalar(await invoke("AcceptTransform", {"Input": accepted}), "BoolProperty", True)
+            check_scalar(await invoke(accept_name, {"Input": accepted}), "BoolProperty", True)
             count += 1
             check_scalar(await invoke("ReadCallsCount"), "IntProperty", count)
             await verify(accepted["Translation"], accepted["Scale3D"], euler)
@@ -207,8 +226,8 @@ async def exercise(call) -> dict:
         cases = [({"Input": item}, "invalid_argument") for item in malformed]
         cases += [({}, "missing_argument"), ({"Input": value, "UnexpectedForProbe": 1}, "unknown_argument")]
         for supplied, code in cases:
-            refusal = await invoke("AcceptTransform", supplied, expected_error=code)
-            check_rejection(refusal, "AcceptTransform", supplied, code)
+            refusal = await invoke(accept_name, supplied, expected_error=code)
+            check_rejection(refusal, accept_name, supplied, code)
             check_scalar(await invoke("ReadCallsCount"), "IntProperty", count)
             report["rejections"].append({"arguments": supplied, "code": code})
         local_nonfinite = 0
@@ -216,13 +235,16 @@ async def exercise(call) -> dict:
             for nonfinite in (float("nan"), float("inf"), -float("inf")):
                 supplied = copy.deepcopy(value)
                 supplied[member][axis] = nonfinite
-                try: await invoke("AcceptTransform", {"Input": supplied})
+                try: await invoke(accept_name, {"Input": supplied})
                 except ValueError: local_nonfinite += 1
                 else: raise ProbeError("probe_nonfinite_transport", "JSON nonfinite отправлен на MCP")
         report["local_nonfinite_json_rejections"] = local_nonfinite
         await verify(value["Translation"], value["Scale3D"], {"X": 0, "Y": 90, "Z": 0})
         check_scalar(await invoke("ReadCallsCount"), "IntProperty", count)
         report["checks"].append("malformed_nested_transform_nonunit_quat_and_names_refused_without_effect")
+        if native_probe is not None:
+            await native_probe(call, report)
+            check_scalar(await invoke("ReadCallsCount"), "IntProperty", count)
         report["completed_mutating_calls"] = count
         return report
     except BaseException as error:
@@ -238,9 +260,9 @@ async def exercise(call) -> dict:
                 async def finish_cleanup():
                     check_scalar(await invoke("ResetProbe"), "", None)
                     check_scalar(await invoke("ReadCallsCount"), "IntProperty", 0)
-                    check_scalar(await invoke("ReadMarker"), "IntProperty", MARKER)
+                    check_scalar(await invoke("ReadMarker"), "IntProperty", marker)
                     await verify(ZERO, ONE, ZERO)
-                    report["cleanup"].append("ResetProbe_zero_counter_marker191_identity_transform")
+                    report["cleanup"].append(f"ResetProbe_zero_counter_marker{marker}_identity_transform")
                 try: await settle_task(asyncio.create_task(finish_cleanup()), timeout=30, label="transform contract cleanup")
                 except BaseException as error:
                     if failure is None: raise

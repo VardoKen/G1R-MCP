@@ -245,7 +245,8 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             },
             "invoke_arguments": {
                 "transform": {"type": "FTransform", "struct_path": "/Script/CoreUObject.Transform",
-                              "modes": ["input"], "passing": "value", "size": 96,
+                              "modes": ["input", "const_reference_input"], "size": 96,
+                              "reference_input_supported": True, "const_reference_required": True,
                               "input_shape": {"Rotation": {"X": "finite_number", "Y": "finite_number", "Z": "finite_number", "W": "finite_number"},
                                               "Translation": {"X": "finite_number", "Y": "finite_number", "Z": "finite_number"},
                                               "Scale3D": {"X": "finite_number", "Y": "finite_number", "Z": "finite_number"}},
