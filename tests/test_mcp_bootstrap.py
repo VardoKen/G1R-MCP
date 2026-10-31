@@ -92,10 +92,24 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(examples["g1r_list_package_files"]["offset"], 0)
                     self.assertEqual(examples["g1r_invoke"]["arguments"], {"use_reflected_parameter_name": None})
                     self.assertTrue(bootstrap["script_patch_engine_apply_confirmed"])
+                    self.assertEqual(catalog["invoke_arguments"]["rotator"], {
+                        "type": "FRotator", "struct_path": "/Script/CoreUObject.Rotator",
+                        "modes": ["input", "const_reference_input"], "size": 24,
+                        "min_alignment": 8, "array_dim": 1, "units": "degrees",
+                        "input_shape": {"rotator": {"Pitch": "finite_number", "Yaw": "finite_number", "Roll": "finite_number"}},
+                        "reference_input_supported": True, "const_reference_required": True,
+                        "layout_source": "reflected_function_parameter", "requires_signature_validation": True})
                     self.assertEqual(catalog["invoke_arguments"]["name"], {
                         "type": "FName", "input_shape": {"name": "string"},
                         "source_property_input_shape": {"name_from": {
                             "handle": "session_handle", "property_name": "reflected_property_name"}}})
+                    self.assertEqual(catalog["invoke_returns"]["rotator"], {
+                        "type": "FRotator", "return_type": "StructProperty",
+                        "struct_path": "/Script/CoreUObject.Rotator", "passing": "value",
+                        "size": 24, "min_alignment": 8, "array_dim": 1, "units": "degrees",
+                        "result_shape": "object", "output_shape": {"Pitch": "finite_number", "Yaw": "finite_number", "Roll": "finite_number"},
+                        "metadata_field": "result_metadata", "layout_source": "reflected_function_parameter",
+                        "requires_signature_validation": True, "reference_return_supported": False})
                     self.assertEqual(catalog["invoke_returns"]["transform"], {
                         "type": "FTransform", "return_type": "StructProperty",
                         "struct_path": "/Script/CoreUObject.Transform", "passing": "value",

@@ -18,6 +18,7 @@
 #include "g1r_mcp/parameter_direction.hpp"
 #include "g1r_mcp/scalar_outputs.hpp"
 #include "g1r_mcp/scalar_struct_values.hpp"
+#include "g1r_mcp/rotator_arguments.hpp"
 #include "g1r_mcp/aligned_parameter_buffer.hpp"
 #include "g1r_mcp/transform_layout.hpp"
 #include "g1r_mcp/transform_arguments.hpp"
@@ -334,7 +335,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.32"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.33"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
             {"pump",{{"state",!observed?"not_observed":recent?"recent_tick":"tick_stale"},
                      {"last_tick_monotonic_ms",observed?json(observed):json(nullptr)},
@@ -929,7 +930,7 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         if(returned && supported_scalar_output_type(type) && (flags&(kReferenceParm|kConstParm)))
             throw HandlerError("unsupported_signature","Const/ref скалярный возврат не поддержан");
         bool supported=false;
-        json vector_public=nullptr,transform_public=nullptr,array_public=nullptr,color_public=nullptr,scalar_struct_public=nullptr;std::string vector_direction;
+        json vector_public=nullptr,transform_public=nullptr,rotator_public=nullptr,array_public=nullptr,color_public=nullptr,scalar_struct_public=nullptr;std::string vector_direction;
         if(type=="BoolProperty") {
             const auto byte_offset=read<uint8_t>(field+0x71),mask=read<uint8_t>(field+0x73);
             validate_bool_layout(size,byte_offset,mask);
@@ -970,6 +971,18 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                 const auto vector=capture_vector_parameter(field,size,array_dim);
                 captured["aux"]={{"vector",vector_snapshot_json(vector)}};
                 vector_public=vector_snapshot_json(vector,false);supported=true;
+            } else if(structure_path=="/Script/CoreUObject.Rotator") {
+                if(returned) {
+                    if(flags&(kConstParm|kReferenceParm))
+                        throw HandlerError("unsupported_signature","Const/ref возврат FRotator не поддержан");
+                } else if(vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
+                    throw HandlerError("unsupported_signature","FRotator требует вход по значению либо const reference; mutable Out не поддержан");
+                const auto rotator=capture_scalar_struct(field,size,array_dim);
+                rotator_arguments::validate(rotator);
+                if(offset%rotator.layout.min_alignment)
+                    throw HandlerError("unsupported_rotator_layout","Смещение FRotator не соответствует отражённому выравниванию");
+                captured["aux"]={{"rotator",scalar_struct_snapshot_json(rotator)}};
+                rotator_public=scalar_struct_snapshot_json(rotator,false);supported=true;
             } else {
                 if(!returned || (flags&(kConstParm|kReferenceParm)))
                     throw HandlerError("unsupported_signature","Скалярный DTO поддержан только как возврат по значению");
@@ -1045,6 +1058,10 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
             public_parameter["passing"]=!returned && (flags&kConstParm)?"const_reference":"value";
             if(!returned)public_parameter["argument_constraints"]={{"rotation_normalization","required"},{"max_norm_squared_deviation",1e-6},{"normalization","none"}};
         }
+        if(!rotator_public.is_null()) {
+            public_parameter["struct"]=rotator_public;public_parameter["direction"]=returned?"return":"input";
+            public_parameter["passing"]=!returned && (flags&kConstParm)?"const_reference":"value";
+        }
         if(type=="StrProperty" && !returned) {
             public_parameter["direction"]="input";public_parameter["passing"]="const_reference";
             public_parameter["argument_constraints"]={{"max_utf16_units",32767},{"embedded_nul","rejected"},{"ownership","engine_owned_copy"}};
@@ -1093,6 +1110,13 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         if(!captured.contains("aux"))continue;
         const auto& auxiliary=captured.at("aux");const auto type=captured.at("type").get<std::string>();
         if(type=="StructProperty") {
+            if(auxiliary.contains("rotator")) {
+                const auto current=capture_scalar_struct(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>());
+                rotator_arguments::validate(current);
+                if(scalar_struct_snapshot_json(current)!=auxiliary.at("rotator"))
+                    throw HandlerError("signature_changed","Вложенная reflection FRotator изменилась при чтении сигнатуры");
+                continue;
+            }
             if(auxiliary.contains("scalar_struct")) {
                 const auto current=capture_scalar_struct(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>());
                 if(scalar_struct_snapshot_json(current)!=auxiliary.at("scalar_struct"))
@@ -1319,7 +1343,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     std::optional<TransformReturn> transform_return;
     std::optional<scalar_struct_values::Snapshot> scalar_struct_return;
     json pod_function_contract=nullptr;
-    bool contains_vector=false,contains_transform=false,contains_color=false,contains_scalar_struct=false,contains_scalar_output=false,contains_string_input=false,contains_object_array=false;
+    bool contains_vector=false,contains_transform=false,contains_color=false,contains_rotator=false,contains_scalar_struct=false,contains_scalar_output=false,contains_string_input=false,contains_object_array=false;
     bool has_string_return=false;
     for(const auto field:parameter_fields) {
         const auto type=field_type(field,[this](auto f){return name(f);});const auto flags=read<uint64_t>(field+0x38);
@@ -1328,6 +1352,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             if(structure_path=="/Script/CoreUObject.LinearColor")contains_color=true;
             else if(structure_path=="/Script/CoreUObject.Transform")contains_transform=true;
             else if(structure_path=="/Script/CoreUObject.Vector")contains_vector=true;
+            else if(structure_path=="/Script/CoreUObject.Rotator")contains_rotator=true;
             else contains_scalar_struct=true;
         }
         if(supported_scalar_output_type(type) && (flags&0x100) && !(flags&0x400))contains_scalar_output=true;
@@ -1337,7 +1362,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     }
     if(contains_object_array && (contains_string_input || has_string_return))
         throw HandlerError("unsupported_signature","Object array входы пока не смешиваются с FString входом или возвратом");
-    const bool strict_pod_contract=contains_vector || contains_transform || contains_color || contains_scalar_struct || contains_scalar_output || contains_string_input || contains_object_array;
+    const bool strict_pod_contract=contains_vector || contains_transform || contains_color || contains_rotator || contains_scalar_struct || contains_scalar_output || contains_string_input || contains_object_array;
     if(strict_pod_contract) {
         pod_function_contract=capture_function_contract(object,function_owner,function,target_handle);
         std::vector<std::pair<int,int>> intervals;
@@ -1539,6 +1564,15 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                         throw HandlerError("unsupported_signature","Const/ref возврат FVector не поддержан");
                     const auto layout=capture_vector_parameter(field,size,read<int32_t>(field+0x30));
                     vector_parameters.push_back({field,offset,size,flags,name(read<uint64_t>(field+0x20)),layout,false,true});
+                } else if(structure_path=="/Script/CoreUObject.Rotator") {
+                    if(!contains_rotator)throw HandlerError("signature_changed","FRotator возврат появился после чтения полной сигнатуры");
+                    if(flags&(kConstParm|kReferenceParm))throw HandlerError("unsupported_signature","Const/ref возврат FRotator не поддержан");
+                    auto rotator=capture_scalar_struct(field,size,read<int32_t>(field+0x30));
+                    rotator_arguments::validate(rotator);
+                    if(offset%rotator.layout.min_alignment
+                       || reinterpret_cast<uintptr_t>(buffer+offset)%static_cast<uintptr_t>(rotator.layout.min_alignment))
+                        throw HandlerError("unsupported_rotator_layout","Буфер FRotator не соответствует отражённому выравниванию");
+                    scalar_struct_return=std::move(rotator);
                 } else {
                     if(!contains_scalar_struct)throw HandlerError("signature_changed","Скалярный DTO возврат появился после чтения полной сигнатуры");
                     if(flags&(kConstParm|kReferenceParm))throw HandlerError("unsupported_signature","Const/ref возврат DTO не поддержан");
@@ -1563,6 +1597,23 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         }
         if(type=="StructProperty") {
             const auto structure_path=object_path(reinterpret_cast<void*>(read<uintptr_t>(field+0x70)));
+            if(structure_path=="/Script/CoreUObject.Rotator") {
+                if(!contains_rotator)throw HandlerError("signature_changed","FRotator параметр появился после чтения полной сигнатуры");
+                if(vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
+                    throw HandlerError("unsupported_signature","FRotator требует вход по значению либо const reference; mutable Out не поддержан");
+                const auto rotator=capture_scalar_struct(field,size,read<int32_t>(field+0x30));
+                rotator_arguments::validate(rotator);
+                if(offset%rotator.layout.min_alignment
+                   || reinterpret_cast<uintptr_t>(buffer+offset)%static_cast<uintptr_t>(rotator.layout.min_alignment))
+                    throw HandlerError("unsupported_rotator_layout","Буфер FRotator не соответствует отражённому выравниванию");
+                const auto key=name(read<uint64_t>(field+0x20));const auto found=arguments.find(key);
+                if(found==arguments.end())throw HandlerError("invalid_arguments","Не указан аргумент FRotator: "+key);
+                if(!found->is_object() || found->size()!=1 || !found->contains("rotator"))
+                    throw HandlerError("invalid_argument","FRotator требует только {rotator:{Pitch,Yaw,Roll}}");
+                const auto encoded=rotator_arguments::encode(rotator.layout,found->at("rotator"));
+                std::memcpy(buffer+offset,encoded.data(),encoded.size());
+                ++input_count;continue;
+            }
             if(structure_path=="/Script/CoreUObject.LinearColor") {
                 if(!contains_color)throw HandlerError("signature_changed","FLinearColor вход появился после чтения полной сигнатуры");
                 if(flags&(kConstParm|kReferenceParm|0x100))throw HandlerError("unsupported_signature","FLinearColor вход поддержан только по значению");
@@ -1921,14 +1972,15 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         std::vector<std::byte> copied(static_cast<size_t>(saved.element_size));
         if(!copy_memory(copied.data(),buffer+saved.offset,copied.size()))
             throw HandlerError("invalid_struct_copy","DTO результат не скопирован");
-        const auto value=scalar_struct_values::decode(saved.layout,copied);
+        const auto value=saved.path=="/Script/CoreUObject.Rotator"?
+            rotator_arguments::decode(saved.layout,copied):scalar_struct_values::decode(saved.layout,copied);
         if(!(capture_scalar_struct(saved.field,saved.element_size,saved.array_dim)==saved))
             throw HandlerError("signature_changed","DTO metadata изменились при копировании результата");
         result=value;result_metadata=scalar_struct_snapshot_json(saved,false);
     };
     auto decode_pod_outputs=[&] {
         auto require_transform_result_contract=[&] {
-            if(!contains_transform && !contains_color && !contains_scalar_struct && !contains_string_input && !contains_object_array)return;
+            if(!contains_transform && !contains_color && !contains_rotator && !contains_scalar_struct && !contains_string_input && !contains_object_array)return;
             if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(validate_object(object))))
                 throw HandlerError("stale_handle","Цель изменилась при обработке POD результата вызова");
             require_same_function_contract(pod_function_contract,capture_function_contract(object,function_owner,function,target_handle));
