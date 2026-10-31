@@ -49,7 +49,7 @@ class MCPNameInputTests(unittest.IsolatedAsyncioTestCase):
                 async with ClientSession(incoming, outgoing) as client:
                     await client.initialize()
                     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-                    self.assertEqual(len(tools), 38)
+                    self.assertEqual(len(tools), 39)
                     invoke = tools["g1r_invoke"]
                     self.assertFalse(invoke.annotations.read_only_hint)
                     self.assertFalse(invoke.annotations.idempotent_hint)

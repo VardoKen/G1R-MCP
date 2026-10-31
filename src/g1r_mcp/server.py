@@ -35,6 +35,7 @@ LOCAL_TOOLS = (
     ("g1r_read_source", "Ограниченное чтение исходника Modkit"),
     ("g1r_read_source_exact", "Полный текст исходника с сохранением BOM, переводов строк и SHA-256"),
     ("g1r_list_source_types", "Лексический поиск объявлений типов"),
+    ("g1r_list_source_functions", "Лексический индекс исходных функций с прототипами и SHA-256"),
     ("g1r_validate_package", "Структурная проверка официального пакета"),
     ("g1r_build_script_patch", "Unified diff из проверенных байтов Modkit без изменения файлов"),
     ("g1r_compare_snapshots", "Сравнить копии снимков без игровых вызовов"),
@@ -221,6 +222,11 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             "compiler_reports": {"tool": "g1r_compile_diagnostics", "implemented": True,
                                  "source": "native_formatter_or_caller_selected_workspace_file", "compiler_api_available": True,
                                  "absence_of_errors_proves_compile": False},
+            "source_functions": {"tool": "g1r_list_source_functions", "parser_kind": "lexical",
+                                 "result_field": "items", "prototype": "raw_source",
+                                 "item_fields": ["name", "owner", "namespace", "kind", "prototype", "path",
+                                                 "start_line", "end_line", "file_sha256", "root_kind"],
+                                 "runtime_signature_confirmed": False},
             "bootstrap": {
                 "game_sequence": [
                     {"tool": "g1r_development_recipe", "condition": "Проверить выбранный рабочий пакет и получить manifest/DLL SHA-256"},
@@ -385,6 +391,15 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
         """Найти лексические объявления class/struct/enum; не считать их компиляцией или reflection."""
         try:
             return sources.list_types(query, limit, offset)
+        except SourceError as error:
+            raise _tool_failure(error) from None
+
+    @server.tool(annotations=read_only)
+    def g1r_list_source_functions(query: str = "", relative_path: str | None = None,
+                                  limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        """Найти исходные прототипы функций лексически; строки и SHA-256 не подтверждают runtime-сигнатуру."""
+        try:
+            return sources.list_functions(query, relative_path, limit, offset)
         except SourceError as error:
             raise _tool_failure(error) from None
 

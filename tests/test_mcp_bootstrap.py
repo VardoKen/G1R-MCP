@@ -1,5 +1,6 @@
 """Первое stdio-подключение: обнаруживаемый жизненный цикл и чтение рабочей базы."""
 
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -43,6 +44,8 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             modkit, workspace, game, parameters = self.create_fixture(root)
+            (modkit / "Script/Official.as").write_bytes(
+                b"class UOfficial\r\n{\r\n    int ReadValue(int Amount) const\r\n    { return Amount; }\r\n}\r\n")
             before = (modkit / "Script/Official.as").read_bytes()
             async with stdio_client(parameters) as (incoming, outgoing):
                 async with ClientSession(incoming, outgoing) as client:
@@ -54,6 +57,8 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                                       "g1r_read_package_file_exact", "reconnect", "не повтор"):
                         self.assertIn(important, instructions)
                     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+                    self.assertEqual(len(tools), 39)
+                    self.assertTrue(tools["g1r_list_source_functions"].annotations.read_only_hint)
                     status = await self.call_ok(client, "g1r_status")
                     self.assertEqual(status["sources"]["root"], str(modkit))
                     self.assertEqual(status["workspace"]["root"], str(workspace))
@@ -62,6 +67,21 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(status["game"]["ready_known"])
                     self.assertFalse(game.exists())
                     catalog = await self.call_ok(client, "g1r_capabilities")
+                    self.assertEqual(catalog["source_functions"], {
+                        "tool": "g1r_list_source_functions", "parser_kind": "lexical",
+                        "result_field": "items", "prototype": "raw_source",
+                        "item_fields": ["name", "owner", "namespace", "kind", "prototype", "path",
+                                        "start_line", "end_line", "file_sha256", "root_kind"],
+                        "runtime_signature_confirmed": False})
+                    functions = await self.call_ok(client, "g1r_list_source_functions", {
+                        "query": "ReadValue", "relative_path": "Script/Official.as", "limit": 500, "offset": 0})
+                    self.assertEqual(functions["parser_kind"], "lexical")
+                    self.assertEqual(functions["total_matches"], 1)
+                    self.assertEqual(functions["items"], [{
+                        "name": "ReadValue", "owner": "UOfficial", "namespace": "", "kind": "function",
+                        "prototype": "int ReadValue(int Amount) const", "path": "Script/Official.as",
+                        "start_line": 3, "end_line": 3, "file_sha256": hashlib.sha256(before).hexdigest(),
+                        "root_kind": "game_script"}])
                     development = catalog["development_tools"]["operations"]
                     self.assertEqual(set(development), {"g1r_development_recipe", "g1r_development_processes",
                                                          "g1r_development_start", "g1r_development_stop", "g1r_native_load",

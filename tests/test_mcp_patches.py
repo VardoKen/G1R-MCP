@@ -46,7 +46,7 @@ class MCPScriptPatchTests(unittest.IsolatedAsyncioTestCase):
                 async with ClientSession(incoming, outgoing) as client:
                     await client.initialize()
                     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-                    self.assertEqual(len(tools), 38)
+                    self.assertEqual(len(tools), 39)
                     self.assertTrue(tools["g1r_build_script_patch"].annotations.read_only_hint)
                     self.assertFalse(tools["g1r_build_script_patch"].annotations.destructive_hint)
                     self.assertTrue(tools["g1r_read_source_exact"].annotations.read_only_hint)

@@ -15,6 +15,8 @@ import stat
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 
+from .source_functions import declarations as function_declarations
+
 
 MAX_FILE_BYTES = 2 * 1024 * 1024
 MAX_FILES = 100_000
@@ -377,3 +379,66 @@ class SourceCatalog:
         return self._scan_result(items, total, files, skipped, parser_kind="lexical",
                             limitations=["Неполный лексический индекс, не AST компилятора", "Native bindings не включены", "Вызовы в игре не проверены"],
                             **_page(total, offset, len(items)))
+
+    def list_functions(self, query: str = "", relative_path: str | None = None,
+                       limit: int = 50, offset: int = 0) -> dict:
+        """Найти полные лексические прототипы AS в файле или поддереве источников."""
+        if not isinstance(query, str):
+            raise SourceError("invalid_arguments", "Запрос должен быть строкой")
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise SourceError("invalid_arguments", "Предел должен быть положительным целым числом")
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise SourceError("invalid_arguments", "Смещение должно быть неотрицательным целым числом")
+        if relative_path is not None:
+            if (not isinstance(relative_path, str) or not relative_path or "\\" in relative_path
+                    or "\0" in relative_path or ":" in relative_path):
+                raise SourceError("unsafe_path", "Нужен относительный путь с прямыми разделителями")
+            path = PurePosixPath(relative_path)
+            parts = path.parts
+            if path.is_absolute() or any(part in (".", "..") for part in relative_path.split("/")):
+                raise SourceError("unsafe_path", "Абсолютный путь или выход за каталог исходников запрещён")
+            if not (parts[0] == "Script" or len(parts) >= 3 and parts[0] == "Examples" and parts[2] == "Script"):
+                raise SourceError("source_not_found", "Путь не относится к разрешённым исходникам AngelScript")
+            selected_path = self.root / path
+            selected = _check_path(selected_path, self.root, directory=selected_path.is_dir())
+            normalized = path.as_posix()
+            if selected.is_file() and path.suffix.casefold() == ".as":
+                files = [self._source_file(relative_path)]
+            else:
+                files = [file for file in self._files() if file.relative == normalized
+                         or selected.is_dir() and file.relative.startswith(normalized + "/")]
+        else:
+            files = self._files()
+        items = []
+        skipped = []
+        total = 0
+        needle = query.casefold()
+        for file in files:
+            try:
+                raw = _read_source_bytes(file, self.root, file.path.stat().st_size)
+                text = raw.decode("utf-8-sig", errors="strict")
+            except UnicodeDecodeError:
+                skipped.append(self._item(file, error_code="invalid_encoding"))
+                continue
+            except (OSError, SourceError) as error:
+                if isinstance(error, SourceError) and error.code == "unsafe_path":
+                    raise
+                skipped.append(self._item(file, error_code=getattr(error, "code", "source_unavailable")))
+                continue
+            file_sha256 = hashlib.sha256(raw).hexdigest()
+            for declaration in function_declarations(text, _mask_noncode(text)):
+                if not any(needle in declaration[key].casefold() for key in ("name", "owner", "prototype")):
+                    continue
+                total += 1
+                if total > offset and len(items) < limit:
+                    items.append(self._item(file, **declaration, file_sha256=file_sha256))
+        next_offset = offset + len(items)
+        result = self._result(items, total, len(files), parser_kind="lexical", offset=offset,
+                              next_offset=next_offset if next_offset < total else None,
+                              has_more=next_offset < total, file_count=len(files), source_revision=self.revision,
+                              limitations=["Лексические объявления, не AST компилятора", "Native bindings не включены",
+                                           "Доступность и поведение в игре не проверены"],
+                              skipped_files=skipped, skipped_count=len(skipped), skipped_list_truncated=False)
+        if skipped:
+            result.update(scan_complete=False, total_matches=None, total_matches_lower_bound=total)
+        return result
