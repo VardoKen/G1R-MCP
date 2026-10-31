@@ -192,7 +192,10 @@ class NativeClient:
             payload = json.dumps({"protocol": PROTOCOL_VERSION, "id": request_id, "op": op, "params": params},
                                  ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
         except (ValueError, TypeError, UnicodeError, RecursionError):
-            raise ValueError("Параметры операции не представимы корректным JSON") from None
+            raise NativeError("invalid_arguments", "Параметры операции не представимы корректным JSON",
+                              False, request_id,
+                              {"executed": False, "may_have_executed": False, "do_not_retry": False,
+                               "request_started": False, "stage": "serialization_not_sent"}) from None
         if len(payload) > MAX_FRAME_BYTES:
             raise ValueError("Запрос превышает предел 1 МиБ")
         deadline = time.monotonic() + duration

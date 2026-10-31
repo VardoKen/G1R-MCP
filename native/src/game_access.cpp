@@ -12,6 +12,9 @@
 #include "g1r_mcp/string_return.hpp"
 #include "g1r_mcp/enum_values.hpp"
 #include "g1r_mcp/enum_arguments.hpp"
+#include "g1r_mcp/vector_layout.hpp"
+#include "g1r_mcp/vector_arguments.hpp"
+#include "g1r_mcp/vector_parameter_direction.hpp"
 #include <MinHook.h>
 #include <bcrypt.h>
 #include <algorithm>
@@ -34,6 +37,30 @@ uint64_t steady_ms() {
         std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 constexpr uint64_t kRequestWaitMs=2500;
+constexpr uint64_t kReferenceParm=vector_parameter_direction::reference_parm;
+constexpr uint64_t kConstParm=vector_parameter_direction::const_parm;
+json vector_snapshot_json(const vector_layout::Snapshot& value,bool raw=true) {
+    json components=json::array();
+    for(const auto& child:value.components) {
+        json item={{"name",child.component.name},{"type",child.component.type},{"element_size",child.component.element_size},
+            {"offset",child.component.offset},{"array_dim",child.component.array_dim}};
+        if(raw)item.update({{"pointer",child.pointer},{"next",child.next},{"field_class",child.field_class},
+            {"owner",child.owner},{"field_name",child.name},{"type_name",child.type_name}});
+        components.push_back(std::move(item));
+    }
+    json result={{"struct_path",value.path},{"struct_name",value.struct_name},{"properties_size",value.layout.properties_size},
+        {"min_alignment",value.layout.min_alignment},{"components",components}};
+    if(raw) {
+        const auto& identity=value.identity;
+        result.update({{"field",value.field},{"field_class",value.field_class},{"field_owner",value.field_owner},
+            {"field_name",value.field_name},{"field_type_name",value.field_type_name},{"structure",value.structure},
+            {"head",value.head},{"super",value.super},{"element_size",value.element_size},{"array_dim",value.array_dim},
+            {"identity",{{"object",identity.object},{"object_class",identity.object_class},{"index",identity.index},
+                {"name",identity.name},{"serial",identity.serial},{"class_index",identity.class_index},
+                {"class_name",identity.class_name},{"class_serial",identity.class_serial}}}});
+    }
+    return result;
+}
 void diagnostic(const char* text) {
     HMODULE self{};GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
         reinterpret_cast<LPCWSTR>(&diagnostic),&self);
@@ -176,7 +203,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.15"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.16"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
             {"pump",{{"state",!observed?"not_observed":recent?"recent_tick":"tick_stale"},
                      {"last_tick_monotonic_ms",observed?json(observed):json(nullptr)},
@@ -706,8 +733,9 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         ++count;extent=parameter_extent(extent,offset,size,array_dim);
         const bool returned=(flags&0x400)!=0;
         if(returned && ++returns>1)throw HandlerError("unsupported_signature","У UFunction несколько возвратов");
-        if(!returned && (flags&(0x100|0x800)))throw HandlerError("unsupported_signature","Out/ref аргументы пока не поддержаны");
+        if(!returned && type!="StructProperty" && (flags&(0x100|kReferenceParm)))throw HandlerError("unsupported_signature","Out/ref аргументы пока не поддержаны");
         bool supported=false;
+        json vector_public=nullptr;std::string vector_direction;
         if(type=="BoolProperty") {
             const auto byte_offset=read<uint8_t>(field+0x71),mask=read<uint8_t>(field+0x73);
             validate_bool_layout(size,byte_offset,mask);
@@ -717,6 +745,19 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         else if(type=="FloatProperty")supported=size==4;
         else if(type=="DoubleProperty")supported=size==8;
         else if(type=="NameProperty")supported=size==8;
+        else if(type=="StructProperty") {
+            if(!returned) {
+                const auto direction=vector_parameter_direction::classify(flags);
+                vector_direction=direction==vector_parameter_direction::Direction::output?"output":"input";
+            } else {
+                if(flags&(kReferenceParm|kConstParm))
+                    throw HandlerError("unsupported_signature","Const/ref возврат FVector не поддержан");
+                vector_direction="return";
+            }
+            const auto vector=capture_vector_parameter(field,size,array_dim);
+            captured["aux"]={{"vector",vector_snapshot_json(vector)}};
+            vector_public=vector_snapshot_json(vector,false);supported=true;
+        }
         else if(type=="StrProperty")supported=returned && size==16;
         else if(type=="Int64Property" || type=="UInt64Property")supported=size==8;
         else if(type=="UInt32Property")supported=size==4;
@@ -752,8 +793,14 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
             supported=true;
         }
         if(!supported)throw HandlerError("unsupported_signature","Тип или размер параметра пока не поддержан: "+type);
-        parameters.push_back({{"name",name(field_name)},{"type",type},{"offset",offset},{"element_size",size},
-            {"array_dim",array_dim},{"return",returned},{"out",(flags&0x100)!=0},{"reference",(flags&0x800)!=0}});
+        json public_parameter={{"name",name(field_name)},{"type",type},{"offset",offset},{"element_size",size},
+            {"array_dim",array_dim},{"flags",flags},{"return",returned},{"out",(flags&0x100)!=0},
+            {"reference",(flags&kReferenceParm)!=0},{"const",(flags&kConstParm)!=0}};
+        if(!vector_public.is_null()) {
+            public_parameter["struct"]=vector_public;public_parameter["direction"]=vector_direction;
+            if(vector_direction=="output")public_parameter["argument_marker"]={{"out",true}};
+        }
+        parameters.push_back(std::move(public_parameter));
         return captured;
     });
     if(count!=declared_count)throw HandlerError("unsupported_signature","NumParms не совпадает с полной цепочкой CPF_Parm");
@@ -786,7 +833,11 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
             throw HandlerError("signature_changed","Цепочка полей UFunction изменилась при чтении");
         if(!captured.contains("aux"))continue;
         const auto& auxiliary=captured.at("aux");const auto type=captured.at("type").get<std::string>();
-        if(type=="BoolProperty") {
+        if(type=="StructProperty") {
+            const auto current=capture_vector_parameter(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>());
+            if(vector_snapshot_json(current)!=auxiliary.at("vector"))
+                throw HandlerError("signature_changed","FVector layout изменился при чтении сигнатуры");
+        } else if(type=="BoolProperty") {
             if(read<uint8_t>(field+0x70)!=auxiliary.at("field_size").get<uint8_t>()
                || read<uint8_t>(field+0x71)!=auxiliary.at("byte_offset").get<uint8_t>()
                || read<uint8_t>(field+0x72)!=auxiliary.at("byte_mask").get<uint8_t>()
@@ -847,7 +898,8 @@ json GameAccess::functions(void* object,int limit,const std::string& query,const
                     {"type",field_type(parameter,[this](auto f){return name(f);})},
                     {"offset",read<int32_t>(parameter+0x44)},{"element_size",read<int32_t>(parameter+0x34)},
                     {"array_dim",read<int32_t>(parameter+0x30)},
-                    {"return",(pf&0x400)!=0},{"out",(pf&0x100)!=0},{"reference",(pf&0x800)!=0}});
+                    {"flags",pf},{"return",(pf&0x400)!=0},{"out",(pf&0x100)!=0},
+                    {"reference",(pf&kReferenceParm)!=0},{"const",(pf&kConstParm)!=0}});
             }
             json item={{"name",function_name},{"owner",object_name(reinterpret_cast<void*>(klass))},
                 {"flags",read<uint32_t>(field+0xb0)},{"parameter_count",read<uint8_t>(field+0xb4)},
@@ -969,13 +1021,39 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     };
     struct NameInput {uintptr_t field{};int32_t offset{};NameSource source;};
     std::vector<NameInput> name_inputs;
+    struct VectorParameter {uintptr_t field{};int offset{},size{};uint64_t flags{};std::string key;vector_layout::Snapshot layout;bool output{},returned{};};
+    std::vector<VectorParameter> vector_parameters;
+    json vector_function_contract=nullptr;
+    bool contains_vector=false;
+    for(const auto field:parameter_fields)if(field_type(field,[this](auto f){return name(f);})=="StructProperty")contains_vector=true;
+    if(contains_vector) {
+        vector_function_contract=capture_function_contract(object,function_owner,function,target_handle);
+        std::vector<std::pair<int,int>> intervals;
+        for(const auto field:parameter_fields) {
+            const auto offset=read<int32_t>(field+0x44),size=read<int32_t>(field+0x34);
+            if(parameter_extent(0,offset,size,read<int32_t>(field+0x30))>extent)
+                throw HandlerError("unsupported_signature","Параметр выходит за выделенный буфер UFunction");
+            for(const auto& [start,end]:intervals)if(offset<end && start<offset+size)
+                throw HandlerError("unsupported_signature","FVector функция содержит перекрывающиеся параметры");
+            intervals.emplace_back(offset,offset+size);
+        }
+    }
     for(const auto field:parameter_fields) {
         auto flags=read<uint64_t>(field+0x38);if(!(flags&0x80))continue;
         auto type=field_type(field,[this](auto f){return name(f);});int offset=read<int32_t>(field+0x44),size=read<int32_t>(field+0x34);
-        parameter_extent(extent,offset,size,read<int32_t>(field+0x30));
+        const auto current_extent=parameter_extent(extent,offset,size,read<int32_t>(field+0x30));
+        if(contains_vector && current_extent>extent)
+            throw HandlerError("unsupported_signature","Параметр изменился и выходит за выделенный буфер UFunction");
         if(flags&0x400){
             if(return_field)throw HandlerError("unsupported_signature","У функции обнаружено несколько возвращаемых параметров");
             return_field=field;return_type=type;return_size=size;return_offset=offset;
+            if(type=="StructProperty") {
+                if(flags&(kReferenceParm|kConstParm))
+                    throw HandlerError("unsupported_signature","Const/ref возврат FVector не поддержан");
+                const auto layout=capture_vector_parameter(field,size,read<int32_t>(field+0x30));
+                vector_parameters.push_back({field,offset,size,flags,name(read<uint64_t>(field+0x20)),layout,false,true});
+                continue;
+            }
             if(type=="NameProperty")validate_name_return_layout(size,read<int32_t>(field+0x30));
             else if(type=="EnumProperty" || type=="ByteProperty")enum_layout(type,size,field);
             else if(type=="ObjectProperty" || type=="ClassProperty") {
@@ -987,7 +1065,23 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                 throw HandlerError("unsupported_signature","Тип результата пока не поддержан");
             continue;
         }
-        if(flags&(0x100|0x800))throw HandlerError("unsupported_signature","Out/ref параметры пока не поддержаны");
+        if(type=="StructProperty") {
+            const auto direction=vector_parameter_direction::classify(flags);
+            const auto key=name(read<uint64_t>(field+0x20));
+            if(!arguments.contains(key))throw HandlerError("missing_argument","Не задан FVector аргумент "+key);
+            const auto layout=capture_vector_parameter(field,size,read<int32_t>(field+0x30));
+            if(direction==vector_parameter_direction::Direction::output) {
+                vector_parameter_direction::validate_output_marker(arguments.at(key));
+                std::memset(buffer+offset,0,static_cast<size_t>(size));
+            } else {
+                const auto encoded=vector_arguments::encode(layout.layout,arguments.at(key));
+                std::memcpy(buffer+offset,encoded.bytes.data(),static_cast<size_t>(encoded.size));
+            }
+            ++input_count;
+            vector_parameters.push_back({field,offset,size,flags,key,layout,direction==vector_parameter_direction::Direction::output,false});
+            continue;
+        }
+        if(flags&(0x100|kReferenceParm))throw HandlerError("unsupported_signature","Out/ref параметры пока не поддержаны");
         if(type=="NameProperty")validate_name_argument_layout(size,read<int32_t>(field+0x30));
         auto key=name(read<uint64_t>(field+0x20));if(!arguments.contains(key))throw HandlerError("missing_argument","Не задан аргумент "+key);auto v=arguments.at(key);++input_count;
         if(type=="NameProperty") {
@@ -1050,6 +1144,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         else throw HandlerError("unsupported_signature","Тип аргумента пока не поддержан: "+type);
     }
     if(arguments.size()!=input_count)throw HandlerError("unknown_argument","Переданы лишние аргументы");
+    if(contains_vector)require_same_function_contract(vector_function_contract,capture_function_contract(object,function_owner,function,target_handle));
     for(const auto& [handle,expected]:object_arguments) {
         if(!is_compatible_object(resolve(handle),expected))
             throw HandlerError("incompatible_object_argument","Аргумент изменился до вызова функции");
@@ -1083,7 +1178,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     const auto invocation_after=validate_object(object);
     if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(invocation_after)))
         throw HandlerError("stale_handle","Identity цели изменилась до вызова; получите новую ссылку");
-    if(expected_token) {
+    if(expected_token || contains_vector) {
         auto current_class=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);
         uintptr_t current_function{},current_owner{};std::set<uintptr_t> current_classes;
         for(int depth=0;current_class && !current_function;current_class=read<uintptr_t>(current_class+0x40),++depth) {
@@ -1101,7 +1196,9 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         }
         if(current_function!=function || current_owner!=function_owner)
             throw HandlerError("signature_changed","Ближайшая реализация функции изменилась до вызова");
-        require_same_function_contract(expected_contract,capture_function_contract(object,function_owner,function,target_handle));
+        const auto final_contract=capture_function_contract(object,function_owner,function,target_handle);
+        if(expected_token)require_same_function_contract(expected_contract,final_contract);
+        if(contains_vector)require_same_function_contract(vector_function_contract,final_contract);
     }
     if(!call_event(reinterpret_cast<void*>(process_event_),object,reinterpret_cast<void*>(function),buffer)) {
         json details={{"executed",false},{"may_have_executed",true},{"do_not_retry",true}};
@@ -1111,7 +1208,36 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         }
         throw HandlerError("game_call_fault","Игровой вызов вызвал native exception; эффект неизвестен",std::move(details));
     }
-    json result,return_enum;
+    json result,return_enum,result_metadata=nullptr,out_parameters=json::object(),out_parameter_metadata=json::object();
+    auto decode_vector_outputs=[&] {
+        if(vector_parameters.empty())return;
+        const auto current_target=validate_object(object);
+        if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(current_target)))
+            throw HandlerError("stale_handle","Цель изменилась при получении FVector результата");
+        for(const auto& vector:vector_parameters) {
+            if(!vector.output && !vector.returned)continue;
+            if(read<int32_t>(vector.field+0x44)!=vector.offset || read<uint64_t>(vector.field+0x38)!=vector.flags)
+                throw HandlerError("vector_metadata_changed","FVector параметр изменился после вызова");
+            const auto before=capture_vector_parameter(vector.field,vector.size,1);
+            if(!(before==vector.layout))throw HandlerError("vector_metadata_changed","FVector layout изменился после вызова");
+            std::array<std::byte,24> copied{};
+            if(!copy_memory(copied.data(),buffer+vector.offset,static_cast<size_t>(vector.size)))
+                throw HandlerError("invalid_struct_copy","FVector результат не скопирован");
+            const auto value=vector_arguments::decode(vector.layout.layout,std::span(copied).first(vector.size));
+            if(!(capture_vector_parameter(vector.field,vector.size,1)==vector.layout)
+               || read<int32_t>(vector.field+0x44)!=vector.offset || read<uint64_t>(vector.field+0x38)!=vector.flags)
+                throw HandlerError("vector_metadata_changed","FVector layout изменился при копировании результата");
+            if(vector.returned){result=value;result_metadata=vector_snapshot_json(vector.layout,false);}
+            else {out_parameters[vector.key]=value;out_parameter_metadata[vector.key]=vector_snapshot_json(vector.layout,false);}
+        }
+    };
+    auto append_vector_results=[&](json response) {
+        if(!result_metadata.is_null())response["result_metadata"]=result_metadata;
+        if(!out_parameters.empty()) {
+            response["out_parameters"]=out_parameters;response["out_parameter_metadata"]=out_parameter_metadata;
+        }
+        return response;
+    };
     if(return_type=="StrProperty") {
         StringHeader header{};
         if(!copy_memory(&header,buffer+return_offset,sizeof(header)))
@@ -1120,11 +1246,20 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         result=copied_owned_string_return(header,
             [](const StringHeader& copied){return copied_string(copied);},
             [this](uintptr_t memory){return free_string(base_+kFree,reinterpret_cast<void*>(memory));});
-        return {{"function",function_name},{"return_type",return_type},{"result",result},
-                {"executed",true},{"thread_id",GetCurrentThreadId()},{"cleanup_confirmed",true}};
+        try{decode_vector_outputs();}catch(const HandlerError& error) {
+            throw HandlerError("game_result_error","Вызов выполнен, но FVector out не прочитан; не повторять запрос",
+                {{"executed",true},{"may_have_executed",true},{"do_not_retry",true},{"cause_code",error.code()},{"cleanup_confirmed",true}});
+        } catch(...) {
+            throw HandlerError("game_result_error","Вызов выполнен, но FVector out не прочитан; не повторять запрос",
+                {{"executed",true},{"may_have_executed",true},{"do_not_retry",true},{"cause_code","result_processing_failed"},{"cleanup_confirmed",true}});
+        }
+        return append_vector_results({{"function",function_name},{"return_type",return_type},{"result",result},
+                {"executed",true},{"thread_id",GetCurrentThreadId()},{"cleanup_confirmed",true}});
     }
     try {
-        if(return_type=="NameProperty") {
+        if(return_type=="StructProperty") {
+            // POD-результат копируется по сохранённой отражённой раскладке ниже.
+        } else if(return_type=="NameProperty") {
             result=copied_name_return(return_size,1,
                 [&]{return read<uint64_t>(reinterpret_cast<uintptr_t>(buffer+return_offset));},
                 [this](uint64_t copied){return name(copied);});
@@ -1132,6 +1267,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             const auto returned=enum_property(reinterpret_cast<uintptr_t>(buffer+return_offset),return_type,return_size,return_field);
             result=returned.at("value");if(returned.contains("enum"))return_enum=returned.at("enum");
         } else result=return_field?property_value(reinterpret_cast<uintptr_t>(buffer+return_offset),return_type,return_size,return_field):json(nullptr);
+        decode_vector_outputs();
     }
     catch(const HandlerError& error) {
         throw HandlerError("game_result_error","Вызов выполнен, но результат не получен; не повторять запрос",
@@ -1142,7 +1278,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     }
     json response={{"function",function_name},{"return_type",return_type},{"result",result},{"executed",true},{"thread_id",GetCurrentThreadId()}};
     if(!return_enum.is_null())response["return_enum"]=return_enum;
-    return response;
+    return append_vector_results(std::move(response));
 }
 json GameAccess::execute(const json& request) {
     auto op=request.at("op").get<std::string>();auto params=request.at("params");

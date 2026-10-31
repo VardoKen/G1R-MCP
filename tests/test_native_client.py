@@ -327,10 +327,15 @@ class NativeClientTests(unittest.TestCase):
             with self.subTest(values=values), self.assertRaises(ValueError):
                 NativeClient(**values)
         with NativeClient() as client, patch("g1r_mcp.native_client.socket.socket") as opened:
-            for operation, params in (("", {}), ("x" * 65, {}), ("\ud800", {}), ("x", []), ("x", {"n": float("nan")}),
+            for operation, params in (("", {}), ("x" * 65, {}), ("\ud800", {}), ("x", []),
                                       ("x", {"text": "x" * MAX_FRAME_BYTES})):
                 with self.subTest(operation=operation[:10]), self.assertRaises(ValueError):
                     client.request(operation, params)
+            with self.assertRaises(NativeError) as caught:
+                client.request("x", {"n": float("nan")})
+            self.assertEqual(caught.exception.code, "invalid_arguments")
+            self.assertFalse(caught.exception.may_have_executed)
+            self.assertEqual(caught.exception.details["stage"], "serialization_not_sent")
             opened.assert_not_called()
 
     def test_close_interrupts_pending_response_and_prevents_new_connection(self):
