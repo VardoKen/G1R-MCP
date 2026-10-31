@@ -1,0 +1,1 @@
+{"name":"G1RMCPHitResultWrapperProbe","title":"G1R MCP Hit Result Wrapper Probe","author":"G1R MCP","description":"Собственная AngelScript-обёртка локального FHitResult с возвратом ImpactPoint и проверкой значения по умолчанию.","modVersion":"1.0.0"}
