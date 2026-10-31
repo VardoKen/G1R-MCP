@@ -57,9 +57,10 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                                       "g1r_read_package_file_exact", "reconnect", "не повтор"):
                         self.assertIn(important, instructions)
                     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-                    self.assertEqual(len(tools), 40)
+                    self.assertEqual(len(tools), 41)
                     self.assertTrue(tools["g1r_list_source_functions"].annotations.read_only_hint)
                     self.assertTrue(tools["g1r_source_identity"].annotations.read_only_hint)
+                    self.assertTrue(tools["g1r_verify_source_game"].annotations.read_only_hint)
                     status = await self.call_ok(client, "g1r_status")
                     self.assertEqual(status["sources"]["root"], str(modkit))
                     self.assertEqual(status["sources"]["identity_tool"], "g1r_source_identity")
@@ -73,6 +74,10 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                         "tool": "g1r_source_identity", "snapshot_kind": "sequential_git_reads",
                         "source_only": True, "revision_source": "caller_label",
                         "worktree_scope": "repository", "game_compatibility_checked": False})
+                    self.assertEqual(catalog["source_game_verification"], {
+                        "tool": "g1r_verify_source_game", "snapshot_kind": "sequential_file_reads",
+                        "correlation_scope": "modkit_script_subset_byte_equality", "paths": "server_configuration",
+                        "runtime_compatibility_checked": False, "hash_executable_default": False})
                     identity = await self.call_ok(client, "g1r_source_identity")
                     self.assertIsInstance(identity["inspected_at"], str)
                     self.assertEqual(identity["snapshot_kind"], "sequential_git_reads")
@@ -237,6 +242,56 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                         }, "invalid_arguments")
             self.assertEqual({str(path.relative_to(package)): path.read_bytes() for path in package.rglob("*") if path.is_file()}, before)
             self.assertFalse(game.exists())
+
+
+    async def test_source_game_verification_reports_subset_without_runtime_claim(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            modkit, workspace, _, parameters = self.create_fixture(root)
+            game = root / "steamapps/common/Game"
+            scripts = game / "G1R/Script"
+            scripts.mkdir(parents=True)
+            source = (modkit / "Script/Official.as").read_bytes()
+            (scripts / "Official.as").write_bytes(source)
+            (scripts / "GameOnly.as").write_bytes(b"class UGameOnly {}\n")
+            (root / "steamapps/appmanifest_1297900.acf").write_text(
+                '"AppState" { "appid" "1297900" "buildid" "26295476" "installdir" "Game" }', encoding="utf-8")
+            executable = game / "G1R/Binaries/Win64/G1R-Win64-Shipping.exe"
+            executable.parent.mkdir(parents=True)
+            executable.write_bytes(b"synthetic executable")
+            arguments = list(parameters.args)
+            arguments[arguments.index("--game-root") + 1] = str(game)
+            parameters = StdioServerParameters(command=sys.executable, args=arguments)
+            async with stdio_client(parameters) as (incoming, outgoing):
+                async with ClientSession(incoming, outgoing) as client:
+                    await client.initialize()
+                    report = await self.call_ok(client, "g1r_verify_source_game")
+                    self.assertTrue(report["ok"])
+                    self.assertEqual(report["manifest"]["appid"], "1297900")
+                    self.assertEqual(report["manifest"]["buildid"], "26295476")
+                    self.assertEqual(report["snapshot_kind"], "sequential_file_reads")
+                    self.assertEqual(report["source_identity_observation"], "before_file_comparison")
+                    self.assertEqual(report["correlation_scope"], "modkit_script_subset_byte_equality")
+                    self.assertTrue(report["subset_matches_game_scripts"])
+                    self.assertFalse(report["game_only_scripts_checked"])
+                    self.assertFalse(report["runtime_compatibility_checked"])
+                    self.assertEqual(report["scripts"]["source_count"], 1)
+                    self.assertEqual(report["scripts"]["identical"], 1)
+                    self.assertIsNone(report["scripts"]["max_list_entries"])
+                    self.assertFalse(report["scripts"]["lists_truncated"])
+                    self.assertIsInstance(report["inspection_started_at"], str)
+                    self.assertIsInstance(report["inspection_finished_at"], str)
+                    self.assertFalse(report["source_identity"]["game_compatibility_checked"])
+                    self.assertNotIn("executable", report)
+                    hashed = await self.call_ok(client, "g1r_verify_source_game", {"hash_executable": True})
+                    self.assertEqual(hashed["executable"]["sha256"], hashlib.sha256(executable.read_bytes()).hexdigest())
+                    (scripts / "Official.as").write_bytes(b"class UDifferent {}\n")
+                    mismatch = await self.call_ok(client, "g1r_verify_source_game")
+                    self.assertFalse(mismatch["subset_matches_game_scripts"])
+                    self.assertEqual(mismatch["scripts"]["different_files"], ["Official.as"])
+                    self.assertFalse(mismatch["runtime_compatibility_checked"])
+            self.assertEqual((modkit / "Script/Official.as").read_bytes(), source)
+            self.assertEqual(list(workspace.iterdir()), [])
 
 
 if __name__ == "__main__":

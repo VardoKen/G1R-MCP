@@ -25,12 +25,14 @@ from .development import DevelopmentError, DevelopmentService
 from .patches import PatchError, ScriptPatchBuilder
 from .session_ownership import SessionOwnership
 from .compile_diagnostics import read_report, read_runtime_report
+from .game_environment import InspectionError, verify_source_game
 
 
 LOCAL_TOOLS = (
     ("g1r_status", "Состояние сервера и граница игрового канала"),
     ("g1r_capabilities", "Каталог реализованных и недоступных групп"),
     ("g1r_source_identity", "Текущий Git HEAD Modkit и сравнение с меткой ревизии"),
+    ("g1r_verify_source_game", "Сравнение байтов скриптов Modkit с установленной игрой"),
     ("g1r_find_source_files", "Поиск файлов официального Modkit"),
     ("g1r_search_source", "Буквальный поиск строк AngelScript"),
     ("g1r_read_source", "Ограниченное чтение исходника Modkit"),
@@ -71,7 +73,7 @@ DEVELOPMENT_TOOLS = (
 )
 
 
-def _tool_failure(error: SourceError | PackageError | WorkspaceError | SnapshotError | PatchError) -> ToolError:
+def _tool_failure(error: SourceError | PackageError | WorkspaceError | SnapshotError | PatchError | InspectionError) -> ToolError:
     return ToolError(json.dumps({"code": error.code, "message": str(error)}, ensure_ascii=False))
 
 
@@ -232,6 +234,10 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             "source_identity": {"tool": "g1r_source_identity", "snapshot_kind": "sequential_git_reads",
                                 "source_only": True, "revision_source": "caller_label",
                                 "worktree_scope": "repository", "game_compatibility_checked": False},
+            "source_game_verification": {"tool": "g1r_verify_source_game", "snapshot_kind": "sequential_file_reads",
+                                         "correlation_scope": "modkit_script_subset_byte_equality",
+                                         "paths": "server_configuration", "runtime_compatibility_checked": False,
+                                         "hash_executable_default": False},
             "bootstrap": {
                 "game_sequence": [
                     {"tool": "g1r_development_recipe", "condition": "Проверить выбранный рабочий пакет и получить manifest/DLL SHA-256"},
@@ -371,6 +377,15 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     def g1r_source_identity() -> dict[str, Any]:
         """Прочитать Git HEAD и состояние Modkit; совпадение с установленной игрой не проверяется."""
         return sources.source_identity()
+
+    @server.tool(annotations=read_only)
+    def g1r_verify_source_game(hash_executable: StrictBool = False) -> dict[str, Any]:
+        """Сравнить скрипты Modkit с файлами игры; совпадение байтов не подтверждает работу API."""
+        try:
+            return verify_source_game(sources.root, configured_game_root, hash_executable=hash_executable,
+                                      configured_revision=sources.revision)
+        except InspectionError as error:
+            raise _tool_failure(error) from None
 
     @server.tool(annotations=read_only)
     def g1r_find_source_files(query: str, limit: int = 50, offset: int = 0) -> dict[str, Any]:

@@ -1,6 +1,7 @@
 """Изолированные проверки сверки среды без обращения к установленной игре."""
 
 from contextlib import redirect_stdout
+from datetime import datetime, timezone
 import hashlib
 import io
 import json
@@ -8,7 +9,9 @@ from pathlib import Path
 import tempfile
 import sys
 import unittest
+from unittest.mock import patch
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from inspect_game_environment import InspectionError, InspectionOptions, inspect_environment, main, parse_manifest
 
@@ -101,6 +104,27 @@ class EnvironmentTests(unittest.TestCase):
         self.assertTrue(scripts["lists_truncated"])
         self.assertNotIn("executable", result)
 
+    def test_none_returns_complete_difference_and_missing_lists_without_mutation(self):
+        self.write_pair("same.as", b"same", b"same")
+        different = [f"different/item{index:03}.as" for index in range(101)]
+        missing = [f"missing/item{index:03}.as" for index in range(101)]
+        for relative in different:
+            self.write_pair(relative, b"source", b"game")
+        for relative in missing:
+            self.write_pair(relative, b"source")
+        before = {path.relative_to(self.root): path.read_bytes()
+                  for path in self.root.rglob("*") if path.is_file()}
+        result = inspect_environment(self.options(max_list_entries=None))
+        scripts = result["scripts"]
+        self.assertEqual([scripts[key] for key in ("source_count", "compared", "identical", "different", "missing")],
+                         [203, 102, 1, 101, 101])
+        self.assertEqual(scripts["different_files"], different)
+        self.assertEqual(scripts["missing_files"], missing)
+        self.assertIsNone(scripts["max_list_entries"])
+        self.assertFalse(scripts["lists_truncated"])
+        self.assertEqual({path.relative_to(self.root): path.read_bytes()
+                          for path in self.root.rglob("*") if path.is_file()}, before)
+
     def test_optional_executable_hash_is_streamed(self):
         self.write_pair("a.as", b"a", b"a")
         executable = self.game / "G1R" / "Binaries" / "Win64" / "G1R-Win64-Shipping.exe"
@@ -170,6 +194,85 @@ class EnvironmentTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(output.getvalue())["scripts"]["identical"], 1)
         self.assertEqual(before, {file: file.read_bytes() for file in before})
+
+
+class SourceGameWrapperTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.modkit = self.root / "Modkit"
+        self.source = self.modkit / "Script"
+        self.source.mkdir(parents=True)
+        self.game = self.root / "steamapps" / "common" / "Game"
+        self.target = self.game / "G1R" / "Script"
+        self.target.mkdir(parents=True)
+        self.manifest = self.game.parent.parent / "appmanifest_1297900.acf"
+        self.manifest.write_text(MANIFEST.replace('"appid" "655540"', '"appid" "1297900"'), encoding="utf-8")
+
+    def contents(self):
+        return {path.relative_to(self.root): path.read_bytes()
+                for path in self.root.rglob("*") if path.is_file()}
+
+    def test_matching_subset_excludes_game_only_scripts_and_keeps_unknown_git_identity(self):
+        from g1r_mcp.game_environment import verify_source_game
+        raw = "// реальная изолированная копия\r\nvoid Same() {}\r\n".encode("utf-8")
+        (self.source / "same.as").write_bytes(raw)
+        (self.target / "same.as").write_bytes(raw)
+        (self.target / "game-only.as").write_bytes(b"void ExtraGameOnly() {}\n")
+        before = self.contents()
+        with patch("subprocess.run", side_effect=FileNotFoundError("Git отсутствует")) as runner:
+            result = verify_source_game(self.modkit, self.game, configured_revision="configured-label")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["correlation_scope"], "modkit_script_subset_byte_equality")
+        self.assertTrue(result["subset_matches_game_scripts"])
+        self.assertIs(result["game_only_scripts_checked"], False)
+        self.assertIs(result["runtime_compatibility_checked"], False)
+        self.assertEqual(result["snapshot_kind"], "sequential_file_reads")
+        self.assertEqual(result["source_identity_observation"], "before_file_comparison")
+        self.assertEqual(result["scripts"]["source_count"], 1)
+        self.assertEqual(result["scripts"]["identical"], 1)
+        self.assertIsNone(result["scripts"]["max_list_entries"])
+        self.assertFalse(result["scripts"]["lists_truncated"])
+        self.assertNotIn("executable", result)
+        identity = result["source_identity"]
+        self.assertEqual(identity["configured_revision"], "configured-label")
+        self.assertEqual(identity["revision_source"], "caller_label")
+        self.assertIs(identity["source_only"], True)
+        self.assertIs(identity["game_compatibility_checked"], False)
+        self.assertIs(identity["git"]["available"], False)
+        self.assertIsNone(identity["git"]["head"])
+        self.assertIsNone(identity["git"]["working_tree_changed"])
+        runner.assert_called_once()
+        times = [datetime.fromisoformat(result["inspection_started_at"].replace("Z", "+00:00")),
+                 datetime.fromisoformat(identity["inspected_at"].replace("Z", "+00:00")),
+                 datetime.fromisoformat(result["inspection_finished_at"].replace("Z", "+00:00"))]
+        self.assertTrue(times[0] <= times[1] <= times[2])
+        for instant in times:
+            self.assertEqual(instant.utcoffset(), timezone.utc.utcoffset(instant))
+        self.assertEqual(self.contents(), before)
+
+    def test_wrapper_reports_mismatches_and_missing_files_with_optional_executable_hash(self):
+        from g1r_mcp.game_environment import verify_source_game
+        (self.source / "different.as").write_bytes(b"source")
+        (self.target / "different.as").write_bytes(b"different")
+        (self.source / "missing.as").write_bytes(b"source")
+        executable = self.game / "G1R" / "Binaries" / "Win64" / "G1R-Win64-Shipping.exe"
+        executable.parent.mkdir(parents=True)
+        executable.write_bytes(b"isolated optional executable")
+        before = self.contents()
+        with patch("subprocess.run", side_effect=FileNotFoundError("Git отсутствует")):
+            result = verify_source_game(self.modkit, self.game, hash_executable=True)
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["subset_matches_game_scripts"])
+        self.assertEqual(result["scripts"]["different_files"], ["different.as"])
+        self.assertEqual(result["scripts"]["missing_files"], ["missing.as"])
+        self.assertEqual(result["executable"], {"sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+                                               "size_bytes": len(executable.read_bytes())})
+        self.assertEqual(result["manifest"]["appid"], "1297900")
+        self.assertNotIn("private", json.dumps(result["manifest"]))
+        self.assertIs(result["runtime_compatibility_checked"], False)
+        self.assertEqual(self.contents(), before)
 
 
 if __name__ == "__main__":

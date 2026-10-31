@@ -39,7 +39,7 @@ TOOLS = (
     "prepare_world_lifecycle_probe.py", "probe_world_lifecycle_mcp.py",
 )
 FIXTURE_DIRS = ("angelscript_probe", "object_probe", "class_probe", "name_probe", "patch_probe", "enum_probe", "lifecycle_probe", "pod_read_probe", "world_lifecycle_probe")
-SOURCE_FILES = ("__init__.py", "server.py", "native_client.py", "development.py", "packages.py", "patches.py", "sources.py", "source_functions.py", "source_identity.py", "workspace.py", "snapshots.py", "session_ownership.py", "compile_diagnostics.py")
+SOURCE_FILES = ("__init__.py", "server.py", "native_client.py", "development.py", "packages.py", "patches.py", "sources.py", "source_functions.py", "source_identity.py", "game_environment.py", "workspace.py", "snapshots.py", "session_ownership.py", "compile_diagnostics.py")
 FIXTURE_SCRIPTS = {"angelscript_probe": "G1RMCPProbe.as", "object_probe": "G1RMCPObjectProbe.as",
                    "class_probe": "G1RMCPClassProbe.as", "name_probe": "G1RMCPNameProbe.as", "patch_probe": "G1RMCPPatchProbe.as",
                    "enum_probe": "G1RMCPEnumProbe.as", "lifecycle_probe": "G1RMCPLifecycleProbe.as",
