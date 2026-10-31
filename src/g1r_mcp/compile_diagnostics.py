@@ -1,4 +1,4 @@
-"""Ограниченное чтение предоставленного диагностического отчёта; не compiler API."""
+"""Полное чтение предоставленного диагностического отчёта; не compiler API."""
 from __future__ import annotations
 import hashlib
 import re
@@ -6,8 +6,6 @@ import re
 from .development import DevelopmentError
 from .workspace import WorkspaceError, _read_bytes, _parts, _checked
 
-MAX_REPORT_BYTES = 1024 * 1024
-MAX_DIAGNOSTICS = 200
 _FILE = r'''(?P<file>"[^"\r\n]+\.as"|'[^'\r\n]+\.as'|[^\r\n]+?\.as)'''
 _ANGEL = re.compile(r"^" + _FILE + r"\s*\((?P<line>\d+)\s*[:,]\s*(?P<column>\d+)\)\s*:\s*(?P<rest>.+)$", re.I)
 _COLON = re.compile(r"^" + _FILE + r":(?P<line>\d+)(?::(?P<column>\d+))?\s*:\s*(?P<rest>.+)$", re.I)
@@ -17,36 +15,23 @@ def parse_report(text: str, package_name: str, files: list[dict]) -> dict:
     known = {item["path"]: item["sha256"] for item in files if item["path"].lower().endswith(".as")}
     diagnostics = []
     unparsed = []
-    matched = 0
-    message_truncated = False
-    unparsed_truncated = False
-
-    def add_unparsed(raw: str) -> None:
-        nonlocal unparsed_truncated
-        if len(unparsed) >= 20:
-            unparsed_truncated = True
-            return
-        if len(raw) > 2048:
-            unparsed_truncated = True
-        unparsed.append(raw[:2048])
-
     for raw in text.splitlines():
         match = _ANGEL.fullmatch(raw.strip()) or _COLON.fullmatch(raw.strip())
         if not match:
             if re.search(r"\b(error|warning|fatal)\b|ошибк", raw, re.I):
-                add_unparsed(raw)
+                unparsed.append(raw)
             continue
         try:
             line = int(match["line"])
             column = int(match["column"]) if match["column"] else None
         except ValueError:
-            add_unparsed(raw)
+            unparsed.append(raw)
             continue
         if line < 1 or (column is not None and column < 1):
-            add_unparsed(raw)
+            unparsed.append(raw)
             continue
-        matched += 1
-        if len(diagnostics) >= MAX_DIAGNOSTICS: continue
+        rest = match["rest"]
+        severity = "error" if re.match(r"(?:error|fatal)\b", rest, re.I) else "warning" if re.match(r"warning\b", rest, re.I) else "unknown"
         location = match["file"]
         if location[0] in ('"', "'") and location[-1] == location[0]:
             location = location[1:-1]
@@ -55,19 +40,15 @@ def parse_report(text: str, package_name: str, files: list[dict]) -> dict:
         options = [path for path in known if location == path
                    or location.endswith("/" + package_name + "/" + path)]
         bound = options[0] if len(options) == 1 else None
-        rest = match["rest"]
-        severity = "error" if re.match(r"(?:error|fatal)\b", rest, re.I) else "warning" if re.match(r"warning\b", rest, re.I) else "unknown"
         message = re.sub(r"^(?:error|fatal|warning)\s*:\s*", "", rest, flags=re.I)
-        entry_truncated = len(message) > 4096
-        message_truncated = message_truncated or entry_truncated
         diagnostics.append({"file": bound, "line": line,
                             "column": column,
-                            "severity": severity, "message": message[:4096],
-                            "message_truncated": entry_truncated,
+                            "severity": severity, "message": message,
+                            "message_truncated": False,
                             "source_sha256": known.get(bound), "package_source_matched": bound is not None,
                             "stage": "compiler_report"})
-    return {"diagnostics": diagnostics, "truncated": matched > MAX_DIAGNOSTICS or message_truncated or unparsed_truncated,
-            "unparsed_truncated": unparsed_truncated,
+    return {"diagnostics": diagnostics, "truncated": False,
+            "unparsed_truncated": False,
             "unparsed_error_lines": unparsed, "compiled": False,
             "compilation_state": "errors_reported" if any(d["severity"] == "error" for d in diagnostics) else "unknown",
             "compiler_api_available": False, "runtime_validation": "not_performed",
@@ -76,8 +57,10 @@ def parse_report(text: str, package_name: str, files: list[dict]) -> dict:
 
 
 def read_report(service, relative_package: str, expected_manifest_sha256: str,
-                report_path: str, enable_ingame_tools: bool = False) -> dict:
-    before = service._manifest(relative_package, enable_ingame_tools=enable_ingame_tools)
+                report_path: str, enable_ingame_tools: bool = False, *,
+                show_script_errors: bool = False) -> dict:
+    before = service._manifest(relative_package, enable_ingame_tools=enable_ingame_tools,
+                               show_script_errors=show_script_errors)
     if not isinstance(expected_manifest_sha256, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_manifest_sha256):
         raise DevelopmentError("invalid_manifest_hash", "Нужен SHA-256 полного пакета development recipe")
     if before["manifest_sha256"] != expected_manifest_sha256.lower():
@@ -86,13 +69,16 @@ def read_report(service, relative_package: str, expected_manifest_sha256: str,
         target = service.workspace._unprotected(_checked(service.workspace.root.joinpath(*_parts(report_path)), service.workspace.root))
         if target.suffix.lower() not in (".txt", ".log"):
             raise DevelopmentError("invalid_report_path", "Нужен .txt или .log внутри рабочей базы")
-        raw = _read_bytes(target, service.workspace.root, MAX_REPORT_BYTES)
+        raw = _read_bytes(target, service.workspace.root, target.stat().st_size)
         text = raw.decode("utf-8-sig", errors="strict")
     except WorkspaceError as error:
         raise DevelopmentError(error.code, str(error)) from None
+    except OSError:
+        raise DevelopmentError("access_error", "Не удалось прочитать диагностический отчёт") from None
     except UnicodeError:
         raise DevelopmentError("invalid_report_encoding", "Диагностический отчёт должен быть UTF-8") from None
-    after = service._manifest(relative_package, enable_ingame_tools=enable_ingame_tools)
+    after = service._manifest(relative_package, enable_ingame_tools=enable_ingame_tools,
+                              show_script_errors=show_script_errors)
     if after["manifest_sha256"] != before["manifest_sha256"]:
         raise DevelopmentError("package_changed", "Пакет изменился во время чтения диагностики")
     return {"package_name": before["package_name"], "manifest_sha256": before["manifest_sha256"],

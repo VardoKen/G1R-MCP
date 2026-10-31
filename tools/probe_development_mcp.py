@@ -63,7 +63,8 @@ async def development_cycle(call: Call, relative_package: str, expected_value: i
                             progress: Callable[[str], None] | None = None,
                             probe: Callable[[Call], Awaitable[dict[str, Any]]] | None = None,
                             enable_ingame_tools: bool = False,
-                            companion_packages: list[str] | None = None) -> dict[str, Any]:
+                            companion_packages: list[str] | None = None,
+                            show_script_errors: bool = False) -> dict[str, Any]:
     if not 1 <= startup_timeout <= 45 or not 1 <= ready_timeout <= 60:
         raise ProbeError("invalid_timeout", "Ожидание запуска ограничено 45 с, Tick — 60 с")
     if type(enable_ingame_tools) is not bool:
@@ -78,7 +79,8 @@ async def development_cycle(call: Call, relative_package: str, expected_value: i
         if progress is not None:
             progress(name)
 
-    recipe_arguments = {"relative_package": relative_package, "enable_ingame_tools": enable_ingame_tools}
+    recipe_arguments = {"relative_package": relative_package, "enable_ingame_tools": enable_ingame_tools,
+                        "show_script_errors": show_script_errors}
     if companion_packages is not None:
         recipe_arguments["companion_packages"] = companion_packages
     recipe = await call("g1r_development_recipe", recipe_arguments)
@@ -103,7 +105,7 @@ async def development_cycle(call: Call, relative_package: str, expected_value: i
             launch_arguments = {
                 "relative_package": relative_package,
                 "expected_manifest_sha256": manifest["manifest_sha256"], "restart": False,
-                "enable_ingame_tools": enable_ingame_tools}
+                "enable_ingame_tools": enable_ingame_tools, "show_script_errors": show_script_errors}
             if companion_packages is not None:
                 launch_arguments["companion_packages"] = companion_packages
             launch = await call("g1r_development_start", launch_arguments)

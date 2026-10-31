@@ -296,6 +296,21 @@ class DevelopmentCycleTests(unittest.IsolatedAsyncioTestCase):
             await probe.development_cycle(invalid.call, "artifacts/probe", 2, enable_ingame_tools="yes")
         self.assertEqual(invalid.calls, [])
 
+    async def test_script_error_mode_is_forwarded_through_owned_lifecycle(self):
+        for selected in (False, True):
+            with self.subTest(show_script_errors=selected):
+                fake = FakeMCP()
+                async def callback(call):
+                    return {"read_only_lifecycle": True}
+                options = {"show_script_errors": True} if selected else {}
+                result = await probe.development_cycle(fake.call, "artifacts/probe", 2,
+                                                       probe=callback, **options)
+                flags = [args["show_script_errors"] for name, args in fake.calls
+                         if name in {"g1r_development_recipe", "g1r_development_start"}]
+                self.assertEqual(flags, [selected, selected, selected])
+                self.assertTrue(result["stop_confirmed"])
+                self.assertEqual(sum(name == "g1r_development_stop" for name, _ in fake.calls), 1)
+
     async def test_owned_process_already_exited_confirms_empty_without_stop_retry(self):
         fake = FakeMCP()
         async def callback(call):

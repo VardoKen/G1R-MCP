@@ -289,9 +289,12 @@ class DevelopmentService:
         return {"processes": checked, "running": bool(checked), "source": "windows_process_snapshot",
                 "launch_observation": self._observe_launch(checked)}
 
-    def _manifest(self, relative_package: str, *, enable_ingame_tools: bool = False) -> dict:
+    def _manifest(self, relative_package: str, *, enable_ingame_tools: bool = False,
+                  show_script_errors: bool = False) -> dict:
         if type(enable_ingame_tools) is not bool:
             raise DevelopmentError("invalid_arguments", "enable_ingame_tools должен быть bool")
+        if type(show_script_errors) is not bool:
+            raise DevelopmentError("invalid_arguments", "show_script_errors должен быть bool")
         try:
             package, normalized = self.workspace._package(relative_package)
             if normalized == ".":
@@ -368,6 +371,8 @@ class DevelopmentService:
                        "workspace_root": str(self.workspace.root), "modkit_root": str(self.modkit),
                        "game_root": str(self.game), "files": entries,
                        "launch_options": {"enable_ingame_tools": enable_ingame_tools}}
+            if show_script_errors:
+                payload["launch_options"]["show_script_errors"] = True
             serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
             if len(serialized) > MAX_MANIFEST_BYTES:
                 raise DevelopmentError("manifest_limit", "Полный manifest превышает предел 768 КиБ")
@@ -381,15 +386,17 @@ class DevelopmentService:
             raise DevelopmentError("access_error", "Не удалось полностью прочитать пакет для запуска") from None
 
     def _composition_manifest(self, relative_package: str, companion_packages: list[str] | None,
-                              *, enable_ingame_tools: bool = False) -> dict:
+                              *, enable_ingame_tools: bool = False, show_script_errors: bool = False) -> dict:
         if companion_packages is not None and (not isinstance(companion_packages, list)
                 or any(not isinstance(item, str) or not item for item in companion_packages)):
             raise DevelopmentError("invalid_arguments", "companion_packages должен быть списком путей пакетов")
         if not companion_packages:
-            return self._manifest(relative_package, enable_ingame_tools=enable_ingame_tools)
+            return self._manifest(relative_package, enable_ingame_tools=enable_ingame_tools,
+                                  show_script_errors=show_script_errors)
         if len(companion_packages) >= MAX_DEVELOPMENT_PACKAGES:
             raise DevelopmentError("manifest_limit", "Development-сеанс поддерживает не более четырёх пакетов")
-        packages = [self._manifest(path, enable_ingame_tools=enable_ingame_tools)
+        packages = [self._manifest(path, enable_ingame_tools=enable_ingame_tools,
+                                   show_script_errors=show_script_errors)
                     for path in [relative_package, *companion_packages]]
         names = [item["package_name"] for item in packages]
         if len({name.casefold() for name in names}) != len(names):
@@ -403,6 +410,8 @@ class DevelopmentService:
                    "packages": [{"role": "main" if index == 0 else "companion", **item}
                                 for index, item in enumerate(packages)],
                    "selected_mods": names, "launch_options": {"enable_ingame_tools": enable_ingame_tools}}
+        if show_script_errors:
+            payload["launch_options"]["show_script_errors"] = True
         serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         if len(serialized) > MAX_MANIFEST_BYTES:
             raise DevelopmentError("manifest_limit", "Составной manifest превышает предел 768 КиБ")
@@ -457,7 +466,8 @@ class DevelopmentService:
                             with destination.open("xb") as stream:
                                 stream.write(data)
                 relative = target.relative_to(self.workspace.root).as_posix()
-                staged = self._manifest(relative, enable_ingame_tools=manifest["launch_options"]["enable_ingame_tools"])
+                staged = self._manifest(relative, enable_ingame_tools=manifest["launch_options"]["enable_ingame_tools"],
+                                        show_script_errors=manifest["launch_options"].get("show_script_errors", False))
                 for key in ("package_name", "files", "total_bytes", "script_count", "patch_count"):
                     if staged[key] != source[key]:
                         raise DevelopmentError("staging_changed", "Рабочая копия не совпадает с подтверждёнными байтами пакета")
@@ -486,7 +496,8 @@ class DevelopmentService:
                 raise DevelopmentError("staging_changed", "Состав рабочего development-сеанса изменился")
             for item in stage["packages"]:
                 current = self._manifest(item["relative_package"],
-                    enable_ingame_tools=item["manifest"]["launch_options"]["enable_ingame_tools"])
+                    enable_ingame_tools=item["manifest"]["launch_options"]["enable_ingame_tools"],
+                    show_script_errors=item["manifest"]["launch_options"].get("show_script_errors", False))
                 if current["manifest_sha256"] != item["manifest_sha256_at_launch"]:
                     raise DevelopmentError("staging_changed", "Рабочий пакет изменился до запуска игры")
 
@@ -501,9 +512,10 @@ class DevelopmentService:
                 "loaded": False, "runtime_validation": "not_performed"}
 
     def recipe(self, relative_package: str, *, companion_packages: list[str] | None = None,
-               enable_ingame_tools: bool = False) -> dict:
+               enable_ingame_tools: bool = False, show_script_errors: bool = False) -> dict:
         manifest = self._composition_manifest(relative_package, companion_packages,
-                                              enable_ingame_tools=enable_ingame_tools)
+                                              enable_ingame_tools=enable_ingame_tools,
+                                              show_script_errors=show_script_errors)
         package = self.workspace.root / manifest["package_path"]
         try:
             artifact = {"available": True, **self.native_artifact()}
@@ -514,6 +526,8 @@ class DevelopmentService:
                 "launch": {"mods_directory": None if composed else str(package.parent),
                            "mods": manifest["selected_mods"] if composed else [manifest["package_name"]],
                            "enable_ingame_tools": enable_ingame_tools,
+                           "show_script_errors": show_script_errors,
+                           "compiler_exit_on_error": not show_script_errors,
                            "effects": "Заменить выбор пакетов только в запускаемой игровой сессии",
                            "compilation_trigger": "game_startup", "hot_reload": "function_bodies_file_watch",
                            **({"staging_created_by": "development_start", "edit_target": "staged_copy_only",
@@ -536,23 +550,24 @@ class DevelopmentService:
 
     def start(self, relative_package: str, expected_manifest_sha256: str, *, restart: bool = False,
               expected_process: dict | None = None, companion_packages: list[str] | None = None,
-              enable_ingame_tools: bool = False) -> dict:
+              enable_ingame_tools: bool = False, show_script_errors: bool = False) -> dict:
         with self._observation_lock:
             if self._closed:
                 raise DevelopmentError("service_closed", "Контур наблюдения уже закрыт")
             return self._start(relative_package, expected_manifest_sha256, restart=restart,
                                expected_process=expected_process, companion_packages=companion_packages,
-                               enable_ingame_tools=enable_ingame_tools)
+                               enable_ingame_tools=enable_ingame_tools, show_script_errors=show_script_errors)
 
     def _start(self, relative_package: str, expected_manifest_sha256: str, *, restart: bool = False,
                expected_process: dict | None = None, companion_packages: list[str] | None = None,
-               enable_ingame_tools: bool = False) -> dict:
+               enable_ingame_tools: bool = False, show_script_errors: bool = False) -> dict:
         if not isinstance(expected_manifest_sha256, str) or not _SHA.fullmatch(expected_manifest_sha256):
             raise DevelopmentError("invalid_manifest_hash", "Нужен SHA-256 полного пакета из development recipe")
         if type(restart) is not bool:
             raise DevelopmentError("invalid_arguments", "restart должен быть bool")
         manifest = self._composition_manifest(relative_package, companion_packages,
-                                              enable_ingame_tools=enable_ingame_tools)
+                                              enable_ingame_tools=enable_ingame_tools,
+                                              show_script_errors=show_script_errors)
         if manifest["manifest_sha256"] != expected_manifest_sha256.lower():
             raise DevelopmentError("package_changed", "Пакет изменился после подготовки рецепта")
         state = self.process_state()
@@ -560,6 +575,8 @@ class DevelopmentService:
         arguments = ["-GameRoot", str(self.game)]
         if enable_ingame_tools:
             arguments.append("-EnableIngameTools")
+        if show_script_errors:
+            arguments.append("-ShowScriptErrors")
         if restart:
             expected = self._expected_process(expected_process, state)
             arguments += ["-Restart", "-ExpectedPid", str(expected["pid"]),
@@ -571,7 +588,8 @@ class DevelopmentService:
         stage = self._stage_composition(manifest) if composed else None
         if stage is not None:
             fresh = self._composition_manifest(relative_package, companion_packages,
-                                               enable_ingame_tools=enable_ingame_tools)
+                                               enable_ingame_tools=enable_ingame_tools,
+                                               show_script_errors=show_script_errors)
             if fresh["manifest_sha256"] != manifest["manifest_sha256"]:
                 raise DevelopmentError("package_changed", "Исходные пакеты изменились при подготовке development-сеанса")
             self._verify_staged_composition(stage)
@@ -600,11 +618,12 @@ class DevelopmentService:
         self._launch_observation = {"launch_id": str(uuid.uuid4()),
             "manifest_sha256": manifest["manifest_sha256"], "package_name": manifest["package_name"],
             "relative_package": manifest["package_path"], "enable_ingame_tools": enable_ingame_tools,
+            "show_script_errors": show_script_errors,
             "launch_request_started_at": request_started_at,
             "launch_requested_at": datetime.now(timezone.utc).isoformat(),
             "stage": "launch_unobserved", "process": None, "process_observed": False,
             "capture_attempted": False, "exit_code": None, "exit_time": None,
-            "compiler_exit_on_error": True, "compiler_failure_confirmed": False,
+            "compiler_exit_on_error": not show_script_errors, "compiler_failure_confirmed": False,
             "compiled_confirmed": False, "runtime_validation": "not_performed",
             "manifest_provenance": "requested_package_bytes", "outcome_unknown": True,
             **({"selected_mods": manifest["selected_mods"], "development_staging": stage,
@@ -612,6 +631,8 @@ class DevelopmentService:
         return {"state": "launch_requested", "manifest_sha256": manifest["manifest_sha256"],
                 "package_name": manifest["package_name"], "tool_result": response,
                 "enable_ingame_tools": enable_ingame_tools,
+                "show_script_errors": show_script_errors,
+                "compiler_exit_on_error": not show_script_errors,
                 "compiled": False, "runtime_validation": "not_performed",
                 "game_ready": False, "outcome_unknown": False,
                 "launch_observation": copy.deepcopy(self._launch_observation),

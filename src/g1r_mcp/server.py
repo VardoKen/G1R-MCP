@@ -517,19 +517,23 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_compile_diagnostics(relative_package: str, expected_manifest_sha256: str, report_path: str,
-                                enable_ingame_tools: StrictBool = False) -> dict[str, Any]:
+                                enable_ingame_tools: StrictBool = False,
+                                show_script_errors: StrictBool = False) -> dict[str, Any]:
         """Прочитать UTF-8 .txt/.log из workspace: это предоставленный отчёт, не автоматический compiler API."""
         try:
-            return read_report(development_service(), relative_package, expected_manifest_sha256, report_path, enable_ingame_tools)
+            return read_report(development_service(), relative_package, expected_manifest_sha256, report_path,
+                               enable_ingame_tools, show_script_errors=show_script_errors)
         except DevelopmentError as error:
             raise ToolError(json.dumps({"code": error.code, "message": str(error), "outcome_unknown": False}, ensure_ascii=False)) from None
 
     @server.tool(annotations=read_only)
     def g1r_development_recipe(relative_package: str, enable_ingame_tools: StrictBool = False,
-                               companion_packages: list[str] | None = None) -> dict[str, Any]:
+                               companion_packages: list[str] | None = None,
+                               show_script_errors: StrictBool = False) -> dict[str, Any]:
         """Проверить полный манифест рабочего пакета, процессы и SHA-256 DLL без запуска игры."""
         return development_request("recipe", relative_package=relative_package,
-                                   enable_ingame_tools=enable_ingame_tools, companion_packages=companion_packages)
+                                   enable_ingame_tools=enable_ingame_tools, companion_packages=companion_packages,
+                                   show_script_errors=show_script_errors)
 
     @server.tool(annotations=read_only)
     def g1r_development_processes() -> dict[str, Any]:
@@ -542,12 +546,14 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                restart: bool = False,
                              expected_process: dict[str, Any] | None = None,
                              enable_ingame_tools: StrictBool = False, session_reason: str = "Проверка рабочего пакета",
-                             companion_packages: list[str] | None = None, ctx: Context = None) -> dict[str, Any]:
+                             companion_packages: list[str] | None = None, ctx: Context = None,
+                             show_script_errors: StrictBool = False) -> dict[str, Any]:
         """Запросить development-запуск проверенного пакета; restart требует точную идентичность процесса."""
         return development_request("start", relative_package=relative_package,
                                    expected_manifest_sha256=expected_manifest_sha256,
                                    restart=restart, expected_process=expected_process,
                                    enable_ingame_tools=enable_ingame_tools, companion_packages=companion_packages,
+                                   show_script_errors=show_script_errors,
                                    ctx=ctx, session_reason=session_reason)
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True,

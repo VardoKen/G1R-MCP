@@ -1,4 +1,5 @@
 """Отчёт компилятора не заменяет runtime-подтверждение и связан с байтами пакета."""
+import hashlib
 import json
 import tempfile
 import unittest
@@ -40,28 +41,77 @@ class CompileDiagnosticsTests(unittest.TestCase):
             with self.assertRaises(DevelopmentError) as caught: read_report(service, "Probe", manifest["manifest_sha256"], "diagnostic.txt")
             self.assertEqual(caught.exception.code, "package_changed")
 
-    def test_bounded_report_and_unparsed_lines(self):
+    def test_all_diagnostics_and_unparsed_lines_are_returned(self):
         text = "\n".join("Script/A.as (1:1) : Error: item" for _ in range(205))
         report = parse_report(text + "\nFATAL unknown format", "Probe", [{"path":"Script/A.as","sha256":"a" * 64}])
-        self.assertEqual(len(report["diagnostics"]), 200)
-        self.assertTrue(report["truncated"])
+        self.assertEqual(len(report["diagnostics"]), 205)
+        self.assertFalse(report["truncated"])
         self.assertEqual(report["unparsed_error_lines"], ["FATAL unknown format"])
 
-    def test_all_lossy_limits_set_truncated(self):
+    def test_error_and_fatal_after_many_warnings_are_returned_and_set_compilation_state(self):
+        files = [{"path": "Script/Probe.as", "sha256": "a" * 64}]
+        prefix = "\n".join("Script/Probe.as (1:1) : Warning: item " + str(index)
+                           for index in range(200))
+        for severity in ("Error", "Fatal"):
+            with self.subTest(severity=severity):
+                report = parse_report(prefix + "\nScript/Probe.as (2:1) : " + severity + ": final error",
+                                      "Probe", files)
+                self.assertEqual(report["compilation_state"], "errors_reported")
+                self.assertEqual(len(report["diagnostics"]), 201)
+                self.assertTrue(all(item["severity"] == "warning" for item in report["diagnostics"][:200]))
+                self.assertEqual(report["diagnostics"][-1]["severity"], "error")
+                self.assertEqual(report["diagnostics"][-1]["message"], "final error")
+                self.assertFalse(report["truncated"])
+                self.assertEqual(report["unparsed_error_lines"], [])
+                self.assertFalse(report["unparsed_truncated"])
+                self.assertFalse(report["compiled"])
+                self.assertFalse(report["report_matches_runtime_compile"])
+                self.assertEqual(report["report_provenance"], "caller_selected_workspace_file")
+
+    def test_all_warnings_are_returned_without_claiming_compile_success(self):
+        files = [{"path": "Script/Probe.as", "sha256": "a" * 64}]
+        text = "\n".join("Script/Probe.as (1:1) : Warning: item " + str(index)
+                         for index in range(201))
+        report = parse_report(text, "Probe", files)
+        self.assertEqual(report["compilation_state"], "unknown")
+        self.assertEqual(len(report["diagnostics"]), 201)
+        self.assertFalse(report["truncated"])
+        self.assertFalse(report["compiled"])
+        self.assertFalse(report["report_matches_runtime_compile"])
+
+    def test_invalid_error_coordinates_after_many_warnings_are_preserved_in_full(self):
+        files = [{"path": "Script/Probe.as", "sha256": "a" * 64}]
+        prefix = "\n".join("Script/Probe.as (1:1) : Warning: item " + str(index)
+                           for index in range(200))
+        invalid = ["Script/Probe.as (0:1) : Error: zero line",
+                   "Script/Probe.as:1:0: Fatal: zero column",
+                   "Script/Probe.as (" + "9" * 5000 + ":1) : Error: invalid integer"]
+        report = parse_report(prefix + "\n" + "\n".join(invalid), "Probe", files)
+        self.assertEqual(report["compilation_state"], "unknown")
+        self.assertEqual(len(report["diagnostics"]), 200)
+        self.assertTrue(all(item["severity"] == "warning" for item in report["diagnostics"]))
+        self.assertEqual(len(report["unparsed_error_lines"]), 3)
+        self.assertEqual(report["unparsed_error_lines"], invalid)
+        self.assertFalse(report["unparsed_truncated"])
+        self.assertFalse(report["truncated"])
+        self.assertFalse(report["compiled"])
+        self.assertFalse(report["report_matches_runtime_compile"])
+
+    def test_long_messages_and_all_unparsed_errors_are_returned_in_full(self):
         files = [{"path": "Script/Probe.as", "sha256": "a" * 64}]
         message = parse_report("Script/Probe.as (1:1) : Error: " + "x" * 5000, "Probe", files)
-        self.assertTrue(message["truncated"])
-        self.assertTrue(message["diagnostics"][0]["message_truncated"])
-        self.assertEqual(len(message["diagnostics"][0]["message"]), 4096)
+        self.assertFalse(message["truncated"])
+        self.assertFalse(message["diagnostics"][0]["message_truncated"])
+        self.assertEqual(message["diagnostics"][0]["message"], "x" * 5000)
         self.assertFalse(message["unparsed_truncated"])
         many = parse_report("\n".join("Error: item " + str(i) for i in range(25)), "Probe", files)
-        self.assertTrue(many["truncated"])
-        self.assertTrue(many["unparsed_truncated"])
-        self.assertEqual(len(many["unparsed_error_lines"]), 20)
+        self.assertFalse(many["truncated"])
+        self.assertFalse(many["unparsed_truncated"])
+        self.assertEqual(many["unparsed_error_lines"], ["Error: item " + str(i) for i in range(25)])
         long_raw = parse_report("FATAL " + "x" * 3000, "Probe", files)
-        self.assertTrue(long_raw["truncated"])
-        self.assertTrue(long_raw["unparsed_truncated"])
-        self.assertEqual(len(long_raw["unparsed_error_lines"][0]), 2048)
+        self.assertFalse(long_raw["truncated"])
+        self.assertFalse(long_raw["unparsed_truncated"])
+        self.assertEqual(long_raw["unparsed_error_lines"], ["FATAL " + "x" * 3000])
         exact = parse_report("Script/Probe.as (1:1) : Error: " + "x" * 4096, "Probe", files)
         self.assertFalse(exact["truncated"])
         self.assertFalse(exact["diagnostics"][0]["message_truncated"])
@@ -100,6 +150,38 @@ class CompileDiagnosticsTests(unittest.TestCase):
         self.assertEqual(report["diagnostics"][0]["line"], 2)
         self.assertEqual(report["diagnostics"][0]["column"], 3)
         self.assertEqual(len(report["unparsed_error_lines"]), 1)
-        self.assertTrue(report["unparsed_truncated"])
-        self.assertTrue(report["truncated"])
+        self.assertEqual(report["unparsed_error_lines"][0], text.splitlines()[0])
+        self.assertFalse(report["unparsed_truncated"])
+        self.assertFalse(report["truncated"])
         self.assertFalse(report["compiled"])
+
+    def test_report_larger_than_one_megabyte_preserves_full_utf8_message_and_raw_hash(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            package = workspace / "Probe"
+            (package / "Script").mkdir(parents=True)
+            for name in ("repo", "modkit", "game"):
+                (root / name).mkdir()
+            (package / "GothicMod.json").write_text(json.dumps({
+                "name": "Probe", "title": "Probe", "author": "Test", "modVersion": "1.0.0"
+            }), encoding="utf-8")
+            (package / "Script" / "Probe.as").write_text("class UProbe {}\n", encoding="utf-8")
+            message = ("Подробная ошибка 🐉 " * 50000).rstrip()
+            raw = ("\ufeffScript/Probe.as (3:1) : Error: " + message + "\n").encode("utf-8")
+            self.assertGreater(len(raw), 1024 * 1024)
+            (workspace / "large.log").write_bytes(raw)
+            service = DevelopmentService(repository_root=root / "repo", workspace_root=workspace,
+                                         modkit_root=root / "modkit", game_root=root / "game")
+            self.addCleanup(service.close)
+            manifest = service._manifest("Probe")
+            report = read_report(service, "Probe", manifest["manifest_sha256"], "large.log")
+            self.assertEqual(report["report_sha256"], hashlib.sha256(raw).hexdigest())
+            self.assertEqual(report["manifest_sha256"], manifest["manifest_sha256"])
+            self.assertEqual(len(report["diagnostics"]), 1)
+            self.assertEqual(report["diagnostics"][0]["message"], message)
+            self.assertEqual(report["compilation_state"], "errors_reported")
+            self.assertFalse(report["truncated"])
+            self.assertFalse(report["diagnostics"][0]["message_truncated"])
+            self.assertFalse(report["compiled"])
+            self.assertFalse(report["report_matches_runtime_compile"])
