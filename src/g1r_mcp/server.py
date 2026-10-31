@@ -17,7 +17,7 @@ from . import __version__
 from .packages import PackageError, validate_package
 from .sources import SourceCatalog, SourceError
 from .native_client import NativeClient, NativeError
-from pydantic import StrictBool
+from pydantic import StrictBool, StrictStr
 from .workspace import PackageWorkspace, WorkspaceError
 from .snapshots import SnapshotError, compare_snapshots
 from .development import DevelopmentError, DevelopmentService
@@ -508,9 +508,13 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
         return native_request("objects", params)
 
     @server.tool(annotations=read_only)
-    def g1r_object_properties(handle: str, limit: int = 50) -> dict[str, Any]:
-        """Читать поддержанные свойства проверенной ссылки: скаляры, FName/enum и Object/Class-ссылки."""
-        return native_request("properties", {"handle": handle, "limit": limit})
+    def g1r_object_properties(handle: str, limit: int = 50,
+                              property_names: list[StrictStr] | None = None) -> dict[str, Any]:
+        """Читать свойства ссылки; property_names выбирает до 32 точных уникальных имён в заданном порядке."""
+        params = {"handle": handle, "limit": limit}
+        if property_names is not None:
+            params["property_names"] = property_names
+        return native_request("properties", params)
 
     @server.tool(annotations=read_only)
     def g1r_read_array(handle: str, property_name: str, offset: int = 0, limit: int = 64) -> dict[str, Any]:
@@ -571,9 +575,13 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
         return native_request("watch_forget", {"watch_id": watch_id})
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
-    def g1r_invoke(handle: str, function: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Явно вызвать подтверждённую UFunction со скалярами или Object/Class-ссылками; неизвестный эффект не повторять."""
-        return native_request("invoke", {"handle": handle, "function": function, "arguments": arguments or {}})
+    def g1r_invoke(handle: str, function: str, arguments: dict[str, Any] | None = None,
+                    expected_signature_token: StrictStr | None = None) -> dict[str, Any]:
+        """Вызвать UFunction; необязательный token связывает вызов с прочитанной сигнатурой. Неизвестный эффект не повторять."""
+        params = {"handle": handle, "function": function, "arguments": arguments or {}}
+        if expected_signature_token is not None:
+            params["expected_signature_token"] = expected_signature_token
+        return native_request("invoke", params)
 
     return server
 

@@ -32,7 +32,7 @@ TOOLS = (
     "load_native.ps1", "native_load_result.ps1", "prepare_compile_probe.py", "prepare_object_probe.py",
     "prepare_class_probe.py", "prepare_name_probe.py", "prepare_patch_probe.py", "prepare_base_patch_probe.py",
     "probe_native_route.py", "probe_live_mcp.py", "probe_object_mcp.py", "probe_class_mcp.py",
-    "probe_name_mcp.py", "probe_metadata_mcp.py", "probe_development_mcp.py", "probe_cleanup.py", "prepare_bridge_bundle.py",
+    "probe_name_mcp.py", "probe_function_contract_mcp.py", "probe_metadata_mcp.py", "probe_development_mcp.py", "probe_cleanup.py", "prepare_bridge_bundle.py",
     "prepare_enum_probe.py", "probe_enum_mcp.py", "export_script_package.py",
     "prepare_lifecycle_probe.py", "probe_lifecycle_mcp.py", "prepare_pod_read_probe.py",
     "probe_array_mcp.py", "probe_struct_mcp.py",

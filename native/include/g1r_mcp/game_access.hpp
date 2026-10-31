@@ -5,6 +5,7 @@
 #include <deque>
 #include <future>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -57,6 +58,8 @@ private:
     std::deque<std::shared_ptr<Job>> queue_;
     std::shared_ptr<Job> active_job_;
     std::unordered_map<std::string, Handle> handles_;
+    std::map<std::string, nlohmann::json> signature_contracts_;
+    uint64_t next_signature_token_{};
     uint64_t next_handle_{0};
     std::string handle_session_;
     bool session_cleanup_pending_{};
@@ -90,8 +93,10 @@ private:
     nlohmann::json properties(void* object, int limit);
     nlohmann::json selected_properties(void* object, const nlohmann::json& names);
     nlohmann::json snapshot(const nlohmann::json& targets);
-    nlohmann::json functions(void* object, int limit, const std::string& function_query);
-    nlohmann::json invoke(void* object, const std::string& function_name, const nlohmann::json& arguments);
+    nlohmann::json capture_function_contract(void* object, uintptr_t owner, uintptr_t function, const std::string& target_handle);
+    nlohmann::json functions(void* object, int limit, const std::string& function_query, const std::string& target_handle);
+    nlohmann::json invoke(void* object, const std::string& function_name, const nlohmann::json& arguments,
+                          const std::string& target_handle, const nlohmann::json* expected_token);
     static void __fastcall hooked_tick(void* loop);
     static GameAccess* active_;
 };

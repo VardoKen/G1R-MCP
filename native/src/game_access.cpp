@@ -5,6 +5,8 @@
 #include "g1r_mcp/class_arguments.hpp"
 #include "g1r_mcp/object_query.hpp"
 #include "g1r_mcp/function_query.hpp"
+#include "g1r_mcp/function_contract.hpp"
+#include "g1r_mcp/selected_property_query.hpp"
 #include "g1r_mcp/name_return.hpp"
 #include "g1r_mcp/name_argument.hpp"
 #include "g1r_mcp/string_return.hpp"
@@ -174,7 +176,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.13"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.14"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
             {"pump",{{"state",!observed?"not_observed":recent?"recent_tick":"tick_stale"},
                      {"last_tick_monotonic_ms",observed?json(observed):json(nullptr)},
@@ -252,7 +254,7 @@ void GameAccess::pump() {
         std::lock_guard lock(queue_mutex_);
         if(session_cleanup_pending_) {
             observations_.disconnect(handle_session_);
-            handles_.clear();handle_session_.clear();session_cleanup_pending_=false;
+            handles_.clear();signature_contracts_.clear();handle_session_.clear();session_cleanup_pending_=false;
         }
         if(!queue_.empty()){job=queue_.front();queue_.pop_front();}
     }
@@ -272,7 +274,7 @@ void GameAccess::pump() {
         std::lock_guard lock(queue_mutex_);
         if(session_cleanup_pending_) {
             observations_.disconnect(handle_session_);
-            handles_.clear();handle_session_.clear();session_cleanup_pending_=false;
+            handles_.clear();signature_contracts_.clear();handle_session_.clear();session_cleanup_pending_=false;
         } else {
             observations_.pump(now,ticks_.load(),[this](const json& targets){return snapshot(targets);});
         }
@@ -582,13 +584,14 @@ json GameAccess::selected_properties(void* object,const json& names) {
     std::unordered_map<std::string,json> selected;
     auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);
     int scanned=0;bool scan_truncated=false;
-    std::set<uintptr_t> visited_classes;
+    std::set<uintptr_t> visited_classes,visited_fields;
     for(int depth=0;klass && depth<64 && selected.size()<names.size();
         klass=read<uintptr_t>(klass+0x40),++depth) {
         if(!visited_classes.insert(klass).second){scan_truncated=true;break;}
         auto field=read<uintptr_t>(klass+0x50);auto class_size=read<int32_t>(klass+0x58);
         for(;field && selected.size()<names.size();field=read<uintptr_t>(field+0x18)) {
-            if(++scanned>4096){scan_truncated=true;break;}
+            if(scanned==4096 || !visited_fields.insert(field).second){scan_truncated=true;break;}
+            ++scanned;
             const auto field_name=name(read<uint64_t>(field+0x20));
             if(selected.contains(field_name) || std::find(names.begin(),names.end(),json(field_name))==names.end())continue;
             const auto type=field_type(field,[this](auto f){return name(f);});
@@ -612,7 +615,7 @@ json GameAccess::selected_properties(void* object,const json& names) {
             selected.emplace(field_name,std::move(item));
         }
         if(scan_truncated)break;
-        if(depth==63 && klass)scan_truncated=true;
+        if(depth==63 && selected.size()<names.size() && read<uintptr_t>(klass+0x40))scan_truncated=true;
     }
     bool partial=scan_truncated;
     for(const auto& requested:names) {
@@ -670,7 +673,159 @@ json GameAccess::snapshot(const json& targets) {
     }
     return result;
 }
-json GameAccess::functions(void* object,int limit,const std::string& query) {
+json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_t function,const std::string& target_handle) {
+    auto identity=[](const Handle& value) {
+        const auto observed=serial_identity(value);
+        return json{{"object",observed.object},{"object_class",observed.object_class},
+            {"index",observed.index},{"name",observed.name},{"serial",observed.serial},
+            {"class_index",observed.class_index},{"class_name",observed.class_name},{"class_serial",observed.class_serial}};
+    };
+    if(resolve(target_handle)!=object)throw HandlerError("signature_token_mismatch","Ссылка сигнатуры относится к другому объекту");
+    validate_class(reinterpret_cast<void*>(owner));
+    const auto object_identity=validate_object(object),owner_identity=validate_object(reinterpret_cast<void*>(owner));
+    const auto function_identity=validate_object(reinterpret_cast<void*>(function));
+    if(!contains(object_name(function_identity.object_class),"Function"))
+        throw HandlerError("unsupported_signature","Запись отражения не является UFunction");
+    const auto function_name=object_name(reinterpret_cast<void*>(function));
+    const auto field_head=read<uintptr_t>(function+0x50);
+    const auto function_flags=read<uint32_t>(function+0xb0);
+    const auto declared_count=read<uint8_t>(function+0xb4);
+    const auto parameter_bytes=read<uint16_t>(function+0xb6);
+    const auto return_offset=read<uint16_t>(function+0xb8);
+    if(parameter_bytes>4096)throw HandlerError("unsupported_signature","Параметры UFunction превышают 4096 байтов");
+    json parameters=json::array();int count{},returns{},extent=parameter_bytes;
+    const auto fields=capture_function_field_chain(field_head,[&](uintptr_t field) {
+        const auto field_class=read<uintptr_t>(field+8),field_name=read<uint64_t>(field+0x20);
+        const auto type_name=read<uint64_t>(field_class);
+        const auto type=name(type_name);const auto flags=read<uint64_t>(field+0x38);
+        const auto offset=read<int32_t>(field+0x44),size=read<int32_t>(field+0x34),array_dim=read<int32_t>(field+0x30);
+        json captured={{"pointer",field},{"next",read<uintptr_t>(field+0x18)},
+            {"owner",read<uintptr_t>(field+0x10)},{"field_class",field_class},{"type_name",type_name},
+            {"type",type},{"name",field_name},{"flags",flags},{"offset",offset},{"size",size},{"array_dim",array_dim}};
+        if(!(flags&0x80))return captured;
+        ++count;extent=parameter_extent(extent,offset,size,array_dim);
+        const bool returned=(flags&0x400)!=0;
+        if(returned && ++returns>1)throw HandlerError("unsupported_signature","У UFunction несколько возвратов");
+        if(!returned && (flags&(0x100|0x800)))throw HandlerError("unsupported_signature","Out/ref аргументы пока не поддержаны");
+        bool supported=false;
+        if(type=="BoolProperty") {
+            const auto byte_offset=read<uint8_t>(field+0x71),mask=read<uint8_t>(field+0x73);
+            validate_bool_layout(size,byte_offset,mask);
+            captured["aux"]={{"field_size",read<uint8_t>(field+0x70)},{"byte_offset",byte_offset},
+                {"byte_mask",read<uint8_t>(field+0x72)},{"field_mask",mask}};supported=true;
+        } else if(type=="IntProperty")supported=size==4;
+        else if(type=="FloatProperty")supported=size==4;
+        else if(type=="DoubleProperty")supported=size==8;
+        else if(type=="NameProperty")supported=size==8;
+        else if(type=="StrProperty")supported=returned && size==16;
+        else if(type=="Int64Property" || type=="UInt64Property")supported=returned && size==8;
+        else if(type=="UInt32Property")supported=returned && size==4;
+        else if(type=="ClassProperty" || type=="ObjectProperty") {
+            const auto declared=read<uintptr_t>(field+0x70);
+            validate_class(reinterpret_cast<void*>(declared));
+            captured["aux"]={{"declared",identity(validate_object(reinterpret_cast<void*>(declared)))}};
+            if(type=="ClassProperty") {
+                const auto meta=read<uintptr_t>(field+0x78);validate_class(reinterpret_cast<void*>(meta));
+                captured["aux"]["meta"]=identity(validate_object(reinterpret_cast<void*>(meta)));
+            }
+            supported=size==8;
+        } else if(type=="EnumProperty" || type=="ByteProperty") {
+            const auto layout=enum_layout(type,size,field);
+            captured["aux"]={{"underlying_type",layout.underlying_type},{"size",layout.size}};
+            if(type=="EnumProperty") {
+                const auto underlying=read<uintptr_t>(field+0x70);
+                const auto underlying_class=read<uintptr_t>(underlying+8);
+                captured["aux"]["underlying"]={{"pointer",underlying},{"field_class",underlying_class},
+                    {"type_name",read<uint64_t>(underlying_class)},{"owner",read<uintptr_t>(underlying+0x10)},
+                    {"next",read<uintptr_t>(underlying+0x18)},{"name",read<uint64_t>(underlying+0x20)},
+                    {"array_dim",read<int32_t>(underlying+0x30)},{"size",read<int32_t>(underlying+0x34)},
+                    {"flags",read<uint64_t>(underlying+0x38)},{"offset",read<int32_t>(underlying+0x44)}};
+            }
+            if(layout.object) {
+                const auto table=enum_table(layout.object);json entries=json::array();
+                for(const auto& entry:table.entries)entries.push_back({{"name",entry.name},{"value",entry.value}});
+                const auto enum_address=reinterpret_cast<uintptr_t>(layout.object);
+                captured["aux"]["enum"]={{"identity",identity(table.identity)},{"entries",std::move(entries)},
+                    {"data",read<uintptr_t>(enum_address+0x40)},{"count",read<int32_t>(enum_address+0x48)},
+                    {"capacity",read<int32_t>(enum_address+0x4c)}};
+            } else captured["aux"]["enum"]=nullptr;
+            supported=true;
+        }
+        if(!supported)throw HandlerError("unsupported_signature","Тип или размер параметра пока не поддержан: "+type);
+        parameters.push_back({{"name",name(field_name)},{"type",type},{"offset",offset},{"element_size",size},
+            {"array_dim",array_dim},{"return",returned},{"out",(flags&0x100)!=0},{"reference",(flags&0x800)!=0}});
+        return captured;
+    });
+    if(count!=declared_count)throw HandlerError("unsupported_signature","NumParms не совпадает с полной цепочкой CPF_Parm");
+    json result={{"session",handle_session_},{"target_handle",target_handle},{"function_name",function_name},
+        {"target",identity(object_identity)},{"owner",identity(owner_identity)},{"function",identity(function_identity)},
+        {"function_outer",read<uintptr_t>(function+0x20)},{"function_flags",function_flags},
+        {"header",{{"parameter_count",declared_count},{"parameter_size",parameter_bytes},{"return_offset",return_offset},
+                   {"child_head",field_head},{"computed_extent",extent}}},{"fields",fields},
+        {"public_function",{{"name",function_name},{"owner",object_name(reinterpret_cast<void*>(owner))},
+            {"flags",function_flags},{"parameter_count",declared_count},{"parameter_size",parameter_bytes},
+            {"return_offset",return_offset},{"parameters",parameters},{"parameters_truncated",false}}}};
+    if(!same_serial_identity(serial_identity(object_identity),serial_identity(validate_object(object)))
+       || !same_serial_identity(serial_identity(owner_identity),serial_identity(validate_object(reinterpret_cast<void*>(owner))))
+       || !same_serial_identity(serial_identity(function_identity),serial_identity(validate_object(reinterpret_cast<void*>(function)))))
+        throw HandlerError("signature_changed","Identity UFunction или её владельца изменилась при чтении");
+    if(read<uintptr_t>(function+0x50)!=field_head || read<uint32_t>(function+0xb0)!=function_flags
+       || read<uint8_t>(function+0xb4)!=declared_count || read<uint16_t>(function+0xb6)!=parameter_bytes
+       || read<uint16_t>(function+0xb8)!=return_offset || read<uintptr_t>(function+0x20)!=result.at("function_outer").get<uintptr_t>())
+        throw HandlerError("signature_changed","Заголовок UFunction изменился при чтении");
+    for(const auto& captured:fields) {
+        const auto field=captured.at("pointer").get<uintptr_t>(),field_class=captured.at("field_class").get<uintptr_t>();
+        if(read<uintptr_t>(field+0x18)!=captured.at("next").get<uintptr_t>()
+           || read<uintptr_t>(field+0x10)!=captured.at("owner").get<uintptr_t>()
+           || read<uintptr_t>(field+8)!=field_class || read<uint64_t>(field_class)!=captured.at("type_name").get<uint64_t>()
+           || read<uint64_t>(field+0x20)!=captured.at("name").get<uint64_t>()
+           || read<uint64_t>(field+0x38)!=captured.at("flags").get<uint64_t>()
+           || read<int32_t>(field+0x44)!=captured.at("offset").get<int32_t>()
+           || read<int32_t>(field+0x34)!=captured.at("size").get<int32_t>()
+           || read<int32_t>(field+0x30)!=captured.at("array_dim").get<int32_t>())
+            throw HandlerError("signature_changed","Цепочка полей UFunction изменилась при чтении");
+        if(!captured.contains("aux"))continue;
+        const auto& auxiliary=captured.at("aux");const auto type=captured.at("type").get<std::string>();
+        if(type=="BoolProperty") {
+            if(read<uint8_t>(field+0x70)!=auxiliary.at("field_size").get<uint8_t>()
+               || read<uint8_t>(field+0x71)!=auxiliary.at("byte_offset").get<uint8_t>()
+               || read<uint8_t>(field+0x72)!=auxiliary.at("byte_mask").get<uint8_t>()
+               || read<uint8_t>(field+0x73)!=auxiliary.at("field_mask").get<uint8_t>())
+                throw HandlerError("signature_changed","Маска BoolProperty изменилась при чтении сигнатуры");
+        } else if(type=="ObjectProperty" || type=="ClassProperty") {
+            const auto declared=read<uintptr_t>(field+0x70);
+            if(identity(validate_object(reinterpret_cast<void*>(declared)))!=auxiliary.at("declared"))
+                throw HandlerError("signature_changed","Объявленный класс аргумента изменился при чтении сигнатуры");
+            if(type=="ClassProperty" && identity(validate_object(reinterpret_cast<void*>(read<uintptr_t>(field+0x78))))!=auxiliary.at("meta"))
+                throw HandlerError("signature_changed","Метакласс аргумента изменился при чтении сигнатуры");
+        } else if(type=="EnumProperty" || type=="ByteProperty") {
+            const auto declared=enum_layout(type,captured.at("size").get<int>(),field);
+            if(declared.underlying_type!=auxiliary.at("underlying_type").get<std::string>() || declared.size!=auxiliary.at("size").get<int>())
+                throw HandlerError("signature_changed","Раскладка enum изменилась при чтении сигнатуры");
+            if(type=="EnumProperty") {
+                const auto underlying=read<uintptr_t>(field+0x70);const auto& before=auxiliary.at("underlying");
+                const auto underlying_class=read<uintptr_t>(underlying+8);
+                const json current={{"pointer",underlying},{"field_class",underlying_class},
+                    {"type_name",read<uint64_t>(underlying_class)},{"owner",read<uintptr_t>(underlying+0x10)},
+                    {"next",read<uintptr_t>(underlying+0x18)},{"name",read<uint64_t>(underlying+0x20)},
+                    {"array_dim",read<int32_t>(underlying+0x30)},{"size",read<int32_t>(underlying+0x34)},
+                    {"flags",read<uint64_t>(underlying+0x38)},{"offset",read<int32_t>(underlying+0x44)}};
+                if(current!=before)throw HandlerError("signature_changed","UnderlyingProp изменился при чтении сигнатуры");
+            }
+            if(declared.object) {
+                const auto table=enum_table(declared.object);const auto enum_address=reinterpret_cast<uintptr_t>(declared.object);
+                json entries=json::array();for(const auto& entry:table.entries)entries.push_back({{"name",entry.name},{"value",entry.value}});
+                const json current={{"identity",identity(table.identity)},{"entries",std::move(entries)},
+                    {"data",read<uintptr_t>(enum_address+0x40)},{"count",read<int32_t>(enum_address+0x48)},
+                    {"capacity",read<int32_t>(enum_address+0x4c)}};
+                if(current!=auxiliary.at("enum"))throw HandlerError("signature_changed","UEnum изменился при чтении сигнатуры");
+            } else if(!auxiliary.at("enum").is_null())throw HandlerError("signature_changed","UEnum исчез при чтении сигнатуры");
+        }
+    }
+    if(resolve(target_handle)!=object)throw HandlerError("signature_changed","Ссылка объекта изменилась при чтении сигнатуры");
+    return result;
+}
+json GameAccess::functions(void* object,int limit,const std::string& query,const std::string& target_handle) {
     json items=json::array();auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);
     bool truncated=false,scan_truncated=false;std::set<uintptr_t> visited_classes;
     for(int depth=0;klass;klass=read<uintptr_t>(klass+0x40),++depth) {
@@ -694,10 +849,20 @@ json GameAccess::functions(void* object,int limit,const std::string& query) {
                     {"array_dim",read<int32_t>(parameter+0x30)},
                     {"return",(pf&0x400)!=0},{"out",(pf&0x100)!=0},{"reference",(pf&0x800)!=0}});
             }
-            items.push_back({{"name",function_name},{"owner",object_name(reinterpret_cast<void*>(klass))},
+            json item={{"name",function_name},{"owner",object_name(reinterpret_cast<void*>(klass))},
                 {"flags",read<uint32_t>(field+0xb0)},{"parameter_count",read<uint8_t>(field+0xb4)},
                 {"parameter_size",read<uint16_t>(field+0xb6)},{"return_offset",read<uint16_t>(field+0xb8)},
-                {"parameters",parameters},{"parameters_truncated",parameters_truncated}});
+                {"parameters",parameters},{"parameters_truncated",parameters_truncated},
+                {"signature_token",nullptr},{"signature_status",parameters_truncated?"parameters_truncated":"unsupported_signature"}};
+            if(!parameters_truncated)try {
+                const auto contract=capture_function_contract(object,klass,field,target_handle);
+                require_same_function_contract(contract,capture_function_contract(object,klass,field,target_handle));
+                item=contract.at("public_function");
+                item["signature_token"]=nullptr;
+                item["signature_token"]=store_function_contract(signature_contracts_,next_signature_token_,contract);
+                item["signature_status"]="complete";
+            }catch(const HandlerError& error){item["signature_status"]=error.code();}
+            items.push_back(std::move(item));
             if(parameters_truncated)scan_truncated=true;
         }
         if(truncated || scan_truncated)break;
@@ -705,15 +870,28 @@ json GameAccess::functions(void* object,int limit,const std::string& query) {
     return {{"items",items},{"truncated",truncated || scan_truncated},{"scan_truncated",scan_truncated},
             {"scan_complete",!truncated && !scan_truncated}};
 }
-json GameAccess::invoke(void* object,const std::string& function_name,const json& arguments) {
+json GameAccess::invoke(void* object,const std::string& function_name,const json& arguments,
+                        const std::string& target_handle,const json* expected_token) {
     const auto invocation_identity=validate_object(object);
-    auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);uintptr_t function=0;
+    json expected_contract=nullptr;
+    if(expected_token)expected_contract=checked_function_contract(signature_contracts_,*expected_token,handle_session_,target_handle,function_name);
+    auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);uintptr_t function=0,function_owner=0;
+    std::set<uintptr_t> visited_classes;
     for(int depth=0;klass && depth<64 && !function;klass=read<uintptr_t>(klass+0x40),++depth) {
+        if(!visited_classes.insert(klass).second)throw HandlerError("unsupported_signature","Цепочка владельцев функций циклическая");
         auto field=read<uintptr_t>(klass+0x48);
-        for(int count=0;field && count<4096;field=read<uintptr_t>(field+0x28),++count)
-            if(object_name(reinterpret_cast<void*>(field))==function_name && contains(object_name(reinterpret_cast<void*>(read<uintptr_t>(field+0x10))),"Function")){function=field;break;}
+        std::set<uintptr_t> visited_functions;
+        for(int count=0;field && count<4096;field=read<uintptr_t>(field+0x28),++count) {
+            if(!visited_functions.insert(field).second)throw HandlerError("unsupported_signature","Цепочка UFunction циклическая");
+            if(object_name(reinterpret_cast<void*>(field))==function_name && contains(object_name(reinterpret_cast<void*>(read<uintptr_t>(field+0x10))),"Function")){function=field;function_owner=klass;break;}
+        }
     }
     if(!function)throw HandlerError("function_not_found","Отражённая функция не найдена");
+    if(expected_token) {
+        if(expected_contract.at("function").at("object")!=function || expected_contract.at("owner").at("object")!=function_owner)
+            throw HandlerError("signature_token_mismatch","Токен выдан другой реализации одноимённой функции");
+        require_same_function_contract(expected_contract,capture_function_contract(object,function_owner,function,target_handle));
+    }
     auto bytes=read<uint16_t>(function+0xb6);if(bytes>4096)throw HandlerError("unsupported_signature","Слишком большой буфер параметров");
     std::vector<uintptr_t> parameter_fields;
     std::set<uintptr_t> visited_fields;
@@ -902,6 +1080,26 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     const auto invocation_after=validate_object(object);
     if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(invocation_after)))
         throw HandlerError("stale_handle","Identity цели изменилась до вызова; получите новую ссылку");
+    if(expected_token) {
+        auto current_class=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);
+        uintptr_t current_function{},current_owner{};std::set<uintptr_t> current_classes;
+        for(int depth=0;current_class && !current_function;current_class=read<uintptr_t>(current_class+0x40),++depth) {
+            if(depth>=64 || !current_classes.insert(current_class).second)
+                throw HandlerError("signature_changed","Цепочка владельцев функции изменилась до вызова");
+            auto field=read<uintptr_t>(current_class+0x48);std::set<uintptr_t> current_fields;
+            for(;field;field=read<uintptr_t>(field+0x28)) {
+                if(current_fields.size()>=4096 || !current_fields.insert(field).second)
+                    throw HandlerError("signature_changed","Цепочка функций изменилась до вызова");
+                if(object_name(reinterpret_cast<void*>(field))==function_name
+                   && contains(object_name(reinterpret_cast<void*>(read<uintptr_t>(field+0x10))),"Function")) {
+                    current_function=field;current_owner=current_class;break;
+                }
+            }
+        }
+        if(current_function!=function || current_owner!=function_owner)
+            throw HandlerError("signature_changed","Ближайшая реализация функции изменилась до вызова");
+        require_same_function_contract(expected_contract,capture_function_contract(object,function_owner,function,target_handle));
+    }
     if(!call_event(reinterpret_cast<void*>(process_event_),object,reinterpret_cast<void*>(function),buffer)) {
         json details={{"executed",false},{"may_have_executed",true},{"do_not_retry",true}};
         if(return_type=="StrProperty") {
@@ -946,7 +1144,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
 json GameAccess::execute(const json& request) {
     auto op=request.at("op").get<std::string>();auto params=request.at("params");
     auto session=request.at("session_id").get<std::string>();
-    if(session!=handle_session_){observations_.disconnect(handle_session_);handles_.clear();handle_session_=session;}
+    if(session!=handle_session_){observations_.disconnect(handle_session_);handles_.clear();signature_contracts_.clear();handle_session_=session;}
     const auto now=static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
     if(op=="snapshot") {
@@ -992,21 +1190,31 @@ json GameAccess::execute(const json& request) {
         return {{"items",items},{"total_slots",count},{"scanned_slots",scanned},{"skipped",skipped},{"truncated",scanned<count},{"thread_id",GetCurrentThreadId()}};
     }
     if(op=="read_array")return read_array(params);
+    if(op=="properties" && params.contains("property_names"))selected_property_query::validate(params.at("property_names"));
     auto object=resolve(params.at("handle").get<std::string>());
     if(op=="read_struct") {
         if(!params.contains("property_name") || !params.at("property_name").is_string())
             throw HandlerError("invalid_struct_params","Требуется строковое имя свойства");
         return read_struct(object,params.at("handle").get<std::string>(),params.at("property_name").get<std::string>());
     }
-    if(op=="properties")return properties(object,limit_of(params));
+    if(op=="properties") {
+        if(!params.contains("property_names"))return properties(object,limit_of(params));
+        const auto before=serial_identity(validate_object(object));
+        auto result=selected_properties(object,params.at("property_names"));
+        if(resolve(params.at("handle").get<std::string>())!=object || !same_serial_identity(before,serial_identity(validate_object(object))))
+            throw HandlerError("stale_handle","Объект изменился во время чтения выбранных свойств");
+        result["items"]=std::move(result["properties"]);result.erase("properties");
+        result["validation"]="game_thread_memory_read";return result;
+    }
     if(op=="functions") {
         if(params.contains("function_query") && !params.at("function_query").is_string())
             throw HandlerError("invalid_query","function_query требует строку");
         const auto query=params.value("function_query",std::string{});
         if(!function_query::valid(query))throw HandlerError("invalid_query","function_query превышает 512 байт или содержит NUL");
-        return functions(object,limit_of(params),query);
+        return functions(object,limit_of(params),query,params.at("handle").get<std::string>());
     }
-    if(op=="invoke")return invoke(object,params.at("function").get<std::string>(),params.value("arguments",json::object()));
+    if(op=="invoke")return invoke(object,params.at("function").get<std::string>(),params.value("arguments",json::object()),
+                                  params.at("handle").get<std::string>(),params.contains("expected_signature_token")?&params.at("expected_signature_token"):nullptr);
     throw HandlerError("unknown_operation","Операция не поддержана");
 }
 }
