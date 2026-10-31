@@ -27,6 +27,7 @@ param(
     [string]$AppId = '1297900',
     [string]$ModsDirectory,
     [string[]]$Mods,
+    [string]$ModsCsv,
     [string]$ScriptDirectory,
     [switch]$ShowScriptErrors,
 
@@ -131,7 +132,25 @@ if (-not [string]::IsNullOrWhiteSpace($ScriptDirectory)) {
     Assert-NoPathRedirect -Path $resolvedScriptDirectory
     $scriptOptions = @(('-ScriptDirectory="' + $resolvedScriptDirectory.Replace('\', '/') + '"'))
 }
+$resolvedModsDirectory = $null
 $selectedMods = @($Mods | Where-Object { $null -ne $_ })
+if ($PSBoundParameters.ContainsKey('ModsCsv')) {
+    if ($PSBoundParameters.ContainsKey('Mods')) {
+        throw 'ModsCsv и Mods нельзя указывать вместе.'
+    }
+    if ([string]::IsNullOrWhiteSpace($ModsCsv) -or $ModsCsv.Length -gt 515) {
+        throw 'ModsCsv должен содержать от 1 до 4 имён пакетов через запятую.'
+    }
+    $selectedMods = @($ModsCsv.Split([char]','))
+    if ($selectedMods.Count -lt 1 -or $selectedMods.Count -gt 4) {
+        throw 'ModsCsv должен содержать от 1 до 4 имён пакетов через запятую.'
+    }
+    foreach ($mod in $selectedMods) {
+        if ($mod -cnotmatch '\A[A-Za-z0-9_-]{1,128}\z') {
+            throw 'ModsCsv содержит недопустимое имя пакета.'
+        }
+    }
+}
 if (-not [string]::IsNullOrWhiteSpace($ModsDirectory) -or $selectedMods.Count -gt 0) {
     if ([string]::IsNullOrWhiteSpace($ModsDirectory) -or $selectedMods.Count -eq 0) {
         throw 'ModsDirectory и Mods должны быть указаны вместе.'
@@ -184,6 +203,9 @@ else {
 if (-not $PSCmdlet.ShouldProcess($resolvedGameRoot, $operation)) {
     $result = [pscustomobject]@{
         State = 'Без изменения состояния'
+        package_name = $(if ($selectedMods.Count -eq 1) { $selectedMods[0] } else { $null })
+        mods = @($selectedMods)
+        mods_directory = $resolvedModsDirectory
         SteamExe = $resolvedSteamExe
         AppId = $AppId
         Arguments = $steamArguments
@@ -275,6 +297,8 @@ $request = Start-Process -FilePath $resolvedSteamExe -ArgumentList $steamArgumen
 $result = [pscustomobject]@{
     state = 'launch_requested'
     package_name = $(if ($selectedMods.Count -eq 1) { $selectedMods[0] } else { $null })
+    mods = @($selectedMods)
+    mods_directory = $resolvedModsDirectory
     description = 'Запрос запуска отправлен в Steam'
     SteamExe = $resolvedSteamExe
     AppId = $AppId

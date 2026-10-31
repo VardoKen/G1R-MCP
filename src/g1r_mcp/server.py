@@ -207,7 +207,14 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             ],
             "development_tools": {"implemented": True, "availability": "requires_windows_and_configured_game",
                                   "operations": list(DEVELOPMENT_TOOLS),
-                                  "launch_result": "launch_requested", "compiler_result": "requires_runtime_probe"},
+                                  "launch_result": "launch_requested", "compiler_result": "requires_runtime_probe",
+                                  "companion_packages": {"supported": True, "max_packages": 4,
+                                                         "edit_target": "active_staging_packages",
+                                                         "sources_modified": False, "retention": "retain_for_review"},
+                                  "helpers": {"relative_package": "development/helpers/G1RMCPDevelopmentHelpers",
+                                              "class": "/Script/Angelscript.G1RMCPDevelopmentHelpers",
+                                              "requires": "explicit_companion_package_and_live_world_instance",
+                                              "functions": ["GetHelperVersion", "HasWorld", "GetVisibilityTraceChannel", "TraceImpactPoint"]}},
             "compiler_reports": {"tool": "g1r_compile_diagnostics", "implemented": True,
                                  "source": "caller_selected_workspace_file", "compiler_api_available": False,
                                  "absence_of_errors_proves_compile": False},
@@ -518,10 +525,11 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             raise ToolError(json.dumps({"code": error.code, "message": str(error), "outcome_unknown": False}, ensure_ascii=False)) from None
 
     @server.tool(annotations=read_only)
-    def g1r_development_recipe(relative_package: str, enable_ingame_tools: StrictBool = False) -> dict[str, Any]:
+    def g1r_development_recipe(relative_package: str, enable_ingame_tools: StrictBool = False,
+                               companion_packages: list[str] | None = None) -> dict[str, Any]:
         """Проверить полный манифест рабочего пакета, процессы и SHA-256 DLL без запуска игры."""
         return development_request("recipe", relative_package=relative_package,
-                                   enable_ingame_tools=enable_ingame_tools)
+                                   enable_ingame_tools=enable_ingame_tools, companion_packages=companion_packages)
 
     @server.tool(annotations=read_only)
     def g1r_development_processes() -> dict[str, Any]:
@@ -534,12 +542,13 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                restart: bool = False,
                              expected_process: dict[str, Any] | None = None,
                              enable_ingame_tools: StrictBool = False, session_reason: str = "Проверка рабочего пакета",
-                             ctx: Context = None) -> dict[str, Any]:
+                             companion_packages: list[str] | None = None, ctx: Context = None) -> dict[str, Any]:
         """Запросить development-запуск проверенного пакета; restart требует точную идентичность процесса."""
         return development_request("start", relative_package=relative_package,
                                    expected_manifest_sha256=expected_manifest_sha256,
                                    restart=restart, expected_process=expected_process,
-                                   enable_ingame_tools=enable_ingame_tools, ctx=ctx, session_reason=session_reason)
+                                   enable_ingame_tools=enable_ingame_tools, companion_packages=companion_packages,
+                                   ctx=ctx, session_reason=session_reason)
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True,
                                             idempotentHint=False, openWorldHint=True))

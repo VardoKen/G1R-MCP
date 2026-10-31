@@ -294,7 +294,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.24"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.25"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
             {"pump",{{"state",!observed?"not_observed":recent?"recent_tick":"tick_stale"},
                      {"last_tick_monotonic_ms",observed?json(observed):json(nullptr)},

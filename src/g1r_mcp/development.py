@@ -21,7 +21,8 @@ import uuid
 from typing import Callable
 
 from .packages import PackageError, validate_package
-from .workspace import PackageWorkspace, WorkspaceError, _checked, _guard_directories, _read_bytes
+from .workspace import (PackageWorkspace, WorkspaceError, _checked, _destination_lock,
+                        _guard_directories, _read_bytes)
 
 MAX_PACKAGE_FILES = 10_000
 MAX_PACKAGE_DIRECTORIES = 10_000
@@ -29,6 +30,7 @@ MAX_FILE_BYTES = 16 * 1024 * 1024
 MAX_PACKAGE_BYTES = 64 * 1024 * 1024
 MAX_PROCESS_OUTPUT = 256 * 1024
 MAX_MANIFEST_BYTES = 768 * 1024
+MAX_DEVELOPMENT_PACKAGES = 4
 PROCESS_TIMEOUT_SECONDS = 30
 _SHA = re.compile(r"^[0-9a-fA-F]{64}$")
 _TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{7}Z$")
@@ -378,6 +380,116 @@ class DevelopmentService:
         except OSError:
             raise DevelopmentError("access_error", "Не удалось полностью прочитать пакет для запуска") from None
 
+    def _composition_manifest(self, relative_package: str, companion_packages: list[str] | None,
+                              *, enable_ingame_tools: bool = False) -> dict:
+        if companion_packages is not None and (not isinstance(companion_packages, list)
+                or any(not isinstance(item, str) or not item for item in companion_packages)):
+            raise DevelopmentError("invalid_arguments", "companion_packages должен быть списком путей пакетов")
+        if not companion_packages:
+            return self._manifest(relative_package, enable_ingame_tools=enable_ingame_tools)
+        if len(companion_packages) >= MAX_DEVELOPMENT_PACKAGES:
+            raise DevelopmentError("manifest_limit", "Development-сеанс поддерживает не более четырёх пакетов")
+        packages = [self._manifest(path, enable_ingame_tools=enable_ingame_tools)
+                    for path in [relative_package, *companion_packages]]
+        names = [item["package_name"] for item in packages]
+        if len({name.casefold() for name in names}) != len(names):
+            raise DevelopmentError("duplicate_package", "Имена выбранных пакетов должны быть уникальны без учёта регистра")
+        source_paths = [os.path.normcase(str(self.workspace.root / item["package_path"])) for item in packages]
+        if len(set(source_paths)) != len(source_paths):
+            raise DevelopmentError("duplicate_package", "Один пакет нельзя выбрать несколько раз")
+        payload = {"composition": "explicit_companion_packages", "package_path": packages[0]["package_path"],
+                   "package_name": names[0], "workspace_root": str(self.workspace.root),
+                   "modkit_root": str(self.modkit), "game_root": str(self.game),
+                   "packages": [{"role": "main" if index == 0 else "companion", **item}
+                                for index, item in enumerate(packages)],
+                   "selected_mods": names, "launch_options": {"enable_ingame_tools": enable_ingame_tools}}
+        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        if len(serialized) > MAX_MANIFEST_BYTES:
+            raise DevelopmentError("manifest_limit", "Составной manifest превышает предел 768 КиБ")
+        return {**payload, "manifest_sha256": hashlib.sha256(serialized).hexdigest(),
+                "total_bytes": sum(item["total_bytes"] for item in packages),
+                "compiled": False, "runtime_validation": "not_performed"}
+
+    def _stage_composition(self, manifest: dict) -> dict:
+        """Скопировать подтверждённые байты в новый сохраняемый рабочий development-сеанс."""
+        sessions = self.workspace.root / "artifacts" / "development-sessions"
+        stage = sessions / uuid.uuid4().hex
+        package_root = stage / "packages"
+        try:
+            with _destination_lock(self.workspace.root), _guard_directories(self.workspace.root, self.workspace.root):
+                for parent in (sessions.parent, sessions):
+                    with _guard_directories(parent.parent, self.workspace.root):
+                        if not os.path.lexists(parent):
+                            parent.mkdir()
+                        self.workspace._unprotected(_checked(parent, self.workspace.root, directory=True))
+                with _guard_directories(sessions, self.workspace.root):
+                    if os.path.lexists(stage):
+                        raise DevelopmentError("staging_conflict", "Development-сеанс уже существует")
+                    stage.mkdir()
+                    self.workspace._unprotected(_checked(stage, self.workspace.root, directory=True))
+                    with _guard_directories(stage, self.workspace.root):
+                        package_root.mkdir()
+                        self.workspace._unprotected(_checked(package_root, self.workspace.root, directory=True))
+            copied = []
+            for source in manifest["packages"]:
+                package_name = source["package_name"]
+                target = package_root / package_name
+                with _destination_lock(package_root), _guard_directories(package_root, self.workspace.root):
+                    target.mkdir()
+                    self.workspace._unprotected(_checked(target, self.workspace.root, directory=True))
+                    with _guard_directories(target, self.workspace.root):
+                        (target / "Script").mkdir()
+                source_root, _ = self.workspace._package(source["package_path"])
+                for entry in source["files"]:
+                    data = _read_bytes(source_root / entry["path"], source_root, MAX_FILE_BYTES)
+                    if len(data) != entry["bytes"] or hashlib.sha256(data).hexdigest() != entry["sha256"]:
+                        raise DevelopmentError("package_changed", "Исходный пакет изменился при подготовке development-сеанса")
+                    destination = target / entry["path"]
+                    with _destination_lock(target), _guard_directories(target, self.workspace.root):
+                        current = target
+                        for component in Path(entry["path"]).parts[:-1]:
+                            with _guard_directories(current, self.workspace.root):
+                                current = current / component
+                                if not os.path.lexists(current):
+                                    current.mkdir()
+                                self.workspace._unprotected(_checked(current, self.workspace.root, directory=True))
+                        with _guard_directories(destination.parent, self.workspace.root):
+                            with destination.open("xb") as stream:
+                                stream.write(data)
+                relative = target.relative_to(self.workspace.root).as_posix()
+                staged = self._manifest(relative, enable_ingame_tools=manifest["launch_options"]["enable_ingame_tools"])
+                for key in ("package_name", "files", "total_bytes", "script_count", "patch_count"):
+                    if staged[key] != source[key]:
+                        raise DevelopmentError("staging_changed", "Рабочая копия не совпадает с подтверждёнными байтами пакета")
+                copied.append({"role": source["role"], "source_package_path": source["package_path"],
+                               "source_manifest_sha256": source["manifest_sha256"],
+                               "relative_package": relative, "package_name": package_name,
+                               "manifest_sha256_at_launch": staged["manifest_sha256"], "manifest": staged})
+            stage_info = {"relative_directory": stage.relative_to(self.workspace.root).as_posix(),
+                          "mods_directory": str(package_root), "packages": copied,
+                          "source_manifest_sha256": manifest["manifest_sha256"],
+                          "edit_target": "staged_copy_only", "retention": "retain_for_review",
+                          "hot_reload": "function_bodies_file_watch"}
+            with _guard_directories(stage, self.workspace.root):
+                with (stage / "session.json").open("x", encoding="utf-8") as stream:
+                    json.dump(stage_info, stream, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            self._verify_staged_composition(stage_info)
+            return stage_info
+        except (OSError, WorkspaceError) as error:
+            raise DevelopmentError("staging_error", "Не удалось подготовить отдельный рабочий development-сеанс") from error
+
+    def _verify_staged_composition(self, stage: dict) -> None:
+        root = self.workspace._unprotected(_checked(Path(stage["mods_directory"]), self.workspace.root, directory=True))
+        expected = {item["package_name"] for item in stage["packages"]}
+        with _guard_directories(root, self.workspace.root):
+            if {item.name for item in root.iterdir()} != expected:
+                raise DevelopmentError("staging_changed", "Состав рабочего development-сеанса изменился")
+            for item in stage["packages"]:
+                current = self._manifest(item["relative_package"],
+                    enable_ingame_tools=item["manifest"]["launch_options"]["enable_ingame_tools"])
+                if current["manifest_sha256"] != item["manifest_sha256_at_launch"]:
+                    raise DevelopmentError("staging_changed", "Рабочий пакет изменился до запуска игры")
+
     def native_artifact(self) -> dict:
         """Получить SHA-256 собранной DLL для явной последующей загрузки."""
         try:
@@ -388,18 +500,25 @@ class DevelopmentService:
         return {"path": str(dll), "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw),
                 "loaded": False, "runtime_validation": "not_performed"}
 
-    def recipe(self, relative_package: str, *, enable_ingame_tools: bool = False) -> dict:
-        manifest = self._manifest(relative_package, enable_ingame_tools=enable_ingame_tools)
+    def recipe(self, relative_package: str, *, companion_packages: list[str] | None = None,
+               enable_ingame_tools: bool = False) -> dict:
+        manifest = self._composition_manifest(relative_package, companion_packages,
+                                              enable_ingame_tools=enable_ingame_tools)
         package = self.workspace.root / manifest["package_path"]
         try:
             artifact = {"available": True, **self.native_artifact()}
         except DevelopmentError as error:
             artifact = {"available": False, "reason_code": error.code}
+        composed = "packages" in manifest
         return {"manifest": manifest, "process_state": self.process_state(), "native_artifact": artifact,
-                "launch": {"mods_directory": str(package.parent), "mods": [manifest["package_name"]],
+                "launch": {"mods_directory": None if composed else str(package.parent),
+                           "mods": manifest["selected_mods"] if composed else [manifest["package_name"]],
                            "enable_ingame_tools": enable_ingame_tools,
                            "effects": "Заменить выбор пакетов только в запускаемой игровой сессии",
-                           "compilation_trigger": "game_startup", "hot_reload": "function_bodies_file_watch"},
+                           "compilation_trigger": "game_startup", "hot_reload": "function_bodies_file_watch",
+                           **({"staging_created_by": "development_start", "edit_target": "staged_copy_only",
+                               "staging_retention": "retain_for_review", "source_packages_modified": False}
+                              if composed else {})},
                 "diagnostics_available": False, "dedicated_compile_command": False,
                 "compiled": False, "runtime_validation": "not_performed"}
 
@@ -416,25 +535,29 @@ class DevelopmentService:
         return expected
 
     def start(self, relative_package: str, expected_manifest_sha256: str, *, restart: bool = False,
-              expected_process: dict | None = None, enable_ingame_tools: bool = False) -> dict:
+              expected_process: dict | None = None, companion_packages: list[str] | None = None,
+              enable_ingame_tools: bool = False) -> dict:
         with self._observation_lock:
             if self._closed:
                 raise DevelopmentError("service_closed", "Контур наблюдения уже закрыт")
             return self._start(relative_package, expected_manifest_sha256, restart=restart,
-                               expected_process=expected_process, enable_ingame_tools=enable_ingame_tools)
+                               expected_process=expected_process, companion_packages=companion_packages,
+                               enable_ingame_tools=enable_ingame_tools)
 
     def _start(self, relative_package: str, expected_manifest_sha256: str, *, restart: bool = False,
-               expected_process: dict | None = None, enable_ingame_tools: bool = False) -> dict:
+               expected_process: dict | None = None, companion_packages: list[str] | None = None,
+               enable_ingame_tools: bool = False) -> dict:
         if not isinstance(expected_manifest_sha256, str) or not _SHA.fullmatch(expected_manifest_sha256):
             raise DevelopmentError("invalid_manifest_hash", "Нужен SHA-256 полного пакета из development recipe")
         if type(restart) is not bool:
             raise DevelopmentError("invalid_arguments", "restart должен быть bool")
-        manifest = self._manifest(relative_package, enable_ingame_tools=enable_ingame_tools)
+        manifest = self._composition_manifest(relative_package, companion_packages,
+                                              enable_ingame_tools=enable_ingame_tools)
         if manifest["manifest_sha256"] != expected_manifest_sha256.lower():
             raise DevelopmentError("package_changed", "Пакет изменился после подготовки рецепта")
         state = self.process_state()
-        arguments = ["-GameRoot", str(self.game), "-ModsDirectory",
-                     str((self.workspace.root / manifest["package_path"]).parent), "-Mods", manifest["package_name"]]
+        composed = "packages" in manifest
+        arguments = ["-GameRoot", str(self.game)]
         if enable_ingame_tools:
             arguments.append("-EnableIngameTools")
         if restart:
@@ -445,6 +568,18 @@ class DevelopmentService:
             raise DevelopmentError("game_running", "Для работающей игры нужны restart и точная идентичность процесса")
         elif expected_process is not None:
             raise DevelopmentError("invalid_arguments", "expected_process используется только при restart")
+        stage = self._stage_composition(manifest) if composed else None
+        if stage is not None:
+            fresh = self._composition_manifest(relative_package, companion_packages,
+                                               enable_ingame_tools=enable_ingame_tools)
+            if fresh["manifest_sha256"] != manifest["manifest_sha256"]:
+                raise DevelopmentError("package_changed", "Исходные пакеты изменились при подготовке development-сеанса")
+            self._verify_staged_composition(stage)
+            arguments.extend(["-ModsDirectory", stage["mods_directory"], "-ModsCsv",
+                              ",".join(manifest["selected_mods"])])
+        else:
+            arguments.extend(["-ModsDirectory", str((self.workspace.root / manifest["package_path"]).parent),
+                              "-Mods", manifest["package_name"]])
         try:
             self._close_process_lease()
         except Exception:
@@ -453,7 +588,13 @@ class DevelopmentService:
             self._launch_observation.update(stage="observation_closed", observer_closed=True, outcome_unknown=True)
         request_started_at = datetime.now(timezone.utc).isoformat()
         response = self._command("start_g1r_development.ps1", arguments, mutating=True)
-        if response.get("state") != "launch_requested" or response.get("package_name") != manifest["package_name"]:
+        receipt_matches = response.get("package_name") == manifest["package_name"]
+        if stage is not None:
+            receipt_root = response.get("mods_directory")
+            receipt_matches = (response.get("mods") == manifest["selected_mods"]
+                and isinstance(receipt_root, str)
+                and os.path.normcase(receipt_root) == os.path.normcase(stage["mods_directory"]))
+        if response.get("state") != "launch_requested" or not receipt_matches:
             raise DevelopmentError("tool_protocol_error", "Ответ запуска не подтвердил передачу выбранного пакета Steam",
                                    outcome_unknown=True)
         self._launch_observation = {"launch_id": str(uuid.uuid4()),
@@ -465,13 +606,21 @@ class DevelopmentService:
             "capture_attempted": False, "exit_code": None, "exit_time": None,
             "compiler_exit_on_error": True, "compiler_failure_confirmed": False,
             "compiled_confirmed": False, "runtime_validation": "not_performed",
-            "manifest_provenance": "requested_package_bytes", "outcome_unknown": True}
+            "manifest_provenance": "requested_package_bytes", "outcome_unknown": True,
+            **({"selected_mods": manifest["selected_mods"], "development_staging": stage,
+                "manifest_provenance": "source_packages_verified_staged_bytes_at_launch"} if stage is not None else {})}
         return {"state": "launch_requested", "manifest_sha256": manifest["manifest_sha256"],
                 "package_name": manifest["package_name"], "tool_result": response,
                 "enable_ingame_tools": enable_ingame_tools,
                 "compiled": False, "runtime_validation": "not_performed",
                 "game_ready": False, "outcome_unknown": False,
-                "launch_observation": copy.deepcopy(self._launch_observation)}
+                "launch_observation": copy.deepcopy(self._launch_observation),
+                **({"development_staging": copy.deepcopy(stage),
+                    "active_staging_packages": [{key: item[key] for key in
+                        ("role", "source_package_path", "relative_package", "package_name", "manifest_sha256_at_launch")}
+                        for item in stage["packages"]], "source_packages_modified": False,
+                    "edit_target": "staged_copy_only", "hot_reload": "function_bodies_file_watch",
+                    "staging_retention": "retain_for_review"} if stage is not None else {})}
 
     def stop(self, expected_process: dict) -> dict:
         with self._observation_lock:

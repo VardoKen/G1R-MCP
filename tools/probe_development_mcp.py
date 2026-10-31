@@ -62,11 +62,15 @@ async def development_cycle(call: Call, relative_package: str, expected_value: i
                             clock: Callable[[], float] = time.monotonic,
                             progress: Callable[[str], None] | None = None,
                             probe: Callable[[Call], Awaitable[dict[str, Any]]] | None = None,
-                            enable_ingame_tools: bool = False) -> dict[str, Any]:
+                            enable_ingame_tools: bool = False,
+                            companion_packages: list[str] | None = None) -> dict[str, Any]:
     if not 1 <= startup_timeout <= 45 or not 1 <= ready_timeout <= 60:
         raise ProbeError("invalid_timeout", "Ожидание запуска ограничено 45 с, Tick — 60 с")
     if type(enable_ingame_tools) is not bool:
         raise ProbeError("invalid_arguments", "enable_ingame_tools должен быть bool")
+    if (companion_packages is not None and (not isinstance(companion_packages, list)
+            or any(not isinstance(package, str) or not package for package in companion_packages))):
+        raise ProbeError("invalid_arguments", "companion_packages требует список непустых путей пакетов")
     report: dict[str, Any] = {"source": "real_stdio_development_cycle", "stages": []}
 
     def stage(name: str) -> None:
@@ -75,6 +79,8 @@ async def development_cycle(call: Call, relative_package: str, expected_value: i
             progress(name)
 
     recipe_arguments = {"relative_package": relative_package, "enable_ingame_tools": enable_ingame_tools}
+    if companion_packages is not None:
+        recipe_arguments["companion_packages"] = companion_packages
     recipe = await call("g1r_development_recipe", recipe_arguments)
     manifest = recipe.get("manifest")
     artifact = recipe.get("native_artifact")
@@ -94,10 +100,13 @@ async def development_cycle(call: Call, relative_package: str, expected_value: i
     async def start_and_identify() -> None:
         nonlocal owned, owned_bootstrap
         try:
-            launch = await call("g1r_development_start", {
+            launch_arguments = {
                 "relative_package": relative_package,
                 "expected_manifest_sha256": manifest["manifest_sha256"], "restart": False,
-                "enable_ingame_tools": enable_ingame_tools})
+                "enable_ingame_tools": enable_ingame_tools}
+            if companion_packages is not None:
+                launch_arguments["companion_packages"] = companion_packages
+            launch = await call("g1r_development_start", launch_arguments)
             if launch.get("state") != "launch_requested" or launch.get("outcome_unknown") is not False:
                 raise ProbeError("launch_unconfirmed", "Запрос запуска не подтверждён; автоматически не повторяется")
             stage("launch_requested")
