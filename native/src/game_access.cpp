@@ -15,6 +15,8 @@
 #include "g1r_mcp/vector_layout.hpp"
 #include "g1r_mcp/vector_arguments.hpp"
 #include "g1r_mcp/vector_parameter_direction.hpp"
+#include "g1r_mcp/parameter_direction.hpp"
+#include "g1r_mcp/scalar_outputs.hpp"
 #include <MinHook.h>
 #include <bcrypt.h>
 #include <algorithm>
@@ -39,6 +41,17 @@ uint64_t steady_ms() {
 constexpr uint64_t kRequestWaitMs=2500;
 constexpr uint64_t kReferenceParm=vector_parameter_direction::reference_parm;
 constexpr uint64_t kConstParm=vector_parameter_direction::const_parm;
+bool supported_scalar_output_type(const std::string& type) {
+    return type=="BoolProperty" || type=="IntProperty" || type=="Int64Property"
+        || type=="UInt32Property" || type=="UInt64Property" || type=="FloatProperty" || type=="DoubleProperty";
+}
+scalar_outputs::Layout capture_scalar_output_layout(uintptr_t field,const std::string& type,int size,int dim);
+json scalar_output_metadata(const scalar_outputs::Layout& layout) {
+    json result={{"type",layout.type},{"element_size",layout.element_size},{"array_dim",layout.array_dim}};
+    if(layout.type=="BoolProperty")result["bool_layout"]={{"field_size",layout.field_size},{"byte_offset",layout.byte_offset},
+        {"byte_mask",layout.byte_mask},{"field_mask",layout.field_mask}};
+    return result;
+}
 json vector_snapshot_json(const vector_layout::Snapshot& value,bool raw=true) {
     json components=json::array();
     for(const auto& child:value.components) {
@@ -160,6 +173,14 @@ json scalar(uintptr_t address,const std::string& type,int size,uintptr_t field) 
     }
     return nullptr;
 }
+scalar_outputs::Layout capture_scalar_output_layout(uintptr_t field,const std::string& type,int size,int dim) {
+    scalar_outputs::Layout layout{type,size,dim};
+    if(type=="BoolProperty") {
+        layout.field_size=read<uint8_t>(field+0x70);layout.byte_offset=read<uint8_t>(field+0x71);
+        layout.byte_mask=read<uint8_t>(field+0x72);layout.field_mask=read<uint8_t>(field+0x73);
+    }
+    scalar_outputs::validate_layout(layout);return layout;
+}
 }
 
 GameAccess* GameAccess::active_{};
@@ -203,7 +224,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.16"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.17"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
             {"pump",{{"state",!observed?"not_observed":recent?"recent_tick":"tick_stale"},
                      {"last_tick_monotonic_ms",observed?json(observed):json(nullptr)},
@@ -733,7 +754,16 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         ++count;extent=parameter_extent(extent,offset,size,array_dim);
         const bool returned=(flags&0x400)!=0;
         if(returned && ++returns>1)throw HandlerError("unsupported_signature","У UFunction несколько возвратов");
-        if(!returned && type!="StructProperty" && (flags&(0x100|kReferenceParm)))throw HandlerError("unsupported_signature","Out/ref аргументы пока не поддержаны");
+        const bool scalar_output=!returned && supported_scalar_output_type(type) && (flags&0x100);
+        json scalar_public=nullptr;
+        if(scalar_output) {
+            if(parameter_direction::classify(flags)!=parameter_direction::Direction::output)
+                throw HandlerError("unsupported_signature","Скалярный параметр не является pure out");
+            scalar_public=scalar_output_metadata(capture_scalar_output_layout(field,type,size,array_dim));
+        } else if(!returned && type!="StructProperty" && (flags&(0x100|kReferenceParm)))
+            throw HandlerError("unsupported_signature","Out/ref аргументы этого типа не поддержаны");
+        if(returned && supported_scalar_output_type(type) && (flags&(kReferenceParm|kConstParm)))
+            throw HandlerError("unsupported_signature","Const/ref скалярный возврат не поддержан");
         bool supported=false;
         json vector_public=nullptr;std::string vector_direction;
         if(type=="BoolProperty") {
@@ -799,6 +829,10 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         if(!vector_public.is_null()) {
             public_parameter["struct"]=vector_public;public_parameter["direction"]=vector_direction;
             if(vector_direction=="output")public_parameter["argument_marker"]={{"out",true}};
+        }
+        if(!scalar_public.is_null()) {
+            public_parameter["direction"]="output";public_parameter["argument_marker"]={{"out",true}};
+            public_parameter["out_metadata"]=scalar_public;
         }
         parameters.push_back(std::move(public_parameter));
         return captured;
@@ -894,12 +928,16 @@ json GameAccess::functions(void* object,int limit,const std::string& query,const
             for(;parameter;parameter=read<uintptr_t>(parameter+0x18)) {
                 if(visited_parameters.size()>=128 || !visited_parameters.insert(parameter).second){parameters_truncated=true;break;}
                 const auto pf=read<uint64_t>(parameter+0x38);if(!(pf&0x80))continue;
+                const auto parameter_type=field_type(parameter,[this](auto f){return name(f);});
                 parameters.push_back({{"name",name(read<uint64_t>(parameter+0x20))},
-                    {"type",field_type(parameter,[this](auto f){return name(f);})},
+                    {"type",parameter_type},
                     {"offset",read<int32_t>(parameter+0x44)},{"element_size",read<int32_t>(parameter+0x34)},
                     {"array_dim",read<int32_t>(parameter+0x30)},
                     {"flags",pf},{"return",(pf&0x400)!=0},{"out",(pf&0x100)!=0},
                     {"reference",(pf&kReferenceParm)!=0},{"const",(pf&kConstParm)!=0}});
+                if(parameter_type=="BoolProperty")parameters.back()["bool_layout"]={
+                    {"field_size",read<uint8_t>(parameter+0x70)},{"byte_offset",read<uint8_t>(parameter+0x71)},
+                    {"byte_mask",read<uint8_t>(parameter+0x72)},{"field_mask",read<uint8_t>(parameter+0x73)}};
             }
             json item={{"name",function_name},{"owner",object_name(reinterpret_cast<void*>(klass))},
                 {"flags",read<uint32_t>(field+0xb0)},{"parameter_count",read<uint8_t>(field+0xb4)},
@@ -1023,18 +1061,25 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     std::vector<NameInput> name_inputs;
     struct VectorParameter {uintptr_t field{};int offset{},size{};uint64_t flags{};std::string key;vector_layout::Snapshot layout;bool output{},returned{};};
     std::vector<VectorParameter> vector_parameters;
-    json vector_function_contract=nullptr;
-    bool contains_vector=false;
-    for(const auto field:parameter_fields)if(field_type(field,[this](auto f){return name(f);})=="StructProperty")contains_vector=true;
-    if(contains_vector) {
-        vector_function_contract=capture_function_contract(object,function_owner,function,target_handle);
+    struct ScalarOutput {uintptr_t field{};int offset{};uint64_t flags{};std::string key;scalar_outputs::Layout layout;};
+    std::vector<ScalarOutput> scalar_parameters;
+    json pod_function_contract=nullptr;
+    bool contains_vector=false,contains_scalar_output=false;
+    for(const auto field:parameter_fields) {
+        const auto type=field_type(field,[this](auto f){return name(f);});const auto flags=read<uint64_t>(field+0x38);
+        if(type=="StructProperty")contains_vector=true;
+        if(supported_scalar_output_type(type) && (flags&0x100) && !(flags&0x400))contains_scalar_output=true;
+    }
+    const bool strict_pod_contract=contains_vector || contains_scalar_output;
+    if(strict_pod_contract) {
+        pod_function_contract=capture_function_contract(object,function_owner,function,target_handle);
         std::vector<std::pair<int,int>> intervals;
         for(const auto field:parameter_fields) {
             const auto offset=read<int32_t>(field+0x44),size=read<int32_t>(field+0x34);
             if(parameter_extent(0,offset,size,read<int32_t>(field+0x30))>extent)
                 throw HandlerError("unsupported_signature","Параметр выходит за выделенный буфер UFunction");
             for(const auto& [start,end]:intervals)if(offset<end && start<offset+size)
-                throw HandlerError("unsupported_signature","FVector функция содержит перекрывающиеся параметры");
+                throw HandlerError("unsupported_signature","POD функция содержит перекрывающиеся параметры");
             intervals.emplace_back(offset,offset+size);
         }
     }
@@ -1042,12 +1087,15 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         auto flags=read<uint64_t>(field+0x38);if(!(flags&0x80))continue;
         auto type=field_type(field,[this](auto f){return name(f);});int offset=read<int32_t>(field+0x44),size=read<int32_t>(field+0x34);
         const auto current_extent=parameter_extent(extent,offset,size,read<int32_t>(field+0x30));
-        if(contains_vector && current_extent>extent)
+        if(strict_pod_contract && current_extent>extent)
             throw HandlerError("unsupported_signature","Параметр изменился и выходит за выделенный буфер UFunction");
         if(flags&0x400){
             if(return_field)throw HandlerError("unsupported_signature","У функции обнаружено несколько возвращаемых параметров");
             return_field=field;return_type=type;return_size=size;return_offset=offset;
+            if(supported_scalar_output_type(type) && (flags&(kReferenceParm|kConstParm)))
+                throw HandlerError("unsupported_signature","Const/ref скалярный возврат не поддержан");
             if(type=="StructProperty") {
+                if(!contains_vector)throw HandlerError("signature_changed","FVector возврат появился после чтения полной сигнатуры");
                 if(flags&(kReferenceParm|kConstParm))
                     throw HandlerError("unsupported_signature","Const/ref возврат FVector не поддержан");
                 const auto layout=capture_vector_parameter(field,size,read<int32_t>(field+0x30));
@@ -1066,6 +1114,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             continue;
         }
         if(type=="StructProperty") {
+            if(!contains_vector)throw HandlerError("signature_changed","FVector параметр появился после чтения полной сигнатуры");
             const auto direction=vector_parameter_direction::classify(flags);
             const auto key=name(read<uint64_t>(field+0x20));
             if(!arguments.contains(key))throw HandlerError("missing_argument","Не задан FVector аргумент "+key);
@@ -1081,7 +1130,19 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             vector_parameters.push_back({field,offset,size,flags,key,layout,direction==vector_parameter_direction::Direction::output,false});
             continue;
         }
-        if(flags&(0x100|kReferenceParm))throw HandlerError("unsupported_signature","Out/ref параметры пока не поддержаны");
+        if(supported_scalar_output_type(type) && (flags&0x100)) {
+            if(!contains_scalar_output)throw HandlerError("signature_changed","Скалярный out появился после чтения полной сигнатуры");
+            if(parameter_direction::classify(flags)!=parameter_direction::Direction::output)
+                throw HandlerError("unsupported_signature","Скалярный параметр не является pure out");
+            const auto key=name(read<uint64_t>(field+0x20));
+            if(!arguments.contains(key))throw HandlerError("missing_argument","Не задан скалярный out аргумент "+key);
+            parameter_direction::validate_output_marker(arguments.at(key));
+            const auto layout=capture_scalar_output_layout(field,type,size,read<int32_t>(field+0x30));
+            std::memset(buffer+offset,0,static_cast<size_t>(size));
+            scalar_parameters.push_back({field,offset,flags,key,layout});
+            ++input_count;continue;
+        }
+        if(flags&(0x100|kReferenceParm))throw HandlerError("unsupported_signature","Out/ref аргументы этого типа не поддержаны");
         if(type=="NameProperty")validate_name_argument_layout(size,read<int32_t>(field+0x30));
         auto key=name(read<uint64_t>(field+0x20));if(!arguments.contains(key))throw HandlerError("missing_argument","Не задан аргумент "+key);auto v=arguments.at(key);++input_count;
         if(type=="NameProperty") {
@@ -1144,7 +1205,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         else throw HandlerError("unsupported_signature","Тип аргумента пока не поддержан: "+type);
     }
     if(arguments.size()!=input_count)throw HandlerError("unknown_argument","Переданы лишние аргументы");
-    if(contains_vector)require_same_function_contract(vector_function_contract,capture_function_contract(object,function_owner,function,target_handle));
+    if(strict_pod_contract)require_same_function_contract(pod_function_contract,capture_function_contract(object,function_owner,function,target_handle));
     for(const auto& [handle,expected]:object_arguments) {
         if(!is_compatible_object(resolve(handle),expected))
             throw HandlerError("incompatible_object_argument","Аргумент изменился до вызова функции");
@@ -1178,7 +1239,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     const auto invocation_after=validate_object(object);
     if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(invocation_after)))
         throw HandlerError("stale_handle","Identity цели изменилась до вызова; получите новую ссылку");
-    if(expected_token || contains_vector) {
+    if(expected_token || strict_pod_contract) {
         auto current_class=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);
         uintptr_t current_function{},current_owner{};std::set<uintptr_t> current_classes;
         for(int depth=0;current_class && !current_function;current_class=read<uintptr_t>(current_class+0x40),++depth) {
@@ -1198,7 +1259,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             throw HandlerError("signature_changed","Ближайшая реализация функции изменилась до вызова");
         const auto final_contract=capture_function_contract(object,function_owner,function,target_handle);
         if(expected_token)require_same_function_contract(expected_contract,final_contract);
-        if(contains_vector)require_same_function_contract(vector_function_contract,final_contract);
+        if(strict_pod_contract)require_same_function_contract(pod_function_contract,final_contract);
     }
     if(!call_event(reinterpret_cast<void*>(process_event_),object,reinterpret_cast<void*>(function),buffer)) {
         json details={{"executed",false},{"may_have_executed",true},{"do_not_retry",true}};
@@ -1231,7 +1292,33 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             else {out_parameters[vector.key]=value;out_parameter_metadata[vector.key]=vector_snapshot_json(vector.layout,false);}
         }
     };
-    auto append_vector_results=[&](json response) {
+    auto decode_scalar_outputs=[&] {
+        if(scalar_parameters.empty())return;
+        if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(validate_object(object))))
+            throw HandlerError("stale_handle","Цель изменилась при получении скалярного out результата");
+        require_same_function_contract(pod_function_contract,capture_function_contract(object,function_owner,function,target_handle));
+        for(const auto& scalar:scalar_parameters) {
+            if(read<int32_t>(scalar.field+0x44)!=scalar.offset || read<uint64_t>(scalar.field+0x38)!=scalar.flags)
+                throw HandlerError("signature_changed","Скалярный out параметр изменился после вызова");
+            const auto current_type=field_type(scalar.field,[this](auto value){return name(value);});
+            const auto before=capture_scalar_output_layout(scalar.field,current_type,read<int32_t>(scalar.field+0x34),read<int32_t>(scalar.field+0x30));
+            if(!(before==scalar.layout))throw HandlerError("signature_changed","Скалярная out раскладка изменилась после вызова");
+            std::array<std::byte,8> copied{};
+            if(!copy_memory(copied.data(),buffer+scalar.offset,static_cast<size_t>(scalar.layout.element_size)))
+                throw HandlerError("invalid_scalar_copy","Скалярный out результат не скопирован");
+            const auto value=scalar_outputs::decode(scalar.layout,std::span(copied).first(scalar.layout.element_size));
+            const auto after=capture_scalar_output_layout(scalar.field,field_type(scalar.field,[this](auto packed){return name(packed);}),
+                read<int32_t>(scalar.field+0x34),read<int32_t>(scalar.field+0x30));
+            if(!(after==scalar.layout) || read<int32_t>(scalar.field+0x44)!=scalar.offset || read<uint64_t>(scalar.field+0x38)!=scalar.flags)
+                throw HandlerError("signature_changed","Скалярная out раскладка изменилась при копировании результата");
+            out_parameters[scalar.key]=value;out_parameter_metadata[scalar.key]=scalar_output_metadata(scalar.layout);
+        }
+        require_same_function_contract(pod_function_contract,capture_function_contract(object,function_owner,function,target_handle));
+        if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(validate_object(object))))
+            throw HandlerError("stale_handle","Цель изменилась при копировании скалярного out результата");
+    };
+    auto decode_pod_outputs=[&] {decode_vector_outputs();decode_scalar_outputs();};
+    auto append_pod_results=[&](json response) {
         if(!result_metadata.is_null())response["result_metadata"]=result_metadata;
         if(!out_parameters.empty()) {
             response["out_parameters"]=out_parameters;response["out_parameter_metadata"]=out_parameter_metadata;
@@ -1246,14 +1333,14 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         result=copied_owned_string_return(header,
             [](const StringHeader& copied){return copied_string(copied);},
             [this](uintptr_t memory){return free_string(base_+kFree,reinterpret_cast<void*>(memory));});
-        try{decode_vector_outputs();}catch(const HandlerError& error) {
-            throw HandlerError("game_result_error","Вызов выполнен, но FVector out не прочитан; не повторять запрос",
+        try{decode_pod_outputs();}catch(const HandlerError& error) {
+            throw HandlerError("game_result_error","Вызов выполнен, но POD out не прочитан; не повторять запрос",
                 {{"executed",true},{"may_have_executed",true},{"do_not_retry",true},{"cause_code",error.code()},{"cleanup_confirmed",true}});
         } catch(...) {
-            throw HandlerError("game_result_error","Вызов выполнен, но FVector out не прочитан; не повторять запрос",
+            throw HandlerError("game_result_error","Вызов выполнен, но POD out не прочитан; не повторять запрос",
                 {{"executed",true},{"may_have_executed",true},{"do_not_retry",true},{"cause_code","result_processing_failed"},{"cleanup_confirmed",true}});
         }
-        return append_vector_results({{"function",function_name},{"return_type",return_type},{"result",result},
+        return append_pod_results({{"function",function_name},{"return_type",return_type},{"result",result},
                 {"executed",true},{"thread_id",GetCurrentThreadId()},{"cleanup_confirmed",true}});
     }
     try {
@@ -1267,7 +1354,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             const auto returned=enum_property(reinterpret_cast<uintptr_t>(buffer+return_offset),return_type,return_size,return_field);
             result=returned.at("value");if(returned.contains("enum"))return_enum=returned.at("enum");
         } else result=return_field?property_value(reinterpret_cast<uintptr_t>(buffer+return_offset),return_type,return_size,return_field):json(nullptr);
-        decode_vector_outputs();
+        decode_pod_outputs();
     }
     catch(const HandlerError& error) {
         throw HandlerError("game_result_error","Вызов выполнен, но результат не получен; не повторять запрос",
@@ -1278,7 +1365,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     }
     json response={{"function",function_name},{"return_type",return_type},{"result",result},{"executed",true},{"thread_id",GetCurrentThreadId()}};
     if(!return_enum.is_null())response["return_enum"]=return_enum;
-    return append_vector_results(std::move(response));
+    return append_pod_results(std::move(response));
 }
 json GameAccess::execute(const json& request) {
     auto op=request.at("op").get<std::string>();auto params=request.at("params");

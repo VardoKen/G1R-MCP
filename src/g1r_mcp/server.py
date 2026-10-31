@@ -244,6 +244,12 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                 "script_patch_engine_apply_confirmed": False,
             },
             "invoke_arguments": {
+                "scalar_outputs": {"types": ["BoolProperty", "IntProperty", "Int64Property", "UInt32Property",
+                                               "UInt64Property", "FloatProperty", "DoubleProperty"],
+                                   "argument_marker": {"out": True}, "output_field": "out_parameters",
+                                   "metadata_field": "out_parameter_metadata", "pure_output_only": True,
+                                   "layout_source": "reflected_function_parameter", "requires_signature_validation": True,
+                                   "reference_supported": False, "inout_supported": False},
                 "vector": {"type": "FVector", "struct_path": "/Script/CoreUObject.Vector",
                            "modes": ["input", "output", "return"],
                            "input_shape": {"X": "finite_number", "Y": "finite_number", "Z": "finite_number"},
