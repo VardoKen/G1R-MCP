@@ -157,7 +157,7 @@ void __fastcall GameAccess::hooked_tick(void* loop) {
     if(count<2)diagnostic("tick_pump_return");
 }
 json GameAccess::status() const {
-    return {{"version","1.0.0-dev.11"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.12"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&ticks_.load()>0},
             {"build_hash",kHash},{"startup_error",startup_error_},
             {"process_id",GetCurrentProcessId()},

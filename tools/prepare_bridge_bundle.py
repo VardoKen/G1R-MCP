@@ -27,6 +27,7 @@ MAX_FILES = 512
 MAX_FILE_BYTES = 16 * 1024 * 1024
 MAX_TOTAL_BYTES = 64 * 1024 * 1024
 TOOLS = (
+    "start_shared_mcp.ps1", "stop_shared_mcp.ps1",
     "game_process_common.ps1", "game_process_state.ps1", "start_g1r_development.ps1", "stop_g1r_development.ps1",
     "load_native.ps1", "native_load_result.ps1", "prepare_compile_probe.py", "prepare_object_probe.py",
     "prepare_class_probe.py", "prepare_name_probe.py", "prepare_patch_probe.py", "prepare_base_patch_probe.py",
@@ -223,9 +224,18 @@ def _instructions(version: str) -> bytes:
    `$env:UV_PROJECT_ENVIRONMENT = "<отдельный абсолютный путь к окружению>"`,
    `$env:PYTHONDONTWRITEBYTECODE = "1"`, затем выполнить `uv sync --locked`.
    Окружение не создавать внутри комплекта: строгая проверка отвергает новые файлы.
-4. MCP-клиенту задать command `<окружение>\\Scripts\\python.exe`, cwd — корень этой папки,
-   args: `-B -m g1r_mcp.server --modkit-root <официальный Modkit> --workspace-root
-   <рабочие пакеты> --game-root <установленная игра>`. Пути задать абсолютными.
+4. Для всех чатов Codex запустить один общий сервер отдельным процессом:
+   `<окружение>\\Scripts\\python.exe -B -m g1r_mcp.server --transport streamable-http
+   --host 127.0.0.1 --port 27124 --modkit-root <официальный Modkit>
+   --workspace-root <рабочие пакеты> --game-root <установленная игра>`.
+   В config.toml Codex задать `[mcp_servers.g1r_mcp]` и
+   `url = "http://127.0.0.1:27124/mcp"`; не задавать command/args для каждого чата.
+   Сервер не запускает игру, все чаты разделяют один native TCP-владелец.
+   Для отдельного stdio-клиента остаётся транспорт по умолчанию без HTTP-параметров.
+   Пути задать абсолютными; не использовать значения из другого ПК.
+   Скрипты start_shared_mcp.ps1/stop_shared_mcp.ps1 рассчитаны на рабочую копию
+   с локальной `.venv` и соседним G1R-Modkit, не на неизменяемый комплект
+   с вынесенным окружением. В последнем случае использовать прямую команду выше.
 5. Проверить EXE игры
    SHA-256 против manifest.json до использования DLL. Загрузка выполняется только
    явным инструментом development/native_load; комплект сам ничего не устанавливает.

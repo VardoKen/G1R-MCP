@@ -10,6 +10,7 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 
 from . import __version__
@@ -69,10 +70,12 @@ def _tool_failure(error: SourceError | PackageError | WorkspaceError | SnapshotE
 
 
 def create_server(modkit_root: Path, workspace_root: Path, source_revision: str | None = None,
-                  native_port: int = 27123, game_root: Path | None = None) -> MCPServer:
+                  native_port: int = 27123, game_root: Path | None = None, *, transport: str = "stdio") -> MCPServer:
     """Создать сервер с каталогом Modkit и отдельной рабочей базой пакетов."""
     if source_revision is not None and not re.fullmatch(r"[0-9a-fA-F]{40}", source_revision):
         raise ValueError("Ревизия источников должна быть полным Git SHA либо отсутствовать")
+    if transport not in ("stdio", "streamable-http"):
+        raise ValueError("Транспорт должен быть stdio или streamable-http")
     workspace_root = workspace_root.absolute()
     if not workspace_root.is_dir():
         raise ValueError("Рабочий каталог отсутствует")
@@ -85,15 +88,17 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     workspace = PackageWorkspace(workspace_root, protected_roots=[modkit_root])
     native = NativeClient(port=native_port)
     native_lock = threading.Lock()
+    development_lock = threading.Lock()
     configured_game_root = game_root or Path(r"E:\SteamLibrary\steamapps\common\Gothic 1 Remake")
     development = None
     def development_service() -> DevelopmentService:
         nonlocal development
-        if development is None:
-            development = DevelopmentService(repository_root=Path(__file__).resolve().parents[2],
-                                             workspace_root=workspace_root, modkit_root=modkit_root,
-                                             game_root=configured_game_root)
-        return development
+        with development_lock:
+            if development is None:
+                development = DevelopmentService(repository_root=Path(__file__).resolve().parents[2],
+                                                 workspace_root=workspace_root, modkit_root=modkit_root,
+                                                 game_root=configured_game_root)
+            return development
     server = MCPServer(
         "G1R MCP", version=__version__, log_level="WARNING",
         instructions=(
@@ -121,7 +126,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     def g1r_status() -> dict[str, Any]:
         """Узнать версию сервера и какие результаты не подтверждены в игре."""
         return {
-            "server": {"name": "G1R MCP", "version": __version__, "transport": "stdio", "ready": True},
+            "server": {"name": "G1R MCP", "version": __version__, "transport": transport, "ready": True},
             "sources": {"kind": "official_modkit_static", "root": str(sources.root), "revision": source_revision,
                         "revision_source": "caller_label", "validation": "source_only"},
             "workspace": {"root": str(workspace.root), "format": "GothicMod.json/Script/ScriptPatches",
@@ -489,20 +494,36 @@ def main(argv: list[str] | None = None) -> int:
         def error(self, message):
             self.exit(2, "Некорректные параметры G1R MCP; используйте --help\n")
 
-    parser = RussianArgumentParser(description="G1R MCP: локальный сервер разработки модов через stdio", add_help=False)
+    parser = RussianArgumentParser(description="G1R MCP: локальный сервер разработки модов", add_help=False)
     parser.add_argument("-h", "--help", action="help", help="Показать справку")
     parser.add_argument("--modkit-root", type=Path, required=True, help="Корень официального Modkit")
     parser.add_argument("--workspace-root", type=Path, required=True, help="Корень разрабатываемых пакетов")
     parser.add_argument("--source-revision", help="Полный Git SHA Modkit; при отсутствии ревизия неизвестна")
     parser.add_argument("--native-port", type=int, default=27123, help="Порт localhost экспериментальной DLL")
     parser.add_argument("--game-root", type=Path, help="Корень выбранной игры для команд development-запуска")
+    parser.add_argument("--transport", choices=("stdio", "streamable-http"), default="stdio",
+                        help="Транспорт MCP; по умолчанию stdio")
+    parser.add_argument("--host", choices=("127.0.0.1",), default="127.0.0.1",
+                        help="Адрес HTTP-сервера; разрешён только 127.0.0.1")
+    parser.add_argument("--port", type=int, default=27124, help="Порт Streamable HTTP; по умолчанию 27124")
     args = parser.parse_args(argv)
+    if not 1024 <= args.port <= 65535:
+        parser.error("Порт HTTP должен находиться в диапазоне 1024–65535")
     try:
-        server = create_server(args.modkit_root, args.workspace_root, args.source_revision, args.native_port, args.game_root)
+        server = create_server(args.modkit_root, args.workspace_root, args.source_revision, args.native_port, args.game_root,
+                               transport=args.transport)
     except (ValueError, OSError, SourceError, NativeError) as error:
         print(f"Не удалось создать G1R MCP: {error}", file=sys.stderr)
         return 2
-    server.run(transport="stdio")
+    if args.transport == "streamable-http":
+        server.run(transport="streamable-http", host=args.host, port=args.port,
+                   streamable_http_path="/mcp", stateless_http=False, json_response=True,
+                   transport_security=TransportSecuritySettings(
+                       enable_dns_rebinding_protection=True,
+                       allowed_hosts=[f"{args.host}:{args.port}"],
+                       allowed_origins=[f"http://{args.host}:{args.port}"]))
+    else:
+        server.run(transport="stdio")
     return 0
 
 
