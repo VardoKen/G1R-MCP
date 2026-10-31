@@ -27,6 +27,7 @@
 #include "g1r_mcp/linear_color_layout.hpp"
 #include "g1r_mcp/linear_color_arguments.hpp"
 #include "g1r_mcp/cleanup_once.hpp"
+#include "g1r_mcp/native_exception.hpp"
 #include <MinHook.h>
 #include <bcrypt.h>
 #include <algorithm>
@@ -188,9 +189,9 @@ template<class T> T read(uintptr_t address) {
         throw HandlerError("invalid_memory", "Память объекта недоступна");
     return value;
 }
-bool call_event(void* function, void* object, void* event, void* params) {
+bool call_event(void* function, void* object, void* event, void* params,native_exception::Diagnostic* fault) {
     __try { reinterpret_cast<void(__fastcall*)(void*,void*,void*)>(function)(object,event,params); return true; }
-    __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+    __except(native_exception::capture(GetExceptionInformation(),fault)) { return false; }
 }
 bool free_string(uintptr_t free_address, void* memory) {
     if (!memory) return true;
@@ -333,7 +334,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.31"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.32"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
             {"pump",{{"state",!observed?"not_observed":recent?"recent_tick":"tick_stale"},
                      {"last_tick_monotonic_ms",observed?json(observed):json(nullptr)},
@@ -1816,10 +1817,12 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         if(strict_pod_contract)require_same_function_contract(pod_function_contract,final_contract);
     }
     string_event_started=true;
-    if(!call_event(reinterpret_cast<void*>(process_event_),object,reinterpret_cast<void*>(function),buffer)) {
+    native_exception::Diagnostic native_fault{};
+    if(!call_event(reinterpret_cast<void*>(process_event_),object,reinterpret_cast<void*>(function),buffer,&native_fault)) {
         if(contains_string_input){string_ledger.mark_uncertain();string_quarantine_cause=2;}
         if(contains_object_array){array_ledger.mark_uncertain();array_quarantine_cause=2;}
-        json details={{"executed",false},{"may_have_executed",true},{"do_not_retry",true}};
+        json details={{"executed",false},{"may_have_executed",true},{"do_not_retry",true},
+            {"native_exception",native_exception::describe(native_fault)}};
         if(return_type=="StrProperty") {
             details["cleanup_attempted"]=false;details["cleanup_confirmed"]=false;
             details["cleanup_state"]="unknown";
