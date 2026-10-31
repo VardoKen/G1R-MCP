@@ -8,7 +8,7 @@ import sys
 import threading
 from typing import Any
 
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import MCPServer, Context
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
@@ -22,6 +22,8 @@ from .workspace import PackageWorkspace, WorkspaceError
 from .snapshots import SnapshotError, compare_snapshots
 from .development import DevelopmentError, DevelopmentService
 from .patches import PatchError, ScriptPatchBuilder
+from .session_ownership import SessionOwnership
+from .compile_diagnostics import read_report
 
 
 LOCAL_TOOLS = (
@@ -60,6 +62,7 @@ NATIVE_TOOLS = (
     ("g1r_watch_forget", "Освободить завершённое наблюдение"),
 )
 DEVELOPMENT_TOOLS = (
+    "g1r_session_status", "g1r_session_acquire", "g1r_session_release", "g1r_compile_diagnostics",
     "g1r_development_recipe", "g1r_development_processes", "g1r_development_start",
     "g1r_development_stop", "g1r_native_load",
 )
@@ -91,6 +94,22 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     development_lock = threading.Lock()
     configured_game_root = game_root or Path(r"E:\SteamLibrary\steamapps\common\Gothic 1 Remake")
     development = None
+    ownership = SessionOwnership()
+    local_owner = object()
+
+    def request_owner(ctx: Context | None) -> Any:
+        if ctx is None:
+            return local_owner
+        try:
+            if transport == "streamable-http":
+                request = ctx.request_context.request
+                session_id = request.headers.get("mcp-session-id") if request is not None else None
+                if session_id:
+                    return "http:" + session_id
+                raise DevelopmentError("session_identity_unavailable", "HTTP-запрос не содержит идентичность MCP-сессии")
+            return ctx.session
+        except ValueError:
+            return local_owner
     def development_service() -> DevelopmentService:
         nonlocal development
         with development_lock:
@@ -131,6 +150,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                         "revision_source": "caller_label", "validation": "source_only"},
             "workspace": {"root": str(workspace.root), "format": "GothicMod.json/Script/ScriptPatches",
                           "installed_game_deployment": False},
+            "game_session": ownership.status(),
             "game": {
                 "backend_implemented": True, "connection_checked": False, "ready": False, "ready_known": False,
                 "configured_root": str(configured_game_root.absolute()),
@@ -170,6 +190,9 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             "development_tools": {"implemented": True, "availability": "requires_windows_and_configured_game",
                                   "operations": list(DEVELOPMENT_TOOLS),
                                   "launch_result": "launch_requested", "compiler_result": "requires_runtime_probe"},
+            "compiler_reports": {"tool": "g1r_compile_diagnostics", "implemented": True,
+                                 "source": "caller_selected_workspace_file", "compiler_api_available": False,
+                                 "absence_of_errors_proves_compile": False},
             "bootstrap": {
                 "game_sequence": [
                     {"tool": "g1r_development_recipe", "condition": "Проверить выбранный рабочий пакет и получить manifest/DLL SHA-256"},
@@ -185,7 +208,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                     {"tool": "g1r_invoke", "condition": "Один явно выбранный вызов подтверждённой сигнатуры"},
                     {"tool": "g1r_development_stop", "condition": "При явном завершении своей development-сессии с ожидаемой идентичностью"},
                 ],
-                "existing_session_sequence": ["g1r_native_status", "g1r_find_objects", "g1r_object_functions"],
+                "existing_session_sequence": ["g1r_native_status", "g1r_session_status", "g1r_find_objects", "g1r_object_functions"],
                 "edit_tools": ["g1r_read_source_exact", "g1r_read_package_file_exact", "g1r_write_package_file"],
                 "argument_examples": {
                     "g1r_create_package": {"relative_path": "Example",
@@ -337,10 +360,35 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                        "may_have_executed": error.may_have_executed,
                                        "request_id": error.request_id, "effect": error.details}, ensure_ascii=False)) from None
 
-    def development_request(operation: str, **params: Any) -> dict[str, Any]:
+    def development_request(operation: str, *, ctx: Context | None = None, session_reason: str = "Проверка рабочего пакета", **params: Any) -> dict[str, Any]:
         nonlocal native
         try:
-            result = getattr(development_service(), operation)(**params)
+            if transport == "streamable-http" and operation in ("start", "stop", "load_native"):
+                owner = request_owner(ctx)
+                with ownership.lock:
+                    acquired_here = False
+                    if operation == "start":
+                        if params.get("restart"):
+                            ownership.require(owner, params.get("expected_process"))
+                        acquired_here = not ownership.status()["claimed"]
+                        ownership.acquire(owner, session_reason, package=params.get("relative_package"))
+                    else:
+                        ownership.require(owner, params.get("expected_process"))
+                    try:
+                        result = getattr(development_service(), operation)(**params)
+                    except DevelopmentError as error:
+                        if acquired_here and not error.outcome_unknown:
+                            ownership.release(owner)
+                        raise
+                    if operation == "load_native":
+                        ownership.bind(owner, result["process"], "native_loaded")
+                    elif operation == "start" and result.get("state") == "launch_requested" and result.get("outcome_unknown") is False:
+                        ownership.launched(owner, params["relative_package"])
+                    elif operation == "stop" and result.get("outcome_unknown") is False and result.get("tool_result", {}).get("state") == "stopped":
+                        released = ownership.release(owner)
+                        result["session_released"] = released["released"]
+            else:
+                result = getattr(development_service(), operation)(**params)
             stopped = result.get("tool_result")
             if (operation == "stop" and result.get("state") == "stop_result"
                     and result.get("outcome_unknown") is False and isinstance(stopped, dict)
@@ -361,6 +409,45 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                        "retry": "only_explicit_new_request"}, ensure_ascii=False)) from None
 
     @server.tool(annotations=read_only)
+    def g1r_session_status() -> dict[str, Any]:
+        """Прочитать владельца управления общей игрой; не вызывает игровой Tick."""
+        return ownership.status()
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+    def g1r_session_acquire(reason: str, expected_process: dict[str, Any] | None = None, ctx: Context = None) -> dict[str, Any]:
+        """Заявить управление общей игрой; другой HTTP-клиент не сможет stop/restart/load. Не запускает игру."""
+        try:
+            owner = request_owner(ctx)
+            with ownership.lock:
+                process = None
+                if expected_process is not None:
+                    service = development_service()
+                    process = service._expected_process(expected_process, service.process_state(), allow_bootstrap=True)
+                return ownership.acquire(owner, reason, process=process)
+        except DevelopmentError as error:
+            raise ToolError(json.dumps({"code": error.code, "message": str(error), "outcome_unknown": error.outcome_unknown}, ensure_ascii=False)) from None
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
+    def g1r_session_release(expected_claim_id: str | None = None, ctx: Context = None) -> dict[str, Any]:
+        """Освободить свою заявку без остановки; чужую — только по claim_id при отсутствии игровых процессов."""
+        try:
+            if expected_claim_id is not None:
+                with ownership.lock:
+                    return ownership.release_abandoned(expected_claim_id, game_running=development_service().process_state()["running"])
+            return ownership.release(request_owner(ctx))
+        except DevelopmentError as error:
+            raise ToolError(json.dumps({"code": error.code, "message": str(error), "outcome_unknown": error.outcome_unknown}, ensure_ascii=False)) from None
+
+    @server.tool(annotations=read_only)
+    def g1r_compile_diagnostics(relative_package: str, expected_manifest_sha256: str, report_path: str,
+                                enable_ingame_tools: StrictBool = False) -> dict[str, Any]:
+        """Прочитать UTF-8 .txt/.log из workspace: это предоставленный отчёт, не автоматический compiler API."""
+        try:
+            return read_report(development_service(), relative_package, expected_manifest_sha256, report_path, enable_ingame_tools)
+        except DevelopmentError as error:
+            raise ToolError(json.dumps({"code": error.code, "message": str(error), "outcome_unknown": False}, ensure_ascii=False)) from None
+
+    @server.tool(annotations=read_only)
     def g1r_development_recipe(relative_package: str, enable_ingame_tools: StrictBool = False) -> dict[str, Any]:
         """Проверить полный манифест рабочего пакета, процессы и SHA-256 DLL без запуска игры."""
         return development_request("recipe", relative_package=relative_package,
@@ -376,25 +463,30 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     def g1r_development_start(relative_package: str, expected_manifest_sha256: str,
                                restart: bool = False,
                              expected_process: dict[str, Any] | None = None,
-                             enable_ingame_tools: StrictBool = False) -> dict[str, Any]:
+                             enable_ingame_tools: StrictBool = False, session_reason: str = "Проверка рабочего пакета",
+                             ctx: Context = None) -> dict[str, Any]:
         """Запросить development-запуск проверенного пакета; restart требует точную идентичность процесса."""
         return development_request("start", relative_package=relative_package,
                                    expected_manifest_sha256=expected_manifest_sha256,
                                    restart=restart, expected_process=expected_process,
-                                   enable_ingame_tools=enable_ingame_tools)
+                                   enable_ingame_tools=enable_ingame_tools, ctx=ctx, session_reason=session_reason)
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True,
                                             idempotentHint=False, openWorldHint=True))
-    def g1r_development_stop(expected_process: dict[str, Any]) -> dict[str, Any]:
+    def g1r_development_stop(expected_process: dict[str, Any], reason: str = "Проверки завершены", ctx: Context = None) -> dict[str, Any]:
         """Закрыть только подтверждённый экземпляр игры через удерживаемые HANDLE."""
-        return development_request("stop", expected_process=expected_process)
+        if not 1 <= len(reason) <= 256 or any(ord(c) < 32 for c in reason):
+            raise ToolError(json.dumps({"code":"invalid_stop_reason","message":"Нужна причина остановки (1–256 символов)","outcome_unknown":False}, ensure_ascii=False))
+        result = development_request("stop", expected_process=expected_process, ctx=ctx)
+        result["stop_reason"] = reason
+        return result
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=True))
-    def g1r_native_load(expected_process: dict[str, Any], expected_dll_sha256: str) -> dict[str, Any]:
+    def g1r_native_load(expected_process: dict[str, Any], expected_dll_sha256: str, ctx: Context = None) -> dict[str, Any]:
         """Загрузить DLL в проверенный процесс с проверкой хеша; неопределённый результат не повторяется."""
         return development_request("load_native", expected_process=expected_process,
-                                   expected_dll_sha256=expected_dll_sha256)
+                                   expected_dll_sha256=expected_dll_sha256, ctx=ctx)
 
     @server.tool(annotations=read_only)
     def g1r_native_status() -> dict[str, Any]:

@@ -27,6 +27,11 @@
 namespace g1r_mcp {
 using json = nlohmann::json;
 namespace {
+uint64_t steady_ms() {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+constexpr uint64_t kRequestWaitMs=2500;
 void diagnostic(const char* text) {
     HMODULE self{};GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
         reinterpret_cast<LPCWSTR>(&diagnostic),&self);
@@ -157,8 +162,27 @@ void __fastcall GameAccess::hooked_tick(void* loop) {
     if(count<2)diagnostic("tick_pump_return");
 }
 json GameAccess::status() const {
-    return {{"version","1.0.0-dev.12"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
-            {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&ticks_.load()>0},
+    const auto observed=last_tick_ms_.load(), now=steady_ms();
+    const auto age=observed && now>=observed ? now-observed : 0;
+    const bool recent=observed && age<=kRequestWaitMs;
+    json pending=nullptr, active=nullptr;bool queue_metadata_available{};
+    {
+        std::unique_lock lock(queue_mutex_,std::try_to_lock);
+        queue_metadata_available=lock.owns_lock();
+        if(queue_metadata_available)pending=queue_.size();
+        if(queue_metadata_available && active_job_)active={{"request_id",active_job_->request.value("id",json(nullptr))},
+                              {"operation",active_job_->request.value("op",std::string{})},
+                              {"state","running"}};
+    }
+    return {{"version","1.0.0-dev.13"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+            {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
+            {"pump",{{"state",!observed?"not_observed":recent?"recent_tick":"tick_stale"},
+                     {"last_tick_monotonic_ms",observed?json(observed):json(nullptr)},
+                     {"tick_age_ms",observed?json(age):json(nullptr)},
+                     {"freshness_limit_ms",kRequestWaitMs},{"world_ready_confirmed",false}}},
+            {"requests",{{"queue_depth",pending},{"queue_limit",8},{"active",active},{"metadata_available",queue_metadata_available},
+                         {"completed",completed_jobs_.load()},{"cancelled_before_start",cancelled_jobs_.load()},
+                         {"wait_timeout_ms",kRequestWaitMs},{"cancelled_jobs_can_execute",false}}},
             {"build_hash",kHash},{"startup_error",startup_error_},
             {"process_id",GetCurrentProcessId()},
             {"operations",{"status","enable_game","objects","properties","functions","invoke","read_array","read_struct",
@@ -184,12 +208,24 @@ json GameAccess::request(const json& envelope) {
     if(envelope.at("op")=="status") return status();
     if(!enabled_) throw HandlerError("native_not_ready","Перехват игры не установлен: "+startup_error_);
     auto job=std::make_shared<Job>();job->request=envelope;auto future=job->result.get_future();
-    {std::lock_guard lock(queue_mutex_);if(queue_.size()>=8)throw HandlerError("queue_full","Очередь игрового потока заполнена");queue_.push_back(job);}
-    if(future.wait_for(std::chrono::milliseconds(2500))!=std::future_status::ready) {
-        int queued=0;
-        if(job->state.compare_exchange_strong(queued,2)) throw HandlerError("game_not_pumping","Запрос отменён до начала: игровой Tick не обслужил очередь");
+    {std::unique_lock lock(queue_mutex_,std::try_to_lock);
+     if(!lock.owns_lock())throw HandlerError("game_thread_busy","Очередь занята обслуживанием игрового потока; запрос не поставлен",
+        {{"executed",false},{"may_have_executed",false},{"do_not_retry",false},{"request_started",false},{"stage","not_queued"}});
+     if(queue_.size()>=8)throw HandlerError("queue_full","Очередь игрового потока заполнена");queue_.push_back(job);}
+    if(future.wait_for(std::chrono::milliseconds(kRequestWaitMs))!=std::future_status::ready) {
+        if(job->state.cancel()) {
+            ++cancelled_jobs_;
+            {std::unique_lock lock(queue_mutex_,std::try_to_lock);if(lock.owns_lock()){auto entry=std::find(queue_.begin(),queue_.end(),job);if(entry!=queue_.end())queue_.erase(entry);}}
+            throw HandlerError("game_not_pumping","Запрос отменён до начала: игровой Tick не обслужил очередь",
+                {{"executed",false},{"may_have_executed",false},{"do_not_retry",false},
+                 {"request_started",false},{"stage","queued_cancelled"},{"native_status",status()}});
+        }
+        if(future.wait_for(std::chrono::milliseconds(0))==std::future_status::ready)return future.get();
+        if(job->state.get()==JobState::cancelled)throw HandlerError("session_closed","Запрос отменён до исполнения после закрытия сессии",
+            {{"executed",false},{"may_have_executed",false},{"do_not_retry",false},{"request_started",false},{"stage","queued_cancelled"}});
         throw HandlerError("game_timeout","Ожидание закончено; принятый вызов мог выполниться",
-            {{"executed",false},{"may_have_executed",true},{"do_not_retry",true}});
+            {{"executed",false},{"may_have_executed",true},{"do_not_retry",true},
+             {"request_started",true},{"stage","running_outcome_unknown"},{"native_status",status()}});
     }
     return future.get();
 }
@@ -199,8 +235,8 @@ void GameAccess::disconnect(const std::string& session) {
     session_cleanup_pending_=true;
     for (const auto& job : queue_) {
         if (job->request.value("session_id",std::string{})!=session) continue;
-        int queued=0;
-        if (job->state.compare_exchange_strong(queued,2)) {
+        if (job->state.cancel()) {
+            ++cancelled_jobs_;
             job->result.set_exception(std::make_exception_ptr(
                 HandlerError("session_closed","Сессия отключилась до исполнения запроса")));
         }
@@ -210,6 +246,7 @@ void GameAccess::pump() {
     if(!game_thread_.load()) game_thread_=GetCurrentThreadId();
     if(game_thread_.load()!=GetCurrentThreadId()) return;
     ++ticks_;
+    last_tick_ms_=steady_ms();
     std::shared_ptr<Job> job;
     {
         std::lock_guard lock(queue_mutex_);
@@ -220,10 +257,11 @@ void GameAccess::pump() {
         if(!queue_.empty()){job=queue_.front();queue_.pop_front();}
     }
     if(job) {
-        int queued=0;
-        if(job->state.compare_exchange_strong(queued,1)) {
+        if(job->state.begin()) {
+            {std::lock_guard lock(queue_mutex_);active_job_=job;}
             try {job->result.set_value(execute(job->request));}catch(...) {job->result.set_exception(std::current_exception());}
-            job->state=3;
+            job->state.finish();++completed_jobs_;
+            {std::lock_guard lock(queue_mutex_);active_job_.reset();}
         }
     }
     const auto now=static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(

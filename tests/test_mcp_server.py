@@ -45,11 +45,12 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(initialized.server_info.version, __version__)
                     tools = (await client.list_tools()).tools
                     names = {tool.name for tool in tools}
-                    self.assertEqual(len(names), 34)
+                    self.assertEqual(len(names), 38)
                     mutations = {"g1r_invoke", "g1r_native_enable", "g1r_create_package",
                                  "g1r_write_package_file", "g1r_watch_start", "g1r_watch_stop", "g1r_watch_forget",
                                  "g1r_development_start", "g1r_development_stop", "g1r_native_load",
                                  "g1r_create_package_directory"}
+                    mutations.update({"g1r_session_acquire", "g1r_session_release"})
                     self.assertTrue(all(tool.annotations.read_only_hint for tool in tools if tool.name not in mutations))
                     self.assertFalse(next(tool for tool in tools if tool.name == "g1r_invoke").annotations.read_only_hint)
 

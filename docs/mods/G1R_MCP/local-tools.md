@@ -1,11 +1,11 @@
-# Локальные MCP-инструменты — 1.0.0-dev.12
+# Локальные MCP-инструменты — 1.0.0-dev.13
 
-Дата: **31.10.2026**. Э4 PLAN-001: поиск официальных источников, рабочие пакеты и управление development-сеансом. Код серверной части: `src/g1r_mcp/`, официальный Python SDK `mcp==2.3.0`, stdio. Игровой доступ описан отдельно в [нативном маршруте](native-route.md); операции запуска, остановки и загрузки DLL имеют явно обозначенный эффект.
+Дата: **31.10.2026**. Э4 PLAN-001: поиск официальных источников, рабочие пакеты и управление development-сеансом. Код серверной части: `src/g1r_mcp/`, официальный Python SDK `mcp==2.3.0`, общий Streamable HTTP и stdio. Игровой доступ описан отдельно в [нативном маршруте](native-route.md); операции запуска, остановки и загрузки DLL имеют явно обозначенный эффект.
 
 | Инструмент | Параметры | Результат |
 | --- | --- | --- |
 | `g1r_status` | Нет | Версия и готовность сервера; для живого состояния DLL указан `g1r_native_status` |
-| `g1r_capabilities` | Нет | Каталог 34 инструментов, доступность игровых операций и ещё не реализованные группы |
+| `g1r_capabilities` | Нет | Каталог 38 инструментов, доступность игровых операций и ещё не реализованные группы |
 | `g1r_find_source_files` | `query`, `limit`, `offset=0` | Страница относительных путей `.as` в разрешённых источниках |
 | `g1r_search_source` | `query`, `limit`, `case_sensitive`, `offset=0` | Страница буквальных совпадений строк с файлом и номером строки |
 | `g1r_read_source` | `relative_path`, `start_line`, `line_count` | Ограниченный фрагмент UTF-8 и SHA-256 полных исходных байтов |
@@ -21,6 +21,10 @@
 | `g1r_compare_snapshots` | `before`, `after`, `limit` | Сравнение копий снимков: значения, типы, охват и неизвестные результаты |
 | `g1r_read_array` | `handle`, `property_name`, `offset=0`, `limit=64` | Ограниченная копия страницы отражённого массива; ошибки отдельных элементов и продолжение |
 | `g1r_read_struct` | `handle`, `property_name` | Копия трёх отражённых числовых компонентов XYZ или Pitch/Yaw/Roll |
+| `g1r_session_status` | Нет | Заявка владельца управления общей игрой; не вызывает Tick |
+| `g1r_session_acquire` | `reason`, `expected_process` (необязательно) | Заявка текущей HTTP MCP-сессии; существующий процесс сверяется точно |
+| `g1r_session_release` | `expected_claim_id` (необязательно) | Своя заявка освобождается без остановки; чужая — только при отсутствии игры |
+| `g1r_compile_diagnostics` | `relative_package`, `expected_manifest_sha256`, `report_path`, `enable_ingame_tools=false` | UTF-8 .txt/.log до 1 МиБ; файл/строка/column/ошибка и SHA-256 исходника; compiled=false |
 | `g1r_development_recipe` | `relative_package`, `enable_ingame_tools=false` | Полный manifest пакета, процессы, SHA-256 DLL и параметры development-запуска |
 | `g1r_development_processes` | Нет | Точные PID, времена создания и пути процессов выбранной игры |
 | `g1r_development_start` | `relative_package`, `expected_manifest_sha256`, `restart`, `expected_process`, `enable_ingame_tools=false` | Явный запрос запуска проверенного пакета; restart требует исходную идентичность |
@@ -113,3 +117,5 @@ Dev.10 добавляет пагинацию `g1r_find_source_files`, `g1r_searc
 ## Общий сервер Codex
 
 Dev.12 использует один Streamable HTTP-сервер с общим native-владельцем и рабочей базой. Отключение одной HTTP-сессии не сбрасывает другую. [Настройка и start/stop](native-route.md), [проверки](../../tests/G1R_MCP/README.md).
+
+HTTP start автоматически заявляет управление; stop/restart/load требуют владельца. Для ранее запущенной игры сначала вызовите `g1r_session_acquire` с точной identity. Stop принимает `reason`; неизвестный исход сохраняет заявку. Стандартный stdio-режим сохраняет прежние development-команды.

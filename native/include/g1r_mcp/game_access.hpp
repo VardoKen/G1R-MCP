@@ -12,6 +12,7 @@
 #include "g1r_mcp/observations.hpp"
 #include "g1r_mcp/enum_values.hpp"
 #include "g1r_mcp/object_serial.hpp"
+#include "g1r_mcp/job_state.hpp"
 
 namespace g1r_mcp {
 class GameAccess {
@@ -26,7 +27,7 @@ private:
     struct Job {
         nlohmann::json request;
         std::promise<nlohmann::json> result;
-        std::atomic<int> state{0};
+        JobState state;
     };
     struct Handle {
         void* object{};
@@ -48,9 +49,13 @@ private:
     std::atomic<bool> enabled_{false};
     std::atomic<DWORD> game_thread_{0};
     std::atomic<uint64_t> ticks_{0};
+    std::atomic<uint64_t> last_tick_ms_{0};
+    std::atomic<uint64_t> completed_jobs_{0};
+    std::atomic<uint64_t> cancelled_jobs_{0};
     std::string startup_error_;
     mutable std::mutex queue_mutex_;
     std::deque<std::shared_ptr<Job>> queue_;
+    std::shared_ptr<Job> active_job_;
     std::unordered_map<std::string, Handle> handles_;
     uint64_t next_handle_{0};
     std::string handle_session_;

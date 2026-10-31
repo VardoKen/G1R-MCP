@@ -64,7 +64,8 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                     catalog = await self.call_ok(client, "g1r_capabilities")
                     development = catalog["development_tools"]["operations"]
                     self.assertEqual(set(development), {"g1r_development_recipe", "g1r_development_processes",
-                                                        "g1r_development_start", "g1r_development_stop", "g1r_native_load"})
+                                                         "g1r_development_start", "g1r_development_stop", "g1r_native_load",
+                                                         "g1r_session_status", "g1r_session_acquire", "g1r_session_release", "g1r_compile_diagnostics"})
                     catalogued = {item["name"] for group in ("local_tools", "native_tools", "workspace_tools")
                                   for item in catalog[group]}
                     catalogued.update(development)

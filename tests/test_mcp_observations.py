@@ -193,7 +193,7 @@ class MCPObservationTests(unittest.IsolatedAsyncioTestCase):
                 async with ClientSession(incoming, outgoing) as client:
                     await client.initialize()
                     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-                    self.assertEqual(len(tools), 34)
+                    self.assertEqual(len(tools), 38)
                     for name in ("g1r_snapshot", "g1r_compare_snapshots", "g1r_watch_read"):
                         self.assertTrue(tools[name].annotations.read_only_hint)
                     self.assertFalse(tools["g1r_watch_start"].annotations.read_only_hint)
