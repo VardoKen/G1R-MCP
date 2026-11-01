@@ -182,7 +182,7 @@ namespace G1RMCP.ProcessControl {
                 uint pid;
                 Native.GetWindowThreadProcessId(window, out pid);
                 if (pid == Identity.Pid && Native.IsWindowVisible(window)) windows.Add(window);
-                return windows.Count < 16;
+                return true;
             };
             Native.EnumWindows(callback, IntPtr.Zero);
             GC.KeepAlive(callback);

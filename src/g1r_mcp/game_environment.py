@@ -132,9 +132,9 @@ def parse_manifest(text: str) -> dict[str, str]:
             raise _invalid_manifest()
         selected["LastUpdated" if key == "lastupdated" else key] = value
     for key in ("appid", "buildid", "LastUpdated"):
-        if key in selected and (not re.fullmatch(r"[0-9]+", selected[key]) or len(selected[key]) > 20):
+        if key in selected and not re.fullmatch(r"[0-9]+", selected[key]):
             raise _invalid_manifest()
-    if int(selected["appid"]) < 1 or int(selected["buildid"]) < 1:
+    if not selected["appid"].lstrip("0") or not selected["buildid"].lstrip("0"):
         raise _invalid_manifest()
     install_dir = selected["installdir"]
     if not install_dir or install_dir in (".", "..") or any(char in install_dir for char in "/\\:\0"):
@@ -146,7 +146,7 @@ def parse_manifest(text: str) -> dict[str, str]:
         raise _invalid_manifest()
     beta = user_config.get("betakey")
     if beta is not None:
-        if not isinstance(beta, str) or len(beta) > 256 or any(ord(char) < 32 for char in beta):
+        if not isinstance(beta, str) or any(ord(char) < 32 for char in beta):
             raise _invalid_manifest()
         selected["betakey"] = beta
     return selected
