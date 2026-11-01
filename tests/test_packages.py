@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from g1r_mcp.packages import MAX_DESCRIPTOR_BYTES, PackageError, validate_package
+from g1r_mcp.packages import PackageError, validate_package
 
 
 class PackageTests(unittest.TestCase):
@@ -109,8 +109,12 @@ class PackageTests(unittest.TestCase):
         self.assertTrue(result["valid_json"])
         self.assertFalse(result["valid_structure"])
         self.assertEqual(result["errors"][0]["code"], "descriptor_not_object")
-        self.descriptor.write_bytes(b" " * (MAX_DESCRIPTOR_BYTES + 1))
-        self.assertEqual(self.validate()["errors"][0]["code"], "descriptor_too_large")
+        description = "x" * (256 * 1024 + 1)
+        self.write_descriptor(description=description)
+        result = self.validate()
+        self.assertTrue(result["valid_json"])
+        self.assertTrue(result["valid_structure"])
+        self.assertEqual(result["metadata"]["description"], description)
 
     def test_mandatory_fields_and_load_order_are_checked(self):
         self.write_descriptor(name="", title=None, author=7, modVersion=" ", loadOrder="unknown")

@@ -21,15 +21,11 @@ import uuid
 from .window_input import WindowInputError, queue_key
 from typing import Callable
 
-from .packages import MAX_DESCRIPTOR_BYTES, PackageError, validate_package
+from .packages import PackageError, validate_package
 from .workspace import (PackageWorkspace, WorkspaceError, _checked, _destination_lock,
                         _guard_directories, _read_bytes)
 
-MAX_PACKAGE_FILES = 10_000
-MAX_PACKAGE_DIRECTORIES = 10_000
-MAX_FILE_BYTES = 16 * 1024 * 1024
-MAX_PROCESS_OUTPUT = 256 * 1024
-MAX_MANIFEST_BYTES = 768 * 1024
+MAX_FILE_BYTES = None
 MAX_DEVELOPMENT_PACKAGES = 4
 PROCESS_TIMEOUT_SECONDS = 30
 _SHA = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -66,17 +62,12 @@ def execute_command(arguments: list[str], timeout: int) -> CommandResult:
                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         started = True
         chunks = [bytearray(), bytearray()]
-        failed = threading.Event()
 
         def drain(stream, output: bytearray) -> None:
             try:
                 while True:
                     fragment = stream.read(4096)
                     if not fragment:
-                        break
-                    if len(output) + len(fragment) > MAX_PROCESS_OUTPUT:
-                        failed.set()
-                        process.kill()
                         break
                     output.extend(fragment)
             finally:
@@ -89,8 +80,8 @@ def execute_command(arguments: list[str], timeout: int) -> CommandResult:
         returncode = process.wait(timeout=timeout)
         for thread in threads:
             thread.join(1)
-        if failed.is_set() or any(thread.is_alive() for thread in threads):
-            raise DevelopmentError("tool_output_too_large", "The tool response exceeds the limit or the channel did not finish",
+        if any(thread.is_alive() for thread in threads):
+            raise DevelopmentError("tool_channel_incomplete", "The tool output channel did not finish",
                                    outcome_unknown=True)
         return CommandResult(returncode, chunks[0].decode("utf-8"), chunks[1].decode("utf-8"))
     except subprocess.TimeoutExpired:
@@ -251,9 +242,6 @@ class DevelopmentService:
             raise DevelopmentError("tool_unavailable", str(error)) from None
         result = self.executor([self.powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                                 "-File", str(script_path), *arguments, "-Json"], PROCESS_TIMEOUT_SECONDS)
-        if len(result.stdout.encode("utf-8")) > MAX_PROCESS_OUTPUT or len(result.stderr.encode("utf-8")) > MAX_PROCESS_OUTPUT:
-            raise DevelopmentError("tool_output_too_large", "The tool response exceeds the limit",
-                                   outcome_unknown=mutating)
         if result.returncode != 0:
             raise DevelopmentError("tool_failed", "The fixed tool failed; there is no automatic retry",
                                    outcome_unknown=mutating)
@@ -315,11 +303,7 @@ class DevelopmentService:
                 raise DevelopmentError("access_error", "Could not enumerate all package files")
 
             with _guard_directories(package, self.workspace.root):
-                directory_count = 0
                 for directory, directories, files in os.walk(package, followlinks=False, onerror=walk_failure):
-                    directory_count += 1
-                    if directory_count > MAX_PACKAGE_DIRECTORIES:
-                        raise DevelopmentError("manifest_limit", "The package exceeds the 10000 directory limit")
                     parent = _checked(Path(directory), package, directory=True)
                     for child in directories:
                         _checked(parent / child, package, directory=True)
@@ -327,11 +311,8 @@ class DevelopmentService:
                         file = _checked(parent / child, package)
                         if not file.is_file():
                             raise DevelopmentError("unsafe_package_file", "The package contains a nonregular file")
-                        if len(entries) >= MAX_PACKAGE_FILES:
-                            raise DevelopmentError("manifest_limit", "The package exceeds the 10000 file limit")
                         before = file.stat()
-                        data = _read_bytes(file, package,
-                                           MAX_DESCRIPTOR_BYTES if file == package / "GothicMod.json" else None)
+                        data = _read_bytes(file, package, None)
                         total += len(data)
                         entries.append({"path": file.relative_to(package).as_posix(), "bytes": len(data),
                                         "sha256": hashlib.sha256(data).hexdigest()})
@@ -341,11 +322,7 @@ class DevelopmentService:
                         file_stamps[file.relative_to(package).as_posix()] = (info.st_dev, info.st_ino,
                                                                            info.st_size, info.st_mtime_ns)
                 after_paths = set()
-                directory_count = 0
                 for directory, directories, files in os.walk(package, followlinks=False, onerror=walk_failure):
-                    directory_count += 1
-                    if directory_count > MAX_PACKAGE_DIRECTORIES:
-                        raise DevelopmentError("manifest_limit", "The package exceeds the 10000 directory limit")
                     parent = _checked(Path(directory), package, directory=True)
                     for child in directories:
                         _checked(parent / child, package, directory=True)
@@ -362,8 +339,7 @@ class DevelopmentService:
             # The validator must describe the exact descriptor bytes included in the hash.
             final_validation = validate_package(self.workspace.root, normalized)
             descriptor_entry = next((entry for entry in entries if entry["path"] == "GothicMod.json"), None)
-            descriptor_hash = hashlib.sha256(_read_bytes(package / "GothicMod.json", package,
-                                                        MAX_DESCRIPTOR_BYTES)).hexdigest()
+            descriptor_hash = hashlib.sha256(_read_bytes(package / "GothicMod.json", package, None)).hexdigest()
             if (not final_validation["valid_structure"] or final_validation["metadata"] != validation["metadata"]
                     or final_validation["script_count"] != validation["script_count"]
                     or final_validation.get("patch_count", 0) != validation.get("patch_count", 0)
@@ -376,8 +352,6 @@ class DevelopmentService:
             if show_script_errors:
                 payload["launch_options"]["show_script_errors"] = True
             serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-            if len(serialized) > MAX_MANIFEST_BYTES:
-                raise DevelopmentError("manifest_limit", "The full manifest exceeds the 768 KiB limit")
             digest = hashlib.sha256(serialized).hexdigest()
             return {**payload, "manifest_sha256": digest, "total_bytes": total,
                     "script_count": validation["script_count"], "patch_count": validation.get("patch_count", 0),
@@ -415,8 +389,6 @@ class DevelopmentService:
         if show_script_errors:
             payload["launch_options"]["show_script_errors"] = True
         serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        if len(serialized) > MAX_MANIFEST_BYTES:
-            raise DevelopmentError("manifest_limit", "The combined manifest exceeds the 768 KiB limit")
         return {**payload, "manifest_sha256": hashlib.sha256(serialized).hexdigest(),
                 "total_bytes": sum(item["total_bytes"] for item in packages),
                 "compiled": False, "runtime_validation": "not_performed"}
@@ -452,8 +424,7 @@ class DevelopmentService:
                         (target / "Script").mkdir()
                 source_root, _ = self.workspace._package(source["package_path"])
                 for entry in source["files"]:
-                    data = _read_bytes(source_root / entry["path"], source_root,
-                                       MAX_DESCRIPTOR_BYTES if entry["path"] == "GothicMod.json" else None)
+                    data = _read_bytes(source_root / entry["path"], source_root, None)
                     if len(data) != entry["bytes"] or hashlib.sha256(data).hexdigest() != entry["sha256"]:
                         raise DevelopmentError("package_changed", "The source package changed while the development session was being prepared")
                     destination = target / entry["path"]

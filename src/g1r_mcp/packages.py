@@ -13,9 +13,9 @@ import re
 import stat
 
 
-MAX_DESCRIPTOR_BYTES = 256 * 1024
-MAX_SCRIPT_FILES = 10_000
-MAX_ISSUES = 100
+MAX_DESCRIPTOR_BYTES = None
+MAX_SCRIPT_FILES = None
+MAX_ISSUES = None
 COMPONENTS = ("Script", "Config", "Content", "Story", "ScriptPatches")
 LOAD_ORDERS = {"first", "early", "normal", "late", "last"}
 KNOWN_FIELDS = {
@@ -88,13 +88,11 @@ def _read_descriptor(path: Path, boundary: Path) -> tuple[object | None, str | N
     try:
         before = checked.stat()
         with checked.open("rb") as stream:
-            raw = stream.read(MAX_DESCRIPTOR_BYTES + 1)
+            raw = stream.read()
         _checked_path(checked, boundary)
         after = checked.stat()
         if (before.st_size, before.st_mtime_ns, before.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
             raise PackageError("file_changed", "The descriptor changed during validation")
-        if len(raw) > MAX_DESCRIPTOR_BYTES:
-            return None, "descriptor_too_large"
         return json.loads(raw.decode("utf-8-sig"), object_pairs_hook=_unique_object, parse_constant=_reject_constant), None
     except PackageError:
         raise
@@ -121,8 +119,6 @@ def _script_count(script_root: Path, boundary: Path) -> int:
             if not file.is_file():
                 raise PackageError("invalid_path", "The script must be a regular file")
             total += 1
-            if total > MAX_SCRIPT_FILES:
-                raise PackageError("limit_exceeded", "The diagnostic script count limit was exceeded")
     return total
 
 
@@ -137,8 +133,6 @@ def _patch_count(patch_root: Path, boundary: Path) -> int:
             if not file.is_file():
                 raise PackageError("invalid_path", "The patch must be a regular file")
             total += 1
-            if total > MAX_SCRIPT_FILES:
-                raise PackageError("limit_exceeded", "The diagnostic patch count limit was exceeded")
     except PackageError:
         raise
     except OSError:
@@ -170,12 +164,9 @@ def validate_package(workspace_root: Path, relative_path: str) -> dict:
         nonlocal error_count
         if kind == "errors":
             error_count += 1
-        if len(result[kind]) >= MAX_ISSUES:
-            result["issues_truncated"] = True
-            return
         item = {"code": code, "message": message}
         if field is not None:
-            item["field"] = field[:128]
+            item["field"] = field
         result[kind].append(item)
 
     issue("warnings", "runtime_not_verified", "Compilation, loading, and game version comparisons were not verified")
@@ -209,7 +200,6 @@ def validate_package(workspace_root: Path, relative_path: str) -> dict:
     if failure:
         messages = {
             "descriptor_not_file": "GothicMod.json must be a regular file",
-            "descriptor_too_large": "GothicMod.json exceeds the 256 KiB limit",
             "invalid_json": "GothicMod.json is not valid UTF-8 JSON with unique keys",
         }
         issue("errors", failure, messages[failure])

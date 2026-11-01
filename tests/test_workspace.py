@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from g1r_mcp.workspace import MAX_FILES, PackageWorkspace, WorkspaceError
+from g1r_mcp.workspace import PackageWorkspace, WorkspaceError
 
 
 class WorkspaceTests(unittest.TestCase):
@@ -323,7 +323,7 @@ class WorkspaceTests(unittest.TestCase):
     def test_index_offsets_at_end_and_beyond_return_empty_exhausted_page(self):
         self.create()
         self.workspace.write_package_file("Example", "Script/A.as", "fixture")
-        for offset in (2, 3, MAX_FILES):
+        for offset in (2, 3, 10_001):
             with self.subTest(offset=offset):
                 result = self.workspace.list_package_files("Example", 200, offset)
                 self.assertEqual(result["items"], [])
@@ -363,8 +363,12 @@ class WorkspaceTests(unittest.TestCase):
         for path in ("Script/../Other", "Script/CON", "/Script/New"):
             self.assert_error("unsafe_path", lambda: self.workspace.create_package_directory("Example", path))
         self.assert_error("conflict", lambda: self.workspace.create_package_directory("Example", "Script/File.as/Nested"))
-        self.assert_error("limit_exceeded", lambda: self.workspace.create_package_directory("Example", "Script/" + "/".join(["a"] * 32)))
         self.assertEqual(self.state(), before)
+        path = "Script/" + "/".join(["a"] * 32)
+        result = self.workspace.create_package_directory("Example", path)
+        self.assertTrue(result["created"])
+        self.assertEqual(result["created_count"], 32)
+        self.assertTrue((self.root / "Example" / path).is_dir())
 
     def test_directory_creation_requires_existing_valid_package(self):
         plain = self.root / "Plain"
@@ -574,8 +578,15 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIsNone(exact["max_read_bytes"])
         self.assertFalse(exact["truncated"])
         descriptor = self.root / "Example/GothicMod.json"
-        descriptor.write_bytes(b"a" * (256 * 1024 + 1))
-        self.assert_error("file_too_large", lambda: self.workspace.read_package_file_exact("Example", "GothicMod.json"))
+        metadata = {**self.metadata, "description": "x" * (256 * 1024 + 1)}
+        raw = (json.dumps(metadata, ensure_ascii=False) + "\n").encode("utf-8")
+        descriptor.write_bytes(raw)
+        exact = self.workspace.read_package_file_exact("Example", "GothicMod.json")
+        self.assertEqual(exact["text"].encode("utf-8"), raw)
+        self.assertFalse(exact["truncated"])
+        written = self.workspace.write_package_file("Example", "GothicMod.json", exact["text"], exact["sha256"])
+        self.assertEqual(written["sha256"], exact["sha256"])
+        self.assertEqual(descriptor.read_bytes(), raw)
 
     def test_exact_read_uses_allowlist_protected_roots_and_utf8(self):
         self.create()
@@ -613,10 +624,17 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_invalid_arguments(self):
         self.create()
-        for value in (0, 201, True, 1.5):
+        for value in (0, True, 1.5):
             self.assert_error("invalid_arguments", lambda: self.workspace.list_package_files("Example", value))
-        for offset in (-1, MAX_FILES + 1, True, 1.5, "0", None):
+        for offset in (-1, True, 1.5, "0", None):
             self.assert_error("invalid_arguments", lambda: self.workspace.list_package_files("Example", offset=offset))
+        complete = self.workspace.list_package_files("Example", 201)
+        self.assertEqual(len(complete["items"]), 1)
+        self.assertFalse(complete["has_more"])
+        beyond = self.workspace.list_package_files("Example", offset=10_001)
+        self.assertEqual(beyond["items"], [])
+        self.assertIsNone(beyond["next_offset"])
+        self.assertFalse(beyond["has_more"])
         for start, count in ((0, 1), (True, 1), (1, 0), (1, True)):
             self.assert_error("invalid_arguments", lambda: self.workspace.read_package_file("Example", "GothicMod.json", start, count))
         self.assert_error("invalid_arguments", lambda: self.workspace.write_package_file("Example", "GothicMod.json", "{}", "bad-hash"))

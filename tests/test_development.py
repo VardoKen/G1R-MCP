@@ -322,11 +322,8 @@ class DevelopmentTests(unittest.TestCase):
         self.assertEqual(stage["packages"][0]["manifest"]["files"], manifest["files"])
         self.assertEqual(self.calls, [])
 
-    def test_manifest_rejects_excessive_directories_and_redirected_package(self):
-        with patch("g1r_mcp.development.MAX_PACKAGE_DIRECTORIES", 1):
-            with self.assertRaises(DevelopmentError) as captured:
-                self.recipe()
-        self.assertEqual(captured.exception.code, "manifest_limit")
+    def test_manifest_accepts_directories_and_rejects_redirected_package(self):
+        self.assertEqual(len(self.recipe()["manifest"]["files"]), 2)
         external = self.root / "external"
         external.mkdir()
         try:
@@ -365,11 +362,11 @@ class DevelopmentTests(unittest.TestCase):
                 self.recipe()
         self.assertIn(captured.exception.code, ("package_changed", "invalid_json"))
 
-    def test_manifest_serialized_response_is_bounded(self):
-        with patch("g1r_mcp.development.MAX_MANIFEST_BYTES", 1):
-            with self.assertRaises(DevelopmentError) as captured:
-                self.recipe()
-        self.assertEqual(captured.exception.code, "manifest_limit")
+    def test_manifest_preserves_complete_serialized_response(self):
+        manifest = self.recipe()["manifest"]
+        self.assertEqual([entry["path"] for entry in manifest["files"]],
+                         ["GothicMod.json", "Script/Probe.as"])
+        self.assertEqual(manifest["total_bytes"], sum(entry["bytes"] for entry in manifest["files"]))
 
     def test_process_state_rejects_unrelated_paths_and_duplicate_json(self):
         self.processes = [{**self.identity, "executable": str(self.root / "other.exe")}]
@@ -397,16 +394,17 @@ class DevelopmentTests(unittest.TestCase):
         self.assertTrue(captured.exception.outcome_unknown)
         process.kill.assert_called_once()
 
-    def test_executor_caps_pipe_output_while_reading(self):
+    def test_executor_preserves_complete_pipe_output(self):
         from unittest.mock import Mock
-        process = Mock(stdout=io.BytesIO(b"x" * 2048), stderr=io.BytesIO())
+        output = b"x" * (256 * 1024 + 1)
+        process = Mock(stdout=io.BytesIO(output), stderr=io.BytesIO())
         process.wait.return_value = 0
-        with patch("g1r_mcp.development.MAX_PROCESS_OUTPUT", 100), patch("g1r_mcp.development.subprocess.Popen", return_value=process):
-            with self.assertRaises(DevelopmentError) as captured:
-                execute_command(["fixed"], 30)
-        self.assertEqual(captured.exception.code, "tool_output_too_large")
-        self.assertTrue(captured.exception.outcome_unknown)
-        process.kill.assert_called_once()
+        with patch("g1r_mcp.development.subprocess.Popen", return_value=process):
+            result = execute_command(["fixed"], 30)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, output.decode("utf-8"))
+        self.assertEqual(result.stderr, "")
+        process.kill.assert_not_called()
 
     def test_executor_keyboard_interrupt_settles_helper_without_replay(self):
         from unittest.mock import Mock

@@ -252,8 +252,7 @@ def verify_export(export_root: Path) -> dict:
             raise ExportError("invalid_manifest", "Invalid source entry")
         path = item["path"]
         _allowed(path)
-        if (path.casefold() in folded or type(item.get("bytes")) is not int or item["bytes"] < 0
-                or path == "GothicMod.json" and item["bytes"] > MAX_DESCRIPTOR_BYTES):
+        if path.casefold() in folded or type(item.get("bytes")) is not int or item["bytes"] < 0:
             raise ExportError("invalid_manifest", "Duplicate source path or invalid source size")
         folded.add(path.casefold())
         expected[name + "/" + path] = item

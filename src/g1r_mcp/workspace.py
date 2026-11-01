@@ -23,9 +23,7 @@ from .packages import COMPONENTS, MAX_DESCRIPTOR_BYTES, PackageError, validate_p
 MAX_FILE_BYTES = None
 MAX_READ_BYTES = None
 MAX_EXACT_READ_BYTES = None
-MAX_FILES = 10_000
 MAX_CONTENT_BYTES = None
-MAX_DIRECTORY_PARTS = 32
 _RESERVED = re.compile(r"^(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³])(?:\..*)?$", re.I)
 
 
@@ -38,8 +36,8 @@ class WorkspaceError(Exception):
 
 
 def _parts(value: str, *, root_allowed: bool = False) -> tuple[str, ...]:
-    if not isinstance(value, str) or not value or len(value) > 1024:
-        raise WorkspaceError("invalid_path", "A bounded relative path is required")
+    if not isinstance(value, str) or not value:
+        raise WorkspaceError("invalid_path", "A nonempty relative path is required")
     if root_allowed and value == ".":
         return ()
     if PureWindowsPath(value).anchor or "\\" in value:
@@ -229,8 +227,6 @@ class PackageWorkspace:
             raw = (json.dumps(metadata, ensure_ascii=False, allow_nan=False, indent=2) + "\n").encode("utf-8")
         except (ValueError, TypeError, UnicodeEncodeError, RecursionError):
             raise WorkspaceError("invalid_descriptor", "Metadata is not valid UTF-8 JSON") from None
-        if len(raw) > MAX_DESCRIPTOR_BYTES:
-            raise WorkspaceError("limit_exceeded", "The descriptor exceeds the 256 KiB limit")
         with self._lock:
             parent = _checked(self.root.joinpath(*parts[:-1]), self.root, directory=True)
             target = self._unprotected(parent / parts[-1], forbid_ancestor=True)
@@ -270,8 +266,6 @@ class PackageWorkspace:
     def create_package_directory(self, relative_path: str, directory_path: str) -> dict:
         """Create component directories of an existing official package."""
         parts = _parts(directory_path)
-        if len(parts) > MAX_DIRECTORY_PARTS:
-            raise WorkspaceError("limit_exceeded", "The directory path exceeds the 32 component limit")
         if parts[0] not in COMPONENTS:
             raise WorkspaceError("unsupported_directory", "Directories in Script, ScriptPatches, Config, Content, or Story are allowed")
         with self._lock:
@@ -338,10 +332,10 @@ class PackageWorkspace:
                            created_paths=paths, created_count=len(paths), exists=True)
 
     def list_package_files(self, relative_path: str, limit: int = 100, offset: int = 0) -> dict:
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
-            raise WorkspaceError("invalid_arguments", "The list limit must be an integer between 1 and 200")
-        if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset <= MAX_FILES:
-            raise WorkspaceError("invalid_arguments", "The list offset must be an integer between 0 and 10000")
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise WorkspaceError("invalid_arguments", "The list limit must be a positive integer")
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise WorkspaceError("invalid_arguments", "The list offset must be a nonnegative integer")
         with self._lock:
             package, name = self._package(relative_path)
             files: list[dict] = []
@@ -367,8 +361,6 @@ class PackageWorkspace:
                         if not file.is_file():
                             raise WorkspaceError("invalid_path", "The package entry must be a regular file")
                         files.append({"path": file.relative_to(package).as_posix(), "bytes": file.stat().st_size})
-                        if len(files) > MAX_FILES:
-                            raise WorkspaceError("limit_exceeded", "The file count limit was exceeded")
             files.sort(key=lambda item: item["path"])
             items = files[offset:offset + limit]
             has_more = offset + len(items) < len(files)
