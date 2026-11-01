@@ -131,6 +131,74 @@ void shared_connection_client_ownership() {
     error("invalid_owner",[&]{model.start("connection-1","",params(),snapshot(1),0,1);});
 }
 
+void list_and_resume_without_restarting() {
+    Observations model;
+    model.start("connection-1","client-a",params(100,4),snapshot(10),5,1);
+    const auto other=model.start("connection-1","client-other",params(100,4),snapshot(20),5,1);
+    model.start("connection-2","client-a",params(),snapshot(30),5,1);
+    const auto listed=model.list("connection-1","client-b");
+    require(listed.at("session_id")=="connection-1" && listed.at("current_client_owner")=="client-b"
+            && listed.at("items").size()==2,"List не восстановил записи после потерянного ответа start");
+    const auto recovered=listed.at("items")[0];
+    const auto id=recovered.at("watch_id").get<std::string>();
+    const auto other_id=other.at("watch_id").get<std::string>();
+    require(recovered.at("client_owner")=="client-a" && recovered.at("started_ms")==5,
+            "List должен сообщать текущего владельца и исходное время старта");
+    for(const auto& item:listed.at("items"))
+        require(!item.contains("events") && !item.contains("targets") && !item.contains("snapshot") && !item.contains("value"),
+                "List не должен публиковать наблюдаемые значения или события");
+    json claim={{"watch_id",id},{"expected_session_id","connection-1"},{"expected_client_owner","client-a"}};
+    const auto before=model.read("client-a",query(id));
+    const auto other_before=model.read("client-other",query(other_id));
+    const auto resumed=model.resume("connection-1","client-b",claim);
+    auto expected=before;expected["client_owner"]="client-b";
+    require(resumed.at("state")=="running" && resumed.at("client_owner")=="client-b"
+            && model.read("client-b",query(id))==expected,"Resume изменил события или состояние running наблюдения");
+    require(model.read("client-other",query(other_id))==other_before && model.size()==3,
+            "Resume затронул другую запись или создал новую");
+    error("foreign_watch",[&]{model.read("client-a",query(id));});
+    error("foreign_watch",[&]{model.stop("client-a",query(id),6,2);});
+    error("foreign_watch",[&]{model.forget("client-a",query(id));});
+    const auto after_resume=model.read("client-b",query(id));
+    error("watch_resume_mismatch",[&]{model.resume("connection-1","client-b",claim);});
+    require(model.list("connection-1","client-b").at("items")[0].at("client_owner")=="client-b"
+            && model.read("client-b",query(id))==after_resume,"Неопределённый результат resume не виден в list или повтор мутирует запись");
+    auto wrong_session=claim;wrong_session["expected_session_id"]="connection-2";
+    error("watch_resume_mismatch",[&]{model.resume("connection-1","client-c",wrong_session);});
+    auto current_claim=claim;current_claim["expected_client_owner"]="client-b";
+    error("watch_resume_mismatch",[&]{model.resume("connection-2","client-c",current_claim);});
+    auto malformed=current_claim;malformed.erase("expected_client_owner");
+    error("invalid_watch_params",[&]{model.resume("connection-1","client-c",malformed);});
+    malformed=current_claim;malformed["expected_session_id"]=3;
+    error("invalid_watch_params",[&]{model.resume("connection-1","client-c",malformed);});
+    error("invalid_owner",[&]{model.resume("connection-1","",current_claim);});
+    require(model.read("client-b",query(id))==after_resume,"Отказ resume изменил запись");
+    int calls=0;
+    model.pump(14,2,[&](const json&){++calls;return snapshot(11);});
+    require(calls==0,"Resume изменил следующий интервал sampling");
+    model.pump(15,3,[&](const json&){++calls;return snapshot(11);});
+    require(calls==1 && model.read("client-b",query(id)).at("last_seq")==2,"Sampling после передачи владения перезапущен");
+    model.pump(105,4,[&](const json&){++calls;return snapshot(12);});
+    model.pump(105,5,[&](const json&){++calls;return snapshot(12);});
+    model.pump(105,6,[&](const json&){++calls;return snapshot(12);});
+    require(calls==1 && model.read("client-b",query(id)).at("state")=="completed",
+            "Resume изменил исходный deadline");
+    const auto terminal_before=model.read("client-b",query(id));
+    const auto terminal=model.resume("connection-1","client-c",current_claim);
+    expected=terminal_before;expected["client_owner"]="client-c";
+    require(terminal.at("state")=="completed" && model.read("client-c",query(id))==expected,
+            "Передача terminal записи изменила события или terminal состояние");
+    error("foreign_watch",[&]{model.read("client-b",query(id));});
+    error("foreign_watch",[&]{model.forget("client-b",query(id));});
+    auto final_claim=current_claim;final_claim["expected_client_owner"]="client-c";
+    model.disconnect("connection-1");
+    require(model.list("connection-1","client-c").at("items").empty() && model.size()==1,
+            "List вернул записи после disconnect или disconnect затронул другую TCP-сессию");
+    error("unknown_watch",[&]{model.resume("connection-1","client-d",final_claim);});
+    require(model.list("connection-2","client-a").at("items").size()==1,"Disconnect потерял другое соединение");
+    model.disconnect("connection-2");
+}
+
 void two_watches_and_byte_bounds() {
     Observations model;
     auto one=model.start("owner",params(100,128),snapshot(1),0,1).at("watch_id").get<std::string>();
@@ -282,6 +350,7 @@ int main() {
         changes_limits_and_stop();
         expiry_invalidation_and_disconnect();
         shared_connection_client_ownership();
+        list_and_resume_without_restarting();
         two_watches_and_byte_bounds();
         invalid_parameters_and_capacity();
         copied_values_byte_drop_and_no_catchup();

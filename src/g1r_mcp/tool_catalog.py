@@ -9,7 +9,8 @@ from typing import Any, Iterable
 _SOURCE_PAGE = ("items", "truncated", "total_matches", "source", "validation", "offset", "next_offset")
 _WORKSPACE_FILE = ("source", "package_path", "file_path", "sha256", "text", "compiled", "runtime_validation")
 _NATIVE_STATUS = ("version", "ready", "hook_installed", "tick_count", "requests", "pump")
-_WATCH = ("watch_id", "session_id", "state", "reason", "cleanup_complete", "next_seq", "dropped_events")
+_WATCH = ("watch_id", "session_id", "client_owner", "started_ms", "state", "reason", "cleanup_complete",
+          "next_seq", "last_seq", "oldest_seq", "dropped_events", "capacity", "buffer_bytes", "buffer_limit_bytes")
 
 
 def _entry(target: str, requires: tuple[str, ...], implementation: str,
@@ -135,7 +136,7 @@ for _name, _implementation, _fields, _dynamic in (
                                state_tools=("g1r_native_status",))
 
 for _name, _method, _fields in (
-    ("g1r_watch_start", "start", _WATCH),
+    ("g1r_watch_start", "start", _WATCH + ("start_seq", "duration_ms", "interval_ms", "sampling")),
     ("g1r_watch_read", "read", _WATCH + ("events", "gap", "cursor", "truncated")),
     ("g1r_watch_stop", "stop", _WATCH),
     ("g1r_watch_forget", "forget", ("watch_id", "forgotten", "cleanup_complete")),
@@ -145,6 +146,15 @@ for _name, _method, _fields in (
     _CONTRACTS[_name] = _entry("native_observation" if _method != "read" else "observation_event_copies",
                                _requires, "native/src/observations.cpp:Observations::" + _method,
                                _fields, dynamic=_method == "read", state_tools=("g1r_native_status",))
+
+_CONTRACTS["g1r_watch_list"] = _entry(
+    "current_native_connection_observation_metadata", ("native_tcp_channel", "current_game_tick", "mcp_client_identity"),
+    "native/src/observations.cpp:Observations::list", ("session_id", "current_client_owner", "items"),
+    dynamic=True, state_tools=("g1r_native_status",))
+_CONTRACTS["g1r_watch_resume"] = _entry(
+    "native_observation_owner", ("native_tcp_channel", "current_game_tick", "mcp_client_identity",
+                                 "existing_watch_id", "expected_native_session_id", "expected_previous_client_owner"),
+    "native/src/observations.cpp:Observations::resume", _WATCH, state_tools=("g1r_native_status", "g1r_watch_list"))
 
 
 def build_tool_contracts(registered_tools: Iterable[Any]) -> list[dict[str, Any]]:

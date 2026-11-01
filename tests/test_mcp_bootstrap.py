@@ -57,7 +57,7 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                                       "g1r_read_package_file_exact", "reconnect", "не повтор"):
                         self.assertIn(important, instructions)
                     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-                    self.assertEqual(len(tools), 42)
+                    self.assertEqual(len(tools), 44)
                     self.assertTrue(tools["g1r_list_source_functions"].annotations.read_only_hint)
                     self.assertTrue(tools["g1r_source_identity"].annotations.read_only_hint)
                     self.assertTrue(tools["g1r_verify_source_game"].annotations.read_only_hint)
@@ -98,6 +98,23 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(contracts["g1r_development_key"]["effects"]["read_only"])
                     self.assertIn("handling_confirmed", contracts["g1r_development_key"]["result"]["fields"])
                     self.assertNotIn("native_tcp_channel", contracts["g1r_read_source_exact"]["context"]["requires"])
+                    watch_list = contracts["g1r_watch_list"]
+                    self.assertEqual(watch_list["args"].get("properties", {}), {})
+                    self.assertEqual(watch_list["args"].get("required", []), [])
+                    self.assertEqual(watch_list["result"]["fields"], ["session_id", "current_client_owner", "items"])
+                    self.assertTrue(watch_list["effects"]["read_only"])
+                    self.assertNotIn("events", watch_list["result"]["fields"])
+                    watch_resume = contracts["g1r_watch_resume"]
+                    self.assertEqual(set(watch_resume["args"]["properties"]),
+                                     {"watch_id", "expected_session_id", "expected_client_owner"})
+                    self.assertEqual(set(watch_resume["args"]["required"]),
+                                     {"watch_id", "expected_session_id", "expected_client_owner"})
+                    self.assertFalse(watch_resume["effects"]["read_only"])
+                    self.assertEqual(watch_resume["effects"]["target"], "native_observation_owner")
+                    self.assertIn("expected_previous_client_owner", watch_resume["context"]["requires"])
+                    self.assertIn("g1r_watch_list", watch_resume["context"]["state_tools"])
+                    self.assertIn("client_owner", watch_resume["result"]["fields"])
+                    self.assertIn("oldest_seq", watch_resume["result"]["fields"])
                     compile_group = next(group for group in catalog["game_groups"] if group["name"] == "compile_diagnostics")
                     self.assertIsNone(compile_group["available"])
                     self.assertEqual(compile_group["availability"], "caller_selected_file_or_native_compiler_manager")
@@ -124,6 +141,8 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn(identity["git"]["read_status"]["head"], {"not_inspected", "unavailable"})
                     self.assertIn(identity["git"]["read_status"]["working_tree"], {"not_inspected", "unavailable"})
                     native_catalog = {item["name"]: item for item in catalog["native_tools"]}
+                    self.assertTrue(native_catalog["g1r_watch_list"]["read_only_hint"])
+                    self.assertFalse(native_catalog["g1r_watch_resume"]["read_only_hint"])
                     for name in ("g1r_read_array", "g1r_read_struct"):
                         self.assertTrue(native_catalog[name]["read_only_hint"])
                         self.assertTrue(tools[name].annotations.read_only_hint)

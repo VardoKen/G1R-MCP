@@ -66,6 +66,8 @@ NATIVE_TOOLS = (
     ("g1r_watch_read", "Прочитать события наблюдения и сведения о потерях"),
     ("g1r_watch_stop", "Остановить наблюдение и подтвердить прекращение чтений"),
     ("g1r_watch_forget", "Освободить завершённое наблюдение"),
+    ("g1r_watch_list", "Метаданные наблюдений текущего native-соединения"),
+    ("g1r_watch_resume", "Явная передача существующего наблюдения текущему клиенту"),
 )
 DEVELOPMENT_TOOLS = (
     "g1r_session_status", "g1r_session_acquire", "g1r_session_release", "g1r_compile_diagnostics",
@@ -207,7 +209,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                 for name, description in LOCAL_TOOLS
             ],
             "native_tools": [{"name": name, "description": description, "implemented": True,
-                              "read_only_hint": name in {"g1r_native_status", "g1r_find_objects", "g1r_object_properties", "g1r_object_functions", "g1r_read_array", "g1r_read_struct", "g1r_snapshot", "g1r_watch_read"},
+                              "read_only_hint": name in {"g1r_native_status", "g1r_find_objects", "g1r_object_properties", "g1r_object_functions", "g1r_read_array", "g1r_read_struct", "g1r_snapshot", "g1r_watch_read", "g1r_watch_list"},
                               "availability": "requires_live_native_status"} for name, description in NATIVE_TOOLS],
             "workspace_tools": [
                 {"name": name, "description": description, "implemented": True,
@@ -419,7 +421,14 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                              "ownership": "mcp_client_in_shared_native_connection",
                              "connection_lifecycle": "native_tcp_session",
                              "client_disconnect": "continues_until_explicit_stop_or_existing_duration",
-                             "reconnect_reassigns_owner": False, "world_generation_confirmed": False},
+                             "reconnect_reassigns_owner": False,
+                             "discovery_tool": "g1r_watch_list",
+                             "explicit_owner_transfer_tool": "g1r_watch_resume",
+                             "discovery_scope": "current_native_connection_metadata",
+                             "owner_transfer_identity": "watch_id_session_id_client_owner",
+                             "transfer_restarts_observation": False,
+                             "native_disconnect_retains_observations": False,
+                             "world_generation_confirmed": False},
             "snapshot_comparison": {"implemented": True, "effects": "read_only",
                                     "tool": "g1r_compare_snapshots", "validation": "client_supplied_copies"},
             "limitations": [
@@ -817,6 +826,21 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     def g1r_watch_forget(watch_id: str, ctx: Context = None) -> dict[str, Any]:
         """Освободить уже завершённое наблюдение текущей сессии."""
         return native_request("watch_forget", {"watch_id": watch_id, "client_owner": watch_owner(ctx)})
+
+    @server.tool(annotations=read_only)
+    def g1r_watch_list(ctx: Context = None) -> dict[str, Any]:
+        """Список метаданных наблюдений текущего native-соединения без событий и значений."""
+        return native_request("watch_list", {"client_owner": watch_owner(ctx)})
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                                            idempotentHint=False, openWorldHint=False))
+    def g1r_watch_resume(watch_id: str, expected_session_id: str,
+                         expected_client_owner: str, ctx: Context = None) -> dict[str, Any]:
+        """Явно передать существующее наблюдение текущему клиенту, сохранив состояние и события."""
+        return native_request("watch_resume", {"watch_id": watch_id,
+                              "expected_session_id": expected_session_id,
+                              "expected_client_owner": expected_client_owner,
+                              "client_owner": watch_owner(ctx)})
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def g1r_invoke(handle: str, function: str, arguments: dict[str, Any] | None = None,

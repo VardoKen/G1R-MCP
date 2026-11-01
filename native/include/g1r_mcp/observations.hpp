@@ -27,6 +27,9 @@ public:
                const Json& params, const Json& baseline,
                std::uint64_t now_ms, std::uint64_t tick);
     Json read(const std::string& owner, const Json& params) const;
+    Json list(const std::string& connection_session, const std::string& client_owner) const;
+    Json resume(const std::string& connection_session, const std::string& new_client_owner,
+                const Json& params);
     Json stop(const std::string& owner, const Json& params,
               std::uint64_t now_ms, std::uint64_t tick);
     Json forget(const std::string& owner, const Json& params);

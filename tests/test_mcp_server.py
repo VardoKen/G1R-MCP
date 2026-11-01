@@ -20,21 +20,22 @@ from tests.test_mcp_observations import watch_metadata
 
 
 class DropCompletedStopResponse(httpx2.AsyncBaseTransport):
-    """Потерять полный ASGI-ответ на стороне клиента после завершения stop."""
+    """Потерять полный ASGI-ответ на стороне клиента после завершения операции."""
 
-    def __init__(self, app):
+    def __init__(self, app, tool_name="g1r_watch_stop"):
         self.inner = httpx2.ASGITransport(app=app)
+        self.tool_name = tool_name
         self.discarded = None
 
     async def handle_async_request(self, request):
         response = await self.inner.handle_async_request(request)
         body = json.loads(request.content) if request.method == "POST" else {}
         params = body.get("params", {})
-        if params.get("name") == "g1r_watch_stop" and self.discarded is None:
+        if params.get("name") == self.tool_name and self.discarded is None:
             payload = json.loads(await response.aread())
             self.discarded = payload["result"]["structuredContent"]
             await response.aclose()
-            raise httpx2.ReadError("fixture: полный HTTP-ответ stop потерян", request=request)
+            raise httpx2.ReadError("fixture: полный HTTP-ответ потерян", request=request)
         return response
 
     async def aclose(self):
@@ -44,6 +45,132 @@ class DropCompletedStopResponse(httpx2.AsyncBaseTransport):
 class MCPServerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self._asyncioRunner.get_loop().slow_callback_duration = 2.0
+
+    async def test_lost_start_list_and_explicit_resume_transfer_watch_to_new_http_owner(self):
+        metadata = {**watch_metadata(state="expired", reason="duration_elapsed", next_seq=3),
+                    "watch_id": "watch-lost", "started_ms": 55}
+        events = [{"seq": 2, "kind": "terminal", "reason": "duration_elapsed"}]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            modkit, workspace = root / "Modkit", root / "workspace"
+            (modkit / "Script").mkdir(parents=True)
+            source = modkit / "Script" / "Fixture.as"
+            source.write_bytes(b"class UFixture {}\r\n")
+            original = source.read_bytes()
+            workspace.mkdir()
+            with patch("g1r_mcp.server.NativeClient") as factory:
+                native = factory.return_value
+                server = create_server(modkit, workspace, native_port=27123, transport="streamable-http")
+                security = TransportSecuritySettings(enable_dns_rebinding_protection=True,
+                    allowed_hosts=["127.0.0.1:27124"], allowed_origins=["http://127.0.0.1:27124"])
+                app = server.streamable_http_app(host="127.0.0.1", streamable_http_path="/mcp",
+                    stateless_http=False, json_response=True, transport_security=security)
+                lossy = DropCompletedStopResponse(app, "g1r_watch_start")
+                counter = 0
+
+                async def rpc(client, method, params, session=None):
+                    nonlocal counter
+                    counter += 1
+                    headers = {"Accept": "application/json, text/event-stream"}
+                    if session is not None:
+                        headers["Mcp-Session-Id"] = session
+                    response = await client.post("/mcp", headers=headers,
+                        json={"jsonrpc": "2.0", "id": counter, "method": method, "params": params})
+                    self.assertEqual(response.status_code, 200, response.text)
+                    return response
+
+                async def initialize(client, name):
+                    response = await rpc(client, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                                                               "clientInfo": {"name": name, "version": "1"}})
+                    session = response.headers["mcp-session-id"]
+                    notified = await client.post("/mcp", headers={"Mcp-Session-Id": session,
+                        "Accept": "application/json, text/event-stream"},
+                        json={"jsonrpc": "2.0", "method": "notifications/initialized"})
+                    self.assertEqual(notified.status_code, 202, notified.text)
+                    return session
+
+                async def tool(client, session, name, arguments=None):
+                    result = (await rpc(client, "tools/call", {"name": name, "arguments": arguments or {}}, session)).json()["result"]
+                    self.assertFalse(result.get("isError", False), result)
+                    return result["structuredContent"]
+
+                async with app.router.lifespan_context(app):
+                    async with httpx2.AsyncClient(transport=lossy, base_url="http://127.0.0.1:27124") as first, \
+                               httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app),
+                                                 base_url="http://127.0.0.1:27124") as second:
+                        one, two = await initialize(first, "lost-start-owner"), await initialize(second, "resume-owner")
+                        self.assertNotEqual(one, two)
+                        owner_a, owner_b = "http:" + one, "http:" + two
+                        lost_metadata = {**metadata, "client_owner": owner_a}
+                        started_metadata = {**lost_metadata, "state": "running", "reason": "", "cleanup_complete": False,
+                                            "next_seq": 1, "last_seq": 0, "oldest_seq": 1}
+                        resumed_metadata = {**metadata, "client_owner": owner_b}
+                        start = {"handle": "obj-lost", "properties": ["Enabled"], "duration_ms": 1000,
+                                 "interval_ms": 20, "capacity": 2}
+                        resume = {"watch_id": "watch-lost", "expected_session_id": metadata["session_id"],
+                                  "expected_client_owner": owner_a}
+                        read = {"watch_id": "watch-lost", "after_seq": 0, "limit": 100}
+                        terminal = {**resumed_metadata, "events": events, "cursor": 2, "gap": False, "truncated": False}
+                        expected = [
+                            ("watch_start", {**start, "client_owner": owner_a}, started_metadata),
+                            ("watch_list", {"client_owner": owner_b}, {"session_id": metadata["session_id"],
+                                "current_client_owner": owner_b, "items": [lost_metadata]}),
+                            ("watch_resume", {**resume, "client_owner": owner_b}, resumed_metadata),
+                            ("watch_list", {"client_owner": owner_b}, {"session_id": metadata["session_id"],
+                                "current_client_owner": owner_b, "items": [resumed_metadata]}),
+                            ("watch_read", {**read, "client_owner": owner_b}, terminal),
+                            ("watch_read", {**read, "client_owner": owner_a}, None),
+                            ("watch_forget", {"watch_id": "watch-lost", "client_owner": owner_b},
+                                {"watch_id": "watch-lost", "forgotten": True, "cleanup_complete": True}),
+                        ]
+                        observed = []
+
+                        def boundary(operation, parameters):
+                            planned_operation, planned_parameters, result = expected[len(observed)]
+                            self.assertEqual((operation, parameters), (planned_operation, planned_parameters))
+                            observed.append((operation, parameters))
+                            if result is None:
+                                raise NativeError("foreign_watch", "Наблюдение принадлежит новому владельцу")
+                            return result
+
+                        native.request.side_effect = boundary
+                        listed = (await rpc(second, "tools/list", {}, two)).json()["result"]["tools"]
+                        self.assertEqual(len(listed), 44)
+                        schemas = {item["name"]: item["inputSchema"] for item in listed}
+                        self.assertEqual(set(schemas["g1r_watch_list"].get("properties", {})), set())
+                        self.assertEqual(set(schemas["g1r_watch_resume"]["properties"]), set(resume))
+                        for name in ("g1r_watch_list", "g1r_watch_resume"):
+                            for hidden in ("ctx", "client_owner", "new_owner"):
+                                self.assertNotIn(hidden, schemas[name].get("properties", {}))
+                        with self.assertRaises(httpx2.ReadError):
+                            await tool(first, one, "g1r_watch_start", start)
+                        self.assertEqual(lossy.discarded, started_metadata)
+                        discovered = await tool(second, two, "g1r_watch_list")
+                        self.assertEqual(discovered["items"], [lost_metadata])
+                        transferred = await tool(second, two, "g1r_watch_resume", resume)
+                        self.assertEqual(transferred, resumed_metadata)
+                        self.assertEqual({key: value for key, value in transferred.items() if key != "client_owner"}, metadata)
+                        self.assertEqual((await tool(second, two, "g1r_watch_list"))["items"], [resumed_metadata])
+                        self.assertEqual(await tool(second, two, "g1r_watch_read", {"watch_id": "watch-lost"}), terminal)
+                        result = (await rpc(first, "tools/call", {"name": "g1r_watch_read", "arguments": {
+                            "watch_id": "watch-lost"}}, one)).json()["result"]
+                        self.assertTrue(result.get("isError", False), result)
+                        text = "\n".join(item.get("text", "") for item in result["content"])
+                        self.assertEqual(json.loads(text[text.index("{"):])["code"], "foreign_watch")
+                        self.assertTrue((await tool(second, two, "g1r_watch_forget", {"watch_id": "watch-lost"}))["forgotten"])
+                        self.assertEqual(len(observed), len(expected))
+                        self.assertEqual(sum(operation == "watch_start" for operation, _ in observed), 1)
+                        self.assertEqual(sum(operation == "watch_resume" for operation, _ in observed), 1)
+                        self.assertFalse(any(operation == "watch_stop" for operation, _ in observed))
+                        for client, session in ((first, one), (second, two)):
+                            deleted = await client.delete("/mcp", headers={"Mcp-Session-Id": session,
+                                "Accept": "application/json, text/event-stream"})
+                            self.assertEqual(deleted.status_code, 200, deleted.text)
+                        factory.assert_called_once_with(port=27123)
+                        native.close.assert_not_called()
+                native.close.assert_called_once_with()
+            self.assertEqual(source.read_bytes(), original)
+            self.assertEqual(list(workspace.iterdir()), [])
 
     async def test_lost_http_stop_response_keeps_session_terminal_result_and_other_watch(self):
         started_a = {**watch_metadata(), "watch_id": "watch-a"}
@@ -278,12 +405,13 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(initialized.server_info.version, __version__)
                     tools = (await client.list_tools()).tools
                     names = {tool.name for tool in tools}
-                    self.assertEqual(len(names), 42)
+                    self.assertEqual(len(names), 44)
                     self.assertIn("g1r_development_key", names)
                     source_tools = {"g1r_source_identity", "g1r_verify_source_game", "g1r_list_source_functions"}
                     self.assertTrue(source_tools.issubset(names))
                     mutations = {"g1r_invoke", "g1r_native_enable", "g1r_create_package",
                                  "g1r_write_package_file", "g1r_watch_start", "g1r_watch_stop", "g1r_watch_forget",
+                                 "g1r_watch_resume",
                                  "g1r_development_start", "g1r_development_stop", "g1r_development_key", "g1r_native_load",
                                  "g1r_create_package_directory"}
                     mutations.update({"g1r_session_acquire", "g1r_session_release"})
@@ -293,7 +421,8 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(key_tool.annotations.read_only_hint)
                     self.assertFalse(key_tool.annotations.idempotent_hint)
                     for tool in tools:
-                        if tool.name in {"g1r_watch_start", "g1r_watch_read", "g1r_watch_stop", "g1r_watch_forget"}:
+                        if tool.name in {"g1r_watch_start", "g1r_watch_read", "g1r_watch_stop", "g1r_watch_forget",
+                                         "g1r_watch_list", "g1r_watch_resume"}:
                             self.assertNotIn("ctx", tool.input_schema["properties"])
                             self.assertNotIn("client_owner", tool.input_schema["properties"])
 

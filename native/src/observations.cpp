@@ -56,7 +56,8 @@ void Observations::validate_targets(const Json& targets) {
 }
 
 Observations::Json Observations::metadata(const Watch& watch) {
-    return {{"watch_id", watch.id}, {"session_id", watch.connection_session}, {"state", watch.state},
+    return {{"watch_id", watch.id}, {"session_id", watch.connection_session},
+            {"client_owner", watch.client_owner}, {"started_ms", watch.started}, {"state", watch.state},
             {"reason", watch.reason}, {"cleanup_complete", watch.state != "running"},
             {"next_seq", watch.next_seq}, {"last_seq", watch.next_seq - 1},
             {"oldest_seq", watch.events.empty() ? watch.next_seq : watch.events.front().at("seq").get<std::uint64_t>()},
@@ -155,6 +156,34 @@ const Observations::Watch& Observations::find(const std::string& owner, const Js
 }
 Observations::Watch& Observations::find(const std::string& owner, const Json& params) {
     return const_cast<Watch&>(std::as_const(*this).find(owner, params));
+}
+
+Observations::Json Observations::list(const std::string& connection_session,
+                                     const std::string& client_owner) const {
+    Json items=Json::array();
+    for(const auto& id:order_) {
+        const auto& watch=watches_.at(id);
+        if(watch.connection_session==connection_session)items.push_back(metadata(watch));
+    }
+    return {{"session_id",connection_session},{"current_client_owner",client_owner},{"items",std::move(items)}};
+}
+
+Observations::Json Observations::resume(const std::string& connection_session,
+                                       const std::string& new_client_owner, const Json& params) {
+    if(new_client_owner.empty())throw HandlerError("invalid_owner","Watch owner is missing");
+    const auto id=watch_id(params);
+    if(!params.contains("expected_session_id") || !params.at("expected_session_id").is_string()
+       || !params.contains("expected_client_owner") || !params.at("expected_client_owner").is_string())
+        throw HandlerError("invalid_watch_params","Expected session_id and client_owner must be strings");
+    const auto found=watches_.find(id);
+    if(found==watches_.end())throw HandlerError("unknown_watch","Watch does not exist in the current connection");
+    auto& watch=found->second;
+    if(watch.connection_session!=connection_session
+       || watch.connection_session!=params.at("expected_session_id").get_ref<const std::string&>()
+       || watch.client_owner!=params.at("expected_client_owner").get_ref<const std::string&>())
+        throw HandlerError("watch_resume_mismatch","Watch session or owner does not match the expected identity");
+    watch.client_owner=new_client_owner;
+    return metadata(watch);
 }
 
 Observations::Json Observations::read(const std::string& owner, const Json& params) const {
