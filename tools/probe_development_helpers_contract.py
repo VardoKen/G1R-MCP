@@ -20,7 +20,8 @@ from probe_scalar_out_contract import check_scalar
 from probe_vector_contract import check_parameter_vector_metadata
 
 HOST = "G1RMCPDevelopmentHelpers"
-VERSION = "1.0.0-dev.45"
+VERSION = "1.0.0-dev.46"
+HELPER_VERSION = "1.0.0-dev.46"
 METHODS = ("GetHelperVersion", "HasWorld", "GetVisibilityTraceChannel", "TraceImpactPoint")
 ENUM_PATH = "/Script/Engine.ETraceTypeQuery"
 
@@ -141,7 +142,7 @@ async def helper_exercise(call):
                 "arguments": {} if arguments is None else arguments, "expected_signature_token": tokens[name]})
         version = await invoke("GetHelperVersion")
         report["version_result"] = version
-        check_scalar(version, "StrProperty", VERSION)
+        check_scalar(version, "StrProperty", HELPER_VERSION)
         if version.get("cleanup_confirmed") is not True: raise ProbeError("probe_helper_cleanup", "Helper version FString return cleanup не подтверждена")
         world = await invoke("HasWorld")
         report["world_result"] = world

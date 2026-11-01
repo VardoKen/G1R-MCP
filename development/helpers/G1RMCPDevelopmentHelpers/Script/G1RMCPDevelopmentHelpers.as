@@ -5,7 +5,15 @@ class UG1RMCPDevelopmentHelpers : UScriptWorldSubsystem
     UFUNCTION(BlueprintCallable)
     FString GetHelperVersion()
     {
-        return "1.0.0-dev.40";
+        return "1.0.0-dev.46";
+    }
+
+    UFUNCTION(BlueprintCallable)
+    FString ReadText(UTextBlock Widget)
+    {
+        if (Widget == nullptr)
+            return "";
+        return Widget.GetText().ToString();
     }
 
     UFUNCTION(BlueprintCallable)

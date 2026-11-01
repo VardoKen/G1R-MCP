@@ -222,7 +222,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                   "helpers": {"relative_package": "development/helpers/G1RMCPDevelopmentHelpers",
                                               "class": "/Script/Angelscript.G1RMCPDevelopmentHelpers",
                                               "requires": "explicit_companion_package_and_live_world_instance",
-                                              "functions": ["GetHelperVersion", "HasWorld", "GetVisibilityTraceChannel", "TraceImpactPoint"]}},
+                                              "functions": ["GetHelperVersion", "ReadText", "HasWorld", "GetVisibilityTraceChannel", "TraceImpactPoint"]}},
             "compiler_reports": {"tool": "g1r_compile_diagnostics", "implemented": True,
                                  "source": "native_formatter_or_caller_selected_workspace_file", "compiler_api_available": True,
                                  "absence_of_errors_proves_compile": False},

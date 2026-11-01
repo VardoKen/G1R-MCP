@@ -45,7 +45,9 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(initialized.server_info.version, __version__)
                     tools = (await client.list_tools()).tools
                     names = {tool.name for tool in tools}
-                    self.assertEqual(len(names), 38)
+                    self.assertEqual(len(names), 41)
+                    source_tools = {"g1r_source_identity", "g1r_verify_source_game", "g1r_list_source_functions"}
+                    self.assertTrue(source_tools.issubset(names))
                     mutations = {"g1r_invoke", "g1r_native_enable", "g1r_create_package",
                                  "g1r_write_package_file", "g1r_watch_start", "g1r_watch_stop", "g1r_watch_forget",
                                  "g1r_development_start", "g1r_development_stop", "g1r_native_load",
@@ -61,6 +63,11 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(status.structured_content["sources"]["revision_source"], "caller_label")
 
                     capabilities = await client.call_tool("g1r_capabilities", {})
+                    self.assertFalse(capabilities.is_error)
+                    self.assertTrue(source_tools.issubset({tool["name"] for tool in
+                                                         capabilities.structured_content["local_tools"]}))
+                    helpers = capabilities.structured_content["development_tools"]["helpers"]
+                    self.assertIn("ReadText", helpers["functions"])
                     self.assertTrue(all(not group["available"] for group in capabilities.structured_content["game_groups"]))
                     found = await client.call_tool("g1r_find_source_files", {"query": "Example"})
                     self.assertFalse(found.is_error)

@@ -6,6 +6,7 @@ import copy
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 from tests.test_hit_result_wrapper_probe import WrapperFixture
 from tests.test_development_mcp_probe import FakeMCP
@@ -60,7 +61,7 @@ class HelpersFixture(WrapperFixture):
             method = arguments["function"]
             if arguments["expected_signature_token"] != self.helper_tokens[method]: raise AssertionError("helper token")
             if method == "GetHelperVersion":
-                return {"executed": True, "return_type": "StrProperty", "result": "wrong" if self.bad_version else probe.VERSION, "cleanup_confirmed": True}
+                return {"executed": True, "return_type": "StrProperty", "result": "wrong" if self.bad_version else probe.HELPER_VERSION, "cleanup_confirmed": True}
             if method == "HasWorld": return {"executed": True, "return_type": "BoolProperty", "result": self.has_helper_world}
             if method == "GetVisibilityTraceChannel":
                 return {"executed": True, "return_type": "ByteProperty", "result": self.channel, "return_enum": {
@@ -74,6 +75,13 @@ class HelpersFixture(WrapperFixture):
 
 
 class DevelopmentHelpersProbeTests(unittest.TestCase):
+    def test_helper_version_is_independent_of_bridge_version(self):
+        fixture = HelpersFixture()
+        with patch.object(probe, "VERSION", "1.0.0-dev.47"):
+            report = asyncio.run(probe.helper_exercise(fixture.call))
+        self.assertEqual(report["version"], probe.HELPER_VERSION)
+        self.assertTrue(report["trace"]["tested"])
+
     def test_main_and_helper_distinct_live_classes_current_nonzero_channel(self):
         fixture = HelpersFixture(channel=7)
         report = asyncio.run(probe.exercise(fixture.call))
