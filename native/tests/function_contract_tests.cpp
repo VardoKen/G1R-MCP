@@ -50,13 +50,20 @@ int main() {
         reject("unknown_signature_token",[&]{checked_function_contract(saved,first,"native-2","obj-1","ReadMarker");});
         for(int i=0;i<255;++i){auto entry=base;entry["function_name"]="Other"+std::to_string(i);store_function_contract(saved,sequence,entry);}
         auto extra=base;extra["function_name"]="Overflow";
-        reject("signature_contract_limit",[&]{store_function_contract(saved,sequence,extra);});
-        require(saved.size()==256,"Лимит не должен удалять существующие токены");
-        auto oversized=base;oversized["message"]=std::string(MaxFunctionContractBytes,'x');
-        reject("signature_contract_too_large",[&]{store_function_contract(saved,sequence,oversized);});
-        const auto chain=capture_function_field_chain(1,[](std::uintptr_t pointer){return json{{"pointer",pointer},{"next",pointer<128?pointer+1:std::uintptr_t{0}},{"flags",pointer==1?0:0x80}};});
-        require(chain.size()==128 && chain[0]["flags"]==0,"128 полей включая не-Parm должны сохраняться");
-        reject("unsupported_signature",[&]{capture_function_field_chain(1,[](std::uintptr_t pointer){return json{{"next",pointer+1}};});});
+        const auto extra_token=store_function_contract(saved,sequence,extra);
+        require(saved.size()==257 && extra_token=="sig-258","257-й контракт должен получить новый токен без отзыва прежних");
+        require(checked_function_contract(saved,"sig-2","native-2","obj-1","ReadMarker")==new_session,
+                "Первый контракт сессии должен оставаться доступным после 257-го");
+        require(store_function_contract(saved,sequence,extra)==extra_token && saved.size()==257 && sequence==258,
+                "Повторный доступ после 256 контрактов не должен расходовать номер");
+        auto oversized=base;oversized["function_name"]="LargeContract";oversized["message"]=std::string(65537,'x');
+        const auto oversized_bytes=oversized.dump();
+        const auto oversized_token=store_function_contract(saved,sequence,oversized);
+        require(oversized_bytes.size()>65536 && checked_function_contract(saved,oversized_token,"native-1","obj-1","LargeContract").dump()==oversized_bytes,
+                "Контракт больше 64 КиБ должен сохранять полную сериализацию");
+        const auto chain=capture_function_field_chain(1,[](std::uintptr_t pointer){return json{{"pointer",pointer},{"next",pointer<129?pointer+1:std::uintptr_t{0}},{"flags",pointer==1?0:0x80}};});
+        require(chain.size()==129 && chain[0]["flags"]==0 && chain.back()["pointer"]==129 && chain.back()["next"]==std::uintptr_t{0},
+                "129 полей включая не-Parm должны сохраняться до точного конца цепочки");
         reject("unsupported_signature",[&]{capture_function_field_chain(1,[](std::uintptr_t){return json{{"next",std::uintptr_t{1}}};});});
         require(capture_function_field_chain(0,[](std::uintptr_t){return json{};}).empty(),"Пустая цепь допустима");
         const json class_aux={{"declared",{{"object",std::uint64_t{0x12345678}},{"name",99}}},

@@ -37,21 +37,28 @@ int main() {
         std::uint64_t sequence{};
         auto original=contract("ReadMarker");
         const auto first=store_function_contract(saved,sequence,original);
-        for(std::size_t index=1;index<MaxFunctionContracts;++index)
+        for(std::size_t index=1;index<257;++index)
             store_function_contract(saved,sequence,contract("Function"+std::to_string(index)));
+        require(saved.size()==257 && sequence==257,
+                "257 разных контрактов должны сохраняться без отзыва существующих токенов");
         const auto full=saved;
         const auto full_sequence=sequence;
         require(store_function_contract(saved,sequence,original)==first,
-                "Полная таблица должна сохранять повторный доступ к известному контракту");
+                "Большая таблица должна сохранять повторный доступ к известному контракту");
         require(saved==full && sequence==full_sequence,
-                "Повторное чтение не должно менять полную таблицу или счётчик");
-        reject("signature_contract_limit",[&]{store_function_contract(saved,sequence,contract("NewFunction"));});
-        require(saved==full && sequence==full_sequence,
-                "Отказ на лимите не должен удалять токены или расходовать номер");
-        auto too_large=original;too_large["payload"]=std::string(MaxFunctionContractBytes,'x');
-        reject("signature_contract_too_large",[&]{store_function_contract(saved,sequence,too_large);});
-        require(saved==full && sequence==full_sequence,
-                "Отказ размера должен оставлять прежнюю таблицу и счётчик");
+                "Повторное чтение не должно менять большую таблицу или счётчик");
+        auto large=contract("LargeFunction");large["payload"]=std::string(65537,'x');
+        const auto large_bytes=large.dump();
+        const auto large_token=store_function_contract(saved,sequence,large);
+        require(large_bytes.size()>65536 && saved.size()==258 && sequence==258,
+                "Контракт больше 64 КиБ должен сохраняться после 257 известных сигнатур");
+        require(checked_function_contract(saved,large_token,"session-1","obj-1","LargeFunction").dump()==large_bytes,
+                "Чтение большого контракта должно возвращать всю сериализацию без сокращения");
+        require(store_function_contract(saved,sequence,large)==large_token && saved.size()==258 && sequence==258,
+                "Повторный большой контракт должен переиспользовать токен");
+        large["payload"].get_ref<std::string&>()[0]='y';
+        require(checked_function_contract(saved,large_token,"session-1","obj-1","LargeFunction").dump()==large_bytes,
+                "Сохранённый большой контракт должен оставаться независимой копией");
 
         // Сохранённый контракт — собственная копия. Изменение исходного JSON не меняет выданный токен.
         original["fields"][0]["flags"]=std::uint64_t{0x80};
@@ -78,12 +85,11 @@ int main() {
                 "Очистка сессии не должна сбрасывать исчерпанную монотонную последовательность");
 
         int reads{};
-        reject("unsupported_signature",[&]{
-            capture_function_field_chain(1,[&](std::uintptr_t pointer){
-                ++reads;return json{{"next",pointer+1}};
-            });
+        const auto chain=capture_function_field_chain(1,[&](std::uintptr_t pointer){
+            ++reads;return json{{"pointer",pointer},{"next",pointer<129?pointer+1:std::uintptr_t{0}}};
         });
-        require(reads==128,"129-е поле не должно читаться после достижения бюджета");
+        require(reads==129 && chain.size()==129 && chain.back()["pointer"]==129 && chain.back()["next"]==std::uintptr_t{0},
+                "129-я запись должна читаться и завершать конечную цепочку");
         reads=0;
         reject("unsupported_signature",[&]{
             capture_function_field_chain(1,[&](std::uintptr_t pointer){

@@ -400,7 +400,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.46"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.47"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
@@ -1275,7 +1275,7 @@ json GameAccess::functions(void* object,int limit,const std::string& query,const
             json parameters=json::array();auto parameter=read<uintptr_t>(field+0x50);
             std::set<uintptr_t> visited_parameters;bool parameters_truncated=false;
             for(;parameter;parameter=read<uintptr_t>(parameter+0x18)) {
-                if(visited_parameters.size()>=128 || !visited_parameters.insert(parameter).second){parameters_truncated=true;break;}
+                if(!visited_parameters.insert(parameter).second){parameters_truncated=true;break;}
                 const auto pf=read<uint64_t>(parameter+0x38);if(!(pf&0x80))continue;
                 const auto parameter_type=field_type(parameter,[this](auto f){return name(f);});
                 parameters.push_back({{"name",name(read<uint64_t>(parameter+0x20))},
@@ -1345,8 +1345,8 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     auto parameter=read<uintptr_t>(function+0x50);
     int extent=bytes;
     for(;parameter;parameter=read<uintptr_t>(parameter+0x18)) {
-        if(visited_fields.size()>=128 || !visited_fields.insert(parameter).second)
-            throw HandlerError("unsupported_signature","Цепочка отражённых параметров превысила предел или содержит цикл");
+        if(!visited_fields.insert(parameter).second)
+            throw HandlerError("unsupported_signature","Цепочка отражённых параметров содержит цикл");
         const auto flags=read<uint64_t>(parameter+0x38);
         if(!(flags&0x80))continue;
         extent=parameter_extent(extent,read<int32_t>(parameter+0x44),
