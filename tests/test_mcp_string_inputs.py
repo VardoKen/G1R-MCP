@@ -17,7 +17,7 @@ class MCPStringInputTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_const_string_unicode_empty_cleanup_errors_and_no_retry(self):
         handle = "obj-string-probe"
-        constraints = {"max_utf16_units": 32767, "embedded_nul": "rejected", "ownership": "engine_owned_copy"}
+        constraints = {"max_utf16_units": 2147483646, "embedded_nul": "rejected", "ownership": "engine_owned_copy"}
         functions = {"items": [{"name": "EchoString", "signature_token": "sig-70", "signature_status": "supported",
                      "parameter_count": 2, "parameter_size": 32, "parameters": [
                          {"name": "Input", "type": "StrProperty", "element_size": 16, "array_dim": 1,
@@ -27,7 +27,7 @@ class MCPStringInputTests(unittest.IsolatedAsyncioTestCase):
                          {"name": "ReturnValue", "type": "StrProperty", "element_size": 16, "array_dim": 1,
                           "offset": 16, "flags": 0x80 | 0x400, "return": True, "out": False,
                           "reference": False, "const": False}]}], "truncated": False}
-        strings = ["", "Привет, мир — Ёж", "Мод 🐉🙂", "🙂" * 16383 + "я"]
+        strings = ["", "Привет, мир — Ёж", "Мод 🐉🙂", "🙂" * 32768]
         results = [{"function": "EchoString", "return_type": "StrProperty", "result": value,
                     "executed": True, "thread_id": 456, "cleanup_confirmed": True,
                     "input_cleanup_confirmed": True} for value in strings]
@@ -41,11 +41,11 @@ class MCPStringInputTests(unittest.IsolatedAsyncioTestCase):
         for value, result in zip(strings, results):
             steps.append({"op": "invoke", "params": {"handle": handle, "function": "EchoString",
                           "arguments": {"Input": value}, "expected_signature_token": "sig-70"}, "result": result})
-        rejected = [("до\x00после", "invalid_argument"), ("🙂" * 16384, "invalid_argument")]
+        rejected = [("до\x00после", "invalid_argument"), ({"text": "строка"}, "invalid_argument")]
         for value, code in rejected:
             steps.append({"op": "invoke", "params": {"handle": handle, "function": "EchoString",
                           "arguments": {"Input": value}, "expected_signature_token": "sig-70"},
-                          "error": {"code": code, "message": "FString input не проходит ограничение",
+                          "error": {"code": code, "message": "FString input имеет недопустимую форму",
                                     "details": no_effect}})
         steps.extend([
             {"op": "invoke", "params": {"handle": handle, "function": "EchoString",
@@ -91,7 +91,7 @@ class MCPStringInputTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(received, value)
                         self.assertIs(type(received), str)
                         self.assertEqual(received.encode("utf-16-le"), value.encode("utf-16-le"))
-                    self.assertEqual(len(strings[-1].encode("utf-16-le")) // 2, 32767)
+                    self.assertEqual(len(strings[-1].encode("utf-16-le")) // 2, 65536)
                     for offset, (value, code) in enumerate(rejected):
                         response = await client.call_tool("g1r_invoke", {"handle": handle, "function": "EchoString",
                             "arguments": {"Input": value}, "expected_signature_token": token})

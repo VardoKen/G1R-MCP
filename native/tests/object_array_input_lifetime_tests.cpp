@@ -34,36 +34,41 @@ int main() {
     static_assert(!std::is_move_constructible_v<Ledger> && !std::is_move_assignable_v<Ledger>);
     static_assert(sizeof(std::uintptr_t)==8);
     try {
-        {InputBudget budget;for(int i=0;i<32;++i)budget.add(32);
-            require(budget.input_count()==32 && budget.allocation_bytes()==8192,"32 массива по 32 указателя занимают ровно 8192 байта");
-            reject("array_budget_exceeded",[&]{budget.add(0);});
-            require(budget.input_count()==32 && budget.allocation_bytes()==8192,"Отказ 33-го массива сохраняет полный бюджет");}
-        {InputBudget budget;for(int i=0;i<32;++i)budget.add(0);
-            require(budget.input_count()==32 && budget.allocation_bytes()==0,"Пустые массивы занимают слот без выделения памяти");
-            reject("array_budget_exceeded",[&]{budget.add(0);});
-            require(budget.input_count()==32 && budget.allocation_bytes()==0,"Отказ сохраняет бюджет пустых массивов");}
-        for(const auto count:std::array<std::size_t,2>{33,std::numeric_limits<std::size_t>::max()}) {
-            InputBudget budget;budget.add(1);reject("array_budget_exceeded",[&]{budget.add(count);});
-            require(budget.input_count()==1 && budget.allocation_bytes()==8,"Неподдерживаемая длина отвергается до расчёта и изменения бюджета");
+        {InputBudget budget;for(int i=0;i<65;++i)budget.add(257);
+            require(budget.input_count()==65 && budget.allocation_bytes()==65*257*8,
+                    "Количество массивов, элементов и байтов превышает прежние пределы");
+            budget.add(0);
+            require(budget.input_count()==66 && budget.allocation_bytes()==65*257*8,
+                    "Пустой массив после крупных входов не приобретает память");}
+        {InputBudget budget;for(int i=0;i<65;++i)budget.add(0);
+            require(budget.input_count()==65 && budget.allocation_bytes()==0,"Пустые массивы не имеют предела 32 входа");}
+        {InputBudget budget;const auto count=static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max());
+            budget.add(count);
+            require(budget.input_count()==1 && budget.allocation_bytes()==count*8,"Максимальный int32 count представим без искусственного бюджета");}
+        for(const auto count:std::array<std::size_t,2>{static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())+1,
+                std::numeric_limits<std::size_t>::max()}) {
+            InputBudget budget;budget.add(1);reject("invalid_array_count",[&]{budget.add(count);});
+            require(budget.input_count()==1 && budget.allocation_bytes()==8,"Длина за int32 отвергается до расчёта и изменения учёта");
         }
 
-        {Ledger ledger;for(int i=0;i<32;++i)ledger.add_input({0,0,0},0);
-            require(ledger.input_count()==32 && ledger.allocation_count()==0 && ledger.allocation_bytes()==0,"32 пустых массива не приобретают allocation");
+        {Ledger ledger;ledger.reserve_inputs(65);for(int i=0;i<65;++i)ledger.add_input({0,0,0},0);
+            require(ledger.input_count()==65 && ledger.allocation_count()==0 && ledger.allocation_bytes()==0,"65 пустых массивов не приобретают allocation");
             int calls{};const auto cleanup=ledger.release([&](std::uintptr_t){++calls;return true;});
             require(!cleanup.attempted && cleanup.confirmed && !cleanup.uncertain && cleanup.released_count==0 && calls==0,
                     "Все пустые массивы очищаются без allocator");}
         {Ledger ledger;const auto cleanup=ledger.release([](std::uintptr_t)->bool {throw std::runtime_error("Неожиданный Free");});
             require(cleanup.confirmed && !cleanup.attempted && !cleanup.uncertain,"Ledger без inputs не вызывает Free");}
-        {Ledger ledger;for(int i=0;i<32;++i)ledger.add_input({std::uintptr_t{0x1000}+static_cast<std::uintptr_t>(i)*256,32,32},32);
-            require(ledger.input_count()==32 && ledger.allocation_count()==32 && ledger.allocation_bytes()==8192,"Смежные буферы на точной границе бюджета допустимы");
+        {Ledger ledger;ledger.reserve_inputs(65);for(int i=0;i<65;++i)ledger.add_input({std::uintptr_t{0x1000}+static_cast<std::uintptr_t>(i)*2056,257,257},257);
+            require(ledger.input_count()==65 && ledger.allocation_count()==65 && ledger.allocation_bytes()==65*257*8,
+                    "65 смежных буферов по 257 элементов превышают 8192 байта");
             std::vector<std::uintptr_t> released;
             const auto cleanup=ledger.release([&](std::uintptr_t pointer){released.push_back(pointer);return true;});
-            require(cleanup.confirmed && cleanup.released_count==32 && released.size()==32,"Все 32 самостоятельных буфера освобождаются один раз");
-            for(int i=0;i<32;++i)require(released[static_cast<std::size_t>(i)]==std::uintptr_t{0x1000}+static_cast<std::uintptr_t>(i)*256,
+            require(cleanup.confirmed && cleanup.released_count==65 && released.size()==65,"Все 65 самостоятельных буферов освобождаются один раз");
+            for(int i=0;i<65;++i)require(released[static_cast<std::size_t>(i)]==std::uintptr_t{0x1000}+static_cast<std::uintptr_t>(i)*2056,
                     "Free получает адрес буфера, принятый от allocator");
             require(ledger.retained_count()==0 && ledger.retained_bytes()==0,"Успешная очистка исключает все буферы из retained");
             const auto again=ledger.release([&](std::uintptr_t pointer){released.push_back(pointer);return true;});
-            require(again.confirmed && !again.attempted && again.released_count==32 && released.size()==32,"Повторная очистка не повторяет Free");}
+            require(again.confirmed && !again.attempted && again.released_count==65 && released.size()==65,"Повторная очистка не повторяет Free");}
 
         {alignas(8) std::array<std::uintptr_t,3> first{0x9000,0x9000,0xa000};
             alignas(8) std::array<std::uintptr_t,2> second{0x9000,0xa000};
@@ -103,16 +108,17 @@ int main() {
         {Ledger ledger;ledger.add_input({std::numeric_limits<std::uintptr_t>::max()-15,1,1},1);
             const auto cleanup=ledger.release([](std::uintptr_t){return true;});
             require(cleanup.confirmed && cleanup.released_count==1,"Последний непереполняющийся выровненный диапазон допустим");}
-        for(const auto count:std::array<std::size_t,2>{33,std::numeric_limits<std::size_t>::max()}) {
-            Ledger ledger;ledger.add_input({0x1000,1,1},1);reject("array_budget_exceeded",[&]{ledger.add_input({0x2000,1,1},count);});
+        for(const auto count:std::array<std::size_t,2>{static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())+1,
+                std::numeric_limits<std::size_t>::max()}) {
+            Ledger ledger;ledger.add_input({0x1000,1,1},1);reject("invalid_array_header",[&]{ledger.add_input({0x2000,1,1},count);});
             require(ledger.input_count()==1 && ledger.retained_bytes()==8,"Отказ длины сохраняет предыдущий input");no_free(ledger);
         }
-        {Ledger ledger;for(int i=0;i<32;++i)ledger.add_input({0,0,0},0);
-            reject("array_budget_exceeded",[&]{ledger.add_input({0,0,0},0);});
-            require(ledger.input_count()==32 && ledger.retained_count()==0,"33-й пустой input не создаёт allocation");no_free(ledger);}
-        {Ledger ledger;for(int i=0;i<32;++i)ledger.add_input({std::uintptr_t{0x1000}+static_cast<std::uintptr_t>(i)*256,32,32},32);
-            reject("array_budget_exceeded",[&]{ledger.add_input({0x4000,1,1},1);});
-            require(ledger.input_count()==32 && ledger.retained_count()==32 && ledger.retained_bytes()==8192,"Отказ после полного бюджета карантинирует все известные буферы");no_free(ledger);}
+        {Ledger ledger;ledger.reserve_inputs(66);for(int i=0;i<65;++i)ledger.add_input({0,0,0},0);
+            ledger.add_input({0x1000,1,1},1);
+            ledger.validate_unchanged_input(65,{0x1000,1,1});
+            require(ledger.input_count()==66 && ledger.retained_count()==1,"Вход после 65 пустых массивов сохраняет правильный индекс");
+            int calls{};const auto cleanup=ledger.release([&](std::uintptr_t pointer){++calls;return pointer==0x1000;});
+            require(cleanup.confirmed && calls==1 && ledger.retained_count()==0,"Освобождается только единственный выделенный буфер");}
 
         for(const bool throws:{false,true}) {
             Ledger ledger;ledger.add_input({0x1000,1,1},1);ledger.add_input({0x2000,2,2},2);

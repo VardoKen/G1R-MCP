@@ -2,26 +2,23 @@
 
 #include <g1r_mcp/string_arguments.hpp>
 #include <g1r_mcp/string_return.hpp>
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <limits>
 #include <utility>
+#include <vector>
 
 namespace g1r_mcp::string_input_lifetime {
-
-inline constexpr std::size_t max_inputs = 32;
-inline constexpr std::size_t max_input_bytes = 256 * 1024;
 
 class InputBudget {
 public:
     void add(std::size_t units) {
-        if (units > string_arguments::max_utf16_units || count_ >= max_inputs)
-            throw HandlerError("string_budget_exceeded", "Превышен предел количества или длины FString входов");
+        if (units > string_arguments::max_utf16_units)
+            throw HandlerError("invalid_argument", "FString с терминатором не помещается в int32");
         const auto bytes = (units + 1) * sizeof(char16_t);
-        if (bytes > max_input_bytes - bytes_)
-            throw HandlerError("string_budget_exceeded", "FString входы превышают 256 КиБ");
+        if (bytes > std::numeric_limits<std::size_t>::max() - bytes_)
+            throw HandlerError("string_size_overflow", "Размер памяти FString не помещается в size_t");
         ++count_;
         bytes_ += bytes;
     }
@@ -50,18 +47,26 @@ public:
     Ledger(Ledger&&) = delete;
     Ledger& operator=(Ledger&&) = delete;
 
+    // Выделение host-памяти выполняется до создания первого игрового FString.
+    void prepare(std::size_t input_count) {
+        inputs_.resize(input_count);
+        allocations_.resize(input_count+1);
+    }
+
     void add_input(const StringHeader& header, std::size_t source_units) {
         if (uncertain_) throw_unknown();
         if (release_started_) fail("string_lifetime_unknown", "FString нельзя регистрировать после начала очистки");
-        if (input_count_ >= max_inputs || source_units > string_arguments::max_utf16_units)
-            fail("string_budget_exceeded", "Превышен предел FString входов");
+        if (source_units > string_arguments::max_utf16_units)
+            fail("invalid_argument", "FString с терминатором не помещается в int32");
+        if (input_count_ >= inputs_.size())
+            fail("string_lifetime_unknown", "Учёт FString входов не подготовлен до создания строки");
         validate_owned_header(header);
         const auto expected_count = source_units ? static_cast<std::int32_t>(source_units + 1) : 0;
         if (header.count != expected_count || (!source_units && (header.data || header.capacity)))
             fail("string_lifetime_unknown", "Конструктор FString вернул неожиданную длину");
         const auto bytes = allocation_size(header);
-        if (bytes > max_input_bytes - input_bytes_)
-            fail("string_budget_exceeded", "Выделенные FString входы превышают 256 КиБ");
+        if (bytes > std::numeric_limits<std::size_t>::max() - input_bytes_)
+            fail("string_size_overflow", "Размер памяти FString не помещается в size_t");
         if (header.data) add_allocation(header, false);
         inputs_[input_count_++] = header;
         input_bytes_ += bytes;
@@ -118,8 +123,8 @@ public:
 
 private:
     struct Allocation {StringHeader header{};bool released{};};
-    std::array<StringHeader,max_inputs> inputs_{};
-    std::array<Allocation,max_inputs+1> allocations_{};
+    std::vector<StringHeader> inputs_;
+    std::vector<Allocation> allocations_;
     std::size_t input_count_{},input_bytes_{},allocation_count_{},allocation_bytes_{};
     std::size_t released_count_{},released_bytes_{};
     bool uncertain_{},return_added_{},release_started_{};

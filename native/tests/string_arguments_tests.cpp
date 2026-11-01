@@ -61,23 +61,24 @@ int main() {
         for(const auto& wrong:std::vector<json>{nullptr,true,false,0,-1,1.0,json::array(),json::object(),json{{"text","str"}}})
             reject([&]{string_arguments::encode(wrong);});
 
-        constexpr auto limit=string_arguments::max_utf16_units;
-        const std::string boundary(limit,'a');
-        require(string_arguments::encode(json(boundary)).size()==limit,"Максимум UTF-16 units должен приниматься без усечения");
-        reject([&]{string_arguments::encode(json(boundary+"a"));});
-        // Для supplementary символа лимит считается по двум UTF-16 units, а не по байтам UTF-8.
-        std::string pairs;for(std::size_t i=0;i<limit/2;++i)pairs+=bytes({0xf0,0x9f,0x98,0x80});
+        static_assert(string_arguments::max_utf16_units==static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())-1);
+        constexpr std::size_t length=65536;
+        require(string_arguments::encode(json(std::string(length,'a'))).size()==length,
+                "Строка длиннее прежнего ограничения должна сохраняться без усечения");
+        std::string pairs;
+        for(std::size_t i=0;i<length/2;++i)pairs+=bytes({0xf0,0x9f,0x98,0x80});
         const auto accepted_pairs=string_arguments::encode(json(pairs));
-        require(accepted_pairs.size()==(limit/2)*2,"Surrogate pairs должны учитываться как две UTF-16 units");
-        require(string_arguments::encode(json(pairs+"a")).size()==limit,"Граница pairs плюс ASCII должна приниматься");
-        reject([&]{string_arguments::encode(json(pairs+bytes({0xf0,0x9f,0x98,0x80})));});
-        reject([&]{string_arguments::encode(json(pairs+"ab"));});
-        std::string cyrillic;for(std::size_t i=0;i<limit;++i)cyrillic+="я";
-        require(string_arguments::encode(json(cyrillic)).size()==limit,"UTF-8 byte count не должен заменять лимит UTF-16");
-        reject([&]{string_arguments::encode(json(cyrillic+"я"));});
-        std::string three_bytes;for(std::size_t i=0;i<limit;++i)three_bytes+=bytes({0xe0,0xa0,0x80});
-        require(string_arguments::encode(json(three_bytes)).size()==limit,"Граница 98301 UTF-8 байт должна сохранять 32767 BMP units");
-        reject([&]{string_arguments::encode(json(three_bytes+"a"));});
+        require(accepted_pairs.size()==length && accepted_pairs.front()==0xd83d && accepted_pairs.back()==0xde00,
+                "Длинная Unicode строка должна сохранять surrogate pairs");
+        require(string_arguments::encode(json(pairs+"a")).size()==length+1,
+                "Дополнение длинной строки не должно возвращать искусственный предел");
+        std::string cyrillic;
+        for(std::size_t i=0;i<length;++i)cyrillic+="я";
+        require(string_arguments::encode(json(cyrillic)).size()==length,
+                "Длинная кириллица должна сохраняться независимо от размера UTF-8");
+        std::string three_bytes;
+        for(std::size_t i=0;i<length;++i)three_bytes+=bytes({0xe0,0xa0,0x80});
+        require(string_arguments::encode(json(three_bytes)).size()==length,"Длинные BMP символы не должны усекаться");
         std::cout<<"string_arguments: "<<checks<<" checks passed\n";return 0;
     } catch(const std::exception& error) {std::cerr<<error.what()<<"\n";return 1;}
 }

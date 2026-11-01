@@ -76,11 +76,11 @@ template<class Ledger,class Result,class Setup> void uncertain_case(Setup&& setu
 
 int main() {
     try {
-        const auto one_string=[](strings::Ledger& ledger){ledger.add_input({0x1000,2,4},1);};
-        const auto four_strings=[](strings::Ledger& ledger){ledger.add_input({0x1000,2,4},1);ledger.add_input({0x2000,2,4},1);
+ const auto one_string=[](strings::Ledger& ledger){ledger.prepare(1);ledger.add_input({0x1000,2,4},1);};
+ const auto four_strings=[](strings::Ledger& ledger){ledger.prepare(3);ledger.add_input({0x1000,2,4},1);ledger.add_input({0x2000,2,4},1);
             ledger.add_input({0x3000,2,4},1);ledger.add_return({0x4000,2,4});};
-        const auto one_array=[](arrays::Ledger& ledger){ledger.add_input({0x1000,1,1},1);};
-        const auto four_arrays=[](arrays::Ledger& ledger){ledger.add_input({0x1000,1,1},1);ledger.add_input({0x2000,2,2},2);
+ const auto one_array=[](arrays::Ledger& ledger){ledger.reserve_inputs(1);ledger.add_input({0x1000,1,1},1);};
+ const auto four_arrays=[](arrays::Ledger& ledger){ledger.reserve_inputs(4);ledger.add_input({0x1000,1,1},1);ledger.add_input({0x2000,2,2},2);
             ledger.add_input({0x3000,3,3},3);ledger.add_input({0x4000,4,4},4);};
         for(const auto failure:std::array<Failure,2>{Failure::false_result,Failure::exception}) {
             cleanup_case<strings::Ledger,strings::Cleanup>(one_string,failure,0,1,8);
@@ -90,14 +90,14 @@ int main() {
         }
         cleanup_case<strings::Ledger,strings::Cleanup>(one_string,Failure::none,0,1,0);
         cleanup_case<arrays::Ledger,arrays::Cleanup>(four_arrays,Failure::none,0,4,0);
-        cleanup_case<strings::Ledger,strings::Cleanup>([](strings::Ledger& ledger){ledger.add_input({0,0,0},0);ledger.add_return({0,0,0});},Failure::none,0,0,0);
-        cleanup_case<arrays::Ledger,arrays::Cleanup>([](arrays::Ledger& ledger){ledger.add_input({0,0,0},0);},Failure::none,0,0,0);
+ cleanup_case<strings::Ledger,strings::Cleanup>([](strings::Ledger& ledger){ledger.prepare(1);ledger.add_input({0,0,0},0);ledger.add_return({0,0,0});},Failure::none,0,0,0);
+ cleanup_case<arrays::Ledger,arrays::Cleanup>([](arrays::Ledger& ledger){ledger.reserve_inputs(1);ledger.add_input({0,0,0},0);},Failure::none,0,0,0);
         uncertain_case<strings::Ledger,strings::Cleanup>(four_strings,4,32);
         uncertain_case<arrays::Ledger,arrays::Cleanup>(four_arrays,4,80);
         uncertain_case<strings::Ledger,strings::Cleanup>([](strings::Ledger&){},0,0);
         uncertain_case<arrays::Ledger,arrays::Cleanup>([](arrays::Ledger&){},0,0);
         {alignas(8) std::array<std::uintptr_t,3> objects{0x9000,0x9000,0xa000};
-            const auto pointer=reinterpret_cast<std::uintptr_t>(objects.data());arrays::Ledger ledger;ledger.add_input({pointer,3,3},3);
+ const auto pointer=reinterpret_cast<std::uintptr_t>(objects.data());arrays::Ledger ledger;ledger.reserve_inputs(1);ledger.add_input({pointer,3,3},3);
             ArrayOnce once;std::vector<std::uintptr_t> released;
             auto cleanup=[&]() noexcept -> arrays::Cleanup {return ledger.release([&](std::uintptr_t buffer){released.push_back(buffer);return true;});};
             const auto first=once.run(cleanup);const auto second=once.run(cleanup);

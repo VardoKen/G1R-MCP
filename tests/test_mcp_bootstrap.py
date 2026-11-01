@@ -109,6 +109,14 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIsNone(source_types["items"][0]["base_type"])
                     self.assertEqual(source_types["items"][0]["file_sha256"], hashlib.sha256(before).hexdigest())
                     self.assertEqual(catalog["function_parameter_types"]["enum_entry_fields"], ["name", "value"])
+                    string_input = catalog["invoke_arguments"]["string"]
+                    self.assertIsNone(string_input["max_inputs"])
+                    self.assertIsNone(string_input["max_allocated_input_bytes"])
+                    self.assertEqual(string_input["max_utf16_units"], 2147483646)
+                    array_input = catalog["invoke_arguments"]["object_array"]
+                    self.assertIsNone(array_input["max_inputs"])
+                    self.assertIsNone(array_input["max_allocated_input_bytes"])
+                    self.assertEqual(array_input["max_elements"], 2147483647)
                     functions = await self.call_ok(client, "g1r_list_source_functions", {
                         "query": "ReadValue", "relative_path": "Script/Official.as", "limit": 500, "offset": 0})
                     self.assertEqual(functions["parser_kind"], "lexical")

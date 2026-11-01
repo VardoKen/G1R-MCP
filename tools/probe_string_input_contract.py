@@ -21,7 +21,7 @@ HOST = "G1RMCPStringInputProbe"
 MARKER = 211
 METHODS = ("ReadMarker", "ReadCallsCount", "ResetProbe", "ReadInputLength", "ReadEcho", "ConcatInputs")
 SAMPLES = ("", "Bridge", "Готика", "A😀Б")
-CONSTRAINTS = {"max_utf16_units": 32767, "embedded_nul": "rejected", "ownership": "engine_owned_copy"}
+CONSTRAINTS = {"max_utf16_units": 2147483646, "embedded_nul": "rejected", "ownership": "engine_owned_copy"}
 
 
 def utf16_units(text: str) -> int:

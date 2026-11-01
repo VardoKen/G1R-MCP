@@ -20,7 +20,7 @@ class HTTPObjectArrayInputTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_const_array_metadata_cleanup_and_no_effect_errors_share_one_connection(self):
         handle, peer, token = "obj-http-array-input", "obj-http-array-peer", "sig-82"
-        values = [{"handle": handle}, None, {"handle": handle}, {"handle": peer}]
+        values = [{"handle": handle}, None, {"handle": handle}, {"handle": peer}] + [{"handle": peer}] * 61
         arguments = {"Input": values, "Count": {"out": True}}
         array_metadata = {
             "inner_type": "ObjectProperty", "inner_element_size": 8,
@@ -28,7 +28,7 @@ class HTTPObjectArrayInputTests(unittest.IsolatedAsyncioTestCase):
             "property_class": {"path": "/Script/Fixture.Fixture", "name": "Fixture"},
         }
         constraints = {
-            "max_elements": 32, "element_form": "null_or_handle",
+            "max_elements": 2147483647, "element_form": "null_or_handle",
             "ownership": "engine_owned_pointer_copy",
         }
         reflection = {"items": [{
@@ -51,7 +51,7 @@ class HTTPObjectArrayInputTests(unittest.IsolatedAsyncioTestCase):
         }]}
         result = {
             "function": "CheckObjects", "return_type": "BoolProperty", "result": True,
-            "out_parameters": {"Count": 4},
+            "out_parameters": {"Count": len(values)},
             "out_parameter_metadata": {
                 "Count": {"type": "IntProperty", "element_size": 4, "array_dim": 1},
             },
@@ -61,7 +61,7 @@ class HTTPObjectArrayInputTests(unittest.IsolatedAsyncioTestCase):
         no_effect = {"executed": False, "may_have_executed": False, "do_not_retry": False}
         status = {"ready": True, "session_id": "fixture-session-1", "tick_count": 122}
         refused = [
-            ("CheckObjects", {"Input": [None] * 33, "Count": {"out": True}},
+            ("CheckObjects", {"Input": {"elements": [None]}, "Count": {"out": True}},
              token, "invalid_argument"),
             ("CheckObjects", {"Input": [{"handle": handle}, "raw-string"],
                               "Count": {"out": True}}, token, "invalid_object_argument"),
@@ -157,7 +157,7 @@ class HTTPObjectArrayInputTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(invoked.get("isError", False), invoked)
                     self.assertEqual(invoked["structuredContent"], result)
                     self.assertIs(invoked["structuredContent"]["result"], True)
-                    self.assertEqual(invoked["structuredContent"]["out_parameters"]["Count"], 4)
+                    self.assertEqual(invoked["structuredContent"]["out_parameters"]["Count"], 65)
                     self.assertIs(invoked["structuredContent"]["cleanup_confirmed"], True)
                     self.assertIs(invoked["structuredContent"]["array_input_cleanup_confirmed"], True)
                     for index, (function, malformed, expected_token, code) in enumerate(refused, 2):
@@ -181,11 +181,12 @@ class HTTPObjectArrayInputTests(unittest.IsolatedAsyncioTestCase):
                              ["functions", "invoke", "invoke", "invoke", "invoke", "status"])
             self.assertEqual(len({request["id"] for request in native.requests}), 6)
             transmitted = native.requests[1]["params"]["arguments"]["Input"]
+            self.assertEqual(len(transmitted), 65)
             self.assertEqual(transmitted, values)
             self.assertIsNone(transmitted[1])
             self.assertEqual(transmitted[0], transmitted[2])
             self.assertEqual(transmitted[3], {"handle": peer})
-            self.assertEqual(len(native.requests[2]["params"]["arguments"]["Input"]), 33)
+            self.assertEqual(native.requests[2]["params"]["arguments"]["Input"], {"elements": [None]})
             self.assertEqual(native.requests[3]["params"]["arguments"]["Input"][1], "raw-string")
             self.assertEqual(native.requests[4]["params"]["arguments"]["Text"], "Готика")
             self.assertEqual(source.read_bytes(), original)

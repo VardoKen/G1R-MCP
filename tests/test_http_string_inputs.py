@@ -20,6 +20,8 @@ class HTTPStringInputTests(unittest.IsolatedAsyncioTestCase):
     async def test_unicode_input_const_metadata_cleanup_and_nul_error_keep_shared_connection(self):
         handle, token = "obj-http-string-input", "sig-70"
         text = "Готика 🐉 — мир\nстрока"
+        text += "🙂" * ((65536 - len(text.encode("utf-16-le")) // 2) // 2)
+        text += "я" * (65536 - len(text.encode("utf-16-le")) // 2)
         utf16_units = len(text.encode("utf-16-le")) // 2
         arguments = {"Input": text, "Length": {"out": True}}
         reflection = {"items": [{"name": "EchoWithLength", "signature_token": token,
@@ -27,7 +29,7 @@ class HTTPStringInputTests(unittest.IsolatedAsyncioTestCase):
                 {"name": "Input", "type": "StrProperty", "offset": 0, "element_size": 16,
                  "array_dim": 1, "flags": 0x182, "return": False, "out": True,
                  "reference": False, "const": True, "direction": "input", "passing": "const_reference",
-                 "argument_constraints": {"max_utf16_units": 32767, "embedded_nul": "rejected",
+                          "argument_constraints": {"max_utf16_units": 2147483646, "embedded_nul": "rejected",
                                           "ownership": "engine_owned_copy"}},
                 {"name": "Length", "type": "IntProperty", "element_size": 4, "array_dim": 1,
                  "flags": 0x180, "out": True, "reference": False, "const": False,
@@ -125,6 +127,7 @@ class HTTPStringInputTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(echoed.get("isError", False), echoed)
                     self.assertEqual(echoed["structuredContent"], result)
                     self.assertEqual(echoed["structuredContent"]["result"], text)
+                    self.assertEqual(utf16_units, 65536)
                     self.assertEqual(echoed["structuredContent"]["out_parameters"]["Length"], utf16_units)
                     self.assertIs(echoed["structuredContent"]["cleanup_confirmed"], True)
                     self.assertIs(echoed["structuredContent"]["input_cleanup_confirmed"], True)
@@ -145,6 +148,7 @@ class HTTPStringInputTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([request["op"] for request in native.requests], ["functions", "invoke", "invoke", "status"])
             self.assertEqual(len({request["id"] for request in native.requests}), 4)
             self.assertEqual(native.requests[1]["params"]["arguments"]["Input"], text)
+            self.assertEqual(native.requests[1]["params"]["arguments"]["Input"].encode("utf-16-le"), text.encode("utf-16-le"))
             self.assertEqual(native.requests[2]["params"]["arguments"]["Input"], "до\x00после")
             self.assertEqual(source.read_bytes(), original)
             self.assertEqual(list(workspace.iterdir()), [])

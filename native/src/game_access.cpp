@@ -221,7 +221,6 @@ std::string utf8(const wchar_t* value, int length) {
 }
 std::string copied_string(const g1r_mcp::StringHeader& header) {
     g1r_mcp::validate_string_header(header);
-    if(header.count>32768)throw HandlerError("string_too_large","FString превышает предел копирования");
     std::vector<wchar_t> text(static_cast<size_t>(header.count));
     if(header.count && !copy_memory(text.data(),reinterpret_cast<void*>(header.data),
                                    static_cast<size_t>(header.count)*sizeof(wchar_t)))
@@ -335,7 +334,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.37"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.38"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
             {"pump",{{"state",!observed?"not_observed":recent?"recent_tick":"tick_stale"},
                      {"last_tick_monotonic_ms",observed?json(observed):json(nullptr)},
@@ -350,12 +349,12 @@ json GameAccess::status() const {
                 {"quarantine_cause",string_inputs_quarantine_cause_.load()},
                 {"retained_allocations",string_inputs_retained_count_.load()},
                 {"retained_bytes",string_inputs_retained_bytes_.load()},
-                {"max_inputs",32},{"max_utf16_units",32767},{"max_input_bytes",262144}}},
+                {"max_inputs",nullptr},{"max_utf16_units",string_arguments::max_utf16_units},{"max_input_bytes",nullptr}}},
             {"object_array_inputs",{{"quarantined",object_array_inputs_quarantined_.load()},
                 {"quarantine_cause",object_array_inputs_quarantine_cause_.load()},
                 {"retained_allocations",object_array_inputs_retained_count_.load()},
                 {"retained_bytes",object_array_inputs_retained_bytes_.load()},
-                {"max_inputs",32},{"max_elements",32},{"max_input_bytes",8192}}},
+                {"max_inputs",nullptr},{"max_elements",std::numeric_limits<int32_t>::max()},{"max_input_bytes",nullptr}}},
             {"operations",{"status","enable_game","compile_diagnostics","objects","properties","functions","invoke","read_array","read_struct",
                            "snapshot","watch_start","watch_read","watch_stop","watch_forget"}},
             {"snapshot_limits",{{"objects",16},{"properties_per_object",32},{"scan_fields_per_object",4096},
@@ -1070,11 +1069,11 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         }
         if(type=="StrProperty" && !returned) {
             public_parameter["direction"]="input";public_parameter["passing"]="const_reference";
-            public_parameter["argument_constraints"]={{"max_utf16_units",32767},{"embedded_nul","rejected"},{"ownership","engine_owned_copy"}};
+            public_parameter["argument_constraints"]={{"max_utf16_units",string_arguments::max_utf16_units},{"embedded_nul","rejected"},{"ownership","engine_owned_copy"}};
         }
         if(!array_public.is_null()) {
             public_parameter["array"]=array_public;public_parameter["direction"]="input";public_parameter["passing"]="const_reference";
-            public_parameter["argument_constraints"]={{"max_elements",32},{"element_form","null_or_handle"},{"ownership","engine_owned_pointer_copy"}};
+            public_parameter["argument_constraints"]={{"max_elements",std::numeric_limits<int32_t>::max()},{"element_form","null_or_handle"},{"ownership","engine_owned_pointer_copy"}};
         }
         if(!color_public.is_null()) {
             public_parameter["struct"]=color_public;public_parameter["direction"]=returned?"return":"input";public_parameter["passing"]="value";
@@ -1393,7 +1392,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         }
     }
     struct ArrayElement {std::string handle;ObjectSerialIdentity identity{};uintptr_t pointer{};};
-    struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::string key;json metadata;std::vector<ArrayElement> elements;ArrayHeader header{};};
+    struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::string key;json metadata;std::vector<ArrayElement> elements;ArrayHeader header{};std::vector<uintptr_t> pointers;};
     std::vector<ObjectArrayInput> array_inputs;
     object_array_input_lifetime::Ledger array_ledger;
     bool array_cleanup_done=false;
@@ -1423,7 +1422,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
            || std::memcmp(free_bytes,kStringFreeBytes,sizeof(free_bytes)))
             throw HandlerError("unsupported_array_allocator","Подписи Realloc или Free объектного массива не совпадают");
         object_array_input_lifetime::InputBudget budget;
-        array_inputs.reserve(object_array_input_lifetime::max_arrays);
+        array_inputs.reserve(parameter_fields.size());
         for(const auto field:parameter_fields) {
             const auto flags=read<uint64_t>(field+0x38);
             if(field_type(field,[this](auto value){return name(value);})!="ArrayProperty")continue;
@@ -1431,11 +1430,12 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             const auto key=name(read<uint64_t>(field+0x20));
             if(!arguments.contains(key))throw HandlerError("missing_argument","Не задан Object array аргумент "+key);
             const auto& values=arguments.at(key);
-            if(!values.is_array() || values.size()>object_array_input_lifetime::max_elements)
-                throw HandlerError("invalid_argument","Object array требует JSON-массив не более 32 элементов");
+            if(!values.is_array())
+                throw HandlerError("invalid_argument","Object array требует JSON-массив");
             budget.add(values.size());
-            ObjectArrayInput input{field,read<int32_t>(field+0x44),flags,key,metadata,{},{}};
+            ObjectArrayInput input{field,read<int32_t>(field+0x44),flags,key,metadata,{},{},{}};
             input.elements.reserve(values.size());
+            input.pointers.resize(values.size());
             const auto declared=reinterpret_cast<void*>(metadata.at("property_class").get<uintptr_t>());
             for(const auto& value:values) {
                 auto handle=object_argument_handle(value);ArrayElement element{handle,{},0};
@@ -1449,6 +1449,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             }
             array_inputs.push_back(std::move(input));
         }
+        array_ledger.reserve_inputs(array_inputs.size());
         require_same_function_contract(pod_function_contract,capture_function_contract(object,function_owner,function,target_handle));
     }
     auto validate_array_elements=[&] {
@@ -1466,18 +1467,17 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     auto validate_array_inputs=[&] {
         if(!contains_object_array)return;
         for(size_t index=0;index<array_inputs.size();++index) {
-            const auto& input=array_inputs[index];ArrayHeader current{};
+            auto& input=array_inputs[index];ArrayHeader current{};
             if(!copy_memory(&current,buffer+input.offset,sizeof(current))) {
                 array_ledger.mark_uncertain();array_quarantine_cause=3;
                 throw HandlerError("array_lifetime_unknown","Заголовок Object array недоступен");
             }
             array_ledger.validate_unchanged_input(index,current);
-            std::array<uintptr_t,object_array_input_lifetime::max_elements> pointers{};
-            if(current.count && !copy_memory(pointers.data(),reinterpret_cast<void*>(current.data),input.elements.size()*sizeof(uintptr_t))) {
+            if(current.count && !copy_memory(input.pointers.data(),reinterpret_cast<void*>(current.data),input.elements.size()*sizeof(uintptr_t))) {
                 array_ledger.mark_uncertain();array_quarantine_cause=3;
                 throw HandlerError("array_lifetime_unknown","Байты Object array недоступны");
             }
-            for(size_t item=0;item<input.elements.size();++item)if(pointers[item]!=input.elements[item].pointer) {
+            for(size_t item=0;item<input.elements.size();++item)if(input.pointers[item]!=input.elements[item].pointer) {
                 array_ledger.mark_uncertain();array_quarantine_cause=3;
                 throw HandlerError("array_lifetime_unknown","Указатели const Object array изменились");
             }
@@ -1515,7 +1515,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
            || std::memcmp(free_bytes,kStringFreeBytes,sizeof(free_bytes)))
             throw HandlerError("unsupported_string_allocator","Подписи конструктора или освобождения FString не совпадают");
         string_input_lifetime::InputBudget budget;
-        string_inputs.reserve(string_input_lifetime::max_inputs);
+        string_inputs.reserve(parameter_fields.size());
         for(const auto field:parameter_fields) {
             const auto flags=read<uint64_t>(field+0x38);
             if((flags&0x400) || field_type(field,[this](auto value){return name(value);})!="StrProperty")continue;
@@ -1528,6 +1528,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             auto source=string_arguments::encode(arguments.at(key));budget.add(source.size());
             string_inputs.push_back({field,offset,flags,key,std::move(source),{}});
         }
+        string_ledger.prepare(string_inputs.size());
         require_same_function_contract(pod_function_contract,capture_function_contract(object,function_owner,function,target_handle));
     }
     auto validate_string_inputs=[&] {
@@ -1853,9 +1854,8 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         array_quarantine_cause=4;array_ledger.add_input(header,input.elements.size());
         extra_array_count=extra_array_bytes=0;array_quarantine_cause=0;input.header=header;
         if(count) {
-            std::array<uintptr_t,object_array_input_lifetime::max_elements> pointers{};
-            for(size_t index=0;index<input.elements.size();++index)pointers[index]=input.elements[index].pointer;
-            if(!copy_memory(reinterpret_cast<void*>(header.data),pointers.data(),static_cast<size_t>(count)*sizeof(uintptr_t)))
+            for(size_t index=0;index<input.elements.size();++index)input.pointers[index]=input.elements[index].pointer;
+            if(!copy_memory(reinterpret_cast<void*>(header.data),input.pointers.data(),static_cast<size_t>(count)*sizeof(uintptr_t)))
                 throw HandlerError("invalid_memory","Игровой буфер Object array недоступен для заполнения");
         }
         std::memcpy(buffer+input.offset,&header,sizeof(header));

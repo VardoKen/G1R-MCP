@@ -3,11 +3,12 @@
 #include <g1r_mcp/transport.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string>
 
 namespace g1r_mcp::string_arguments {
 
-inline constexpr std::size_t max_utf16_units = 32767;
+inline constexpr std::size_t max_utf16_units = static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())-1;
 
 // Буфер служит только источником копирования для подтверждённого конструктора.
 // Его указатель нельзя помещать непосредственно в игровой FString.
@@ -15,8 +16,6 @@ inline std::u16string encode(const nlohmann::json& value) {
     if (!value.is_string())
         throw HandlerError("invalid_argument", "FString требует строковый UTF-8 аргумент");
     const auto& input = value.get_ref<const std::string&>();
-    if (input.size() > max_utf16_units * 3)
-        throw HandlerError("invalid_argument", "FString превышает 32767 UTF-16 единиц");
     std::u16string result;
     result.reserve(input.size() < max_utf16_units ? input.size() : max_utf16_units);
     for (std::size_t offset = 0; offset < input.size();) {
@@ -53,7 +52,7 @@ inline std::u16string encode(const nlohmann::json& value) {
         if (!scalar) throw HandlerError("invalid_argument", "FString не принимает встроенный NUL");
         const auto units = scalar <= 0xffff ? 1u : 2u;
         if (result.size() > max_utf16_units - units)
-            throw HandlerError("invalid_argument", "FString превышает 32767 UTF-16 единиц");
+            throw HandlerError("invalid_argument", "FString с терминатором не помещается в int32");
         if (units == 1) result.push_back(static_cast<char16_t>(scalar));
         else {
             scalar -= 0x10000;

@@ -21,7 +21,7 @@ HOST = "G1RMCPObjectArrayInputProbe"
 MARKER = 221
 METHODS = ("ReadMarker", "ReadCallsCount", "ResetProbe", "ReadCount", "ReadNullCount", "ContainsSelf")
 INPUT_METHODS = ("ReadCount", "ReadNullCount", "ContainsSelf")
-CONSTRAINTS = {"max_elements": 32, "element_form": "null_or_handle", "ownership": "engine_owned_pointer_copy"}
+CONSTRAINTS = {"max_elements": 2147483647, "element_form": "null_or_handle", "ownership": "engine_owned_pointer_copy"}
 
 
 def check_array_metadata(metadata):

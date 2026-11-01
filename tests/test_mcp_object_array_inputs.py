@@ -18,10 +18,10 @@ class MCPObjectArrayInputTests(unittest.IsolatedAsyncioTestCase):
     async def test_const_pointer_array_metadata_order_boundaries_and_no_retry(self):
         handle = "obj-array-probe"
         element = {"handle": "obj-source"}
-        arrays = [[], [None, element, element, None], [element] * 32]
+        arrays = [[], [None, element, element, None], [element] * 65]
         array_metadata = {"inner_type": "ObjectProperty", "inner_element_size": 8, "inner_array_dim": 1,
                           "inner_offset": 0, "property_class": {"path": "/Script/CoreUObject.Object", "name": "Object"}}
-        constraints = {"max_elements": 32, "element_form": "null_or_handle", "ownership": "engine_owned_pointer_copy"}
+        constraints = {"max_elements": 2147483647, "element_form": "null_or_handle", "ownership": "engine_owned_pointer_copy"}
         functions = {"items": [{"name": "AcceptObjects", "signature_token": "sig-80", "signature_status": "supported",
                      "parameter_count": 2, "parameter_size": 20, "parameters": [
                          {"name": "Input", "type": "ArrayProperty", "element_size": 16, "array_dim": 1,
@@ -37,7 +37,7 @@ class MCPObjectArrayInputTests(unittest.IsolatedAsyncioTestCase):
         no_effect = {"executed": False, "may_have_executed": False, "do_not_retry": False}
         status = {"ready": True, "session_id": "fixture-session-1", "tick_count": 150}
         rejected = [(-1, "invalid_argument"), (None, "invalid_argument"),
-                    ([element] * 33, "invalid_argument"), ([element, "obj-source"], "invalid_object_argument"),
+                    ({"elements": [element]}, "invalid_argument"), ([element, "obj-source"], "invalid_object_argument"),
                     ([element, -1], "invalid_object_argument"), ([True], "invalid_object_argument"),
                     ([{"Handle": "obj-source"}], "invalid_object_argument"),
                     ([{"handle": "obj-source", "path": "ignored"}], "invalid_object_argument"),
