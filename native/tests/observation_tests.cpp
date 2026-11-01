@@ -88,6 +88,49 @@ void expiry_invalidation_and_disconnect() {
     require(calls==1 && model.size()==0,"Disconnect оставил callback");
 }
 
+void shared_connection_client_ownership() {
+    Observations model;
+    const auto a=model.start("connection-1","client-a",params(),snapshot(1),0,1);
+    const auto b=model.start("connection-1","client-b",params(),snapshot(1),0,1);
+    const auto other=model.start("connection-2","client-a",params(),snapshot(1),0,1);
+    const auto a_id=a.at("watch_id").get<std::string>();
+    const auto b_id=b.at("watch_id").get<std::string>();
+    const auto other_id=other.at("watch_id").get<std::string>();
+    require(a.at("session_id")=="connection-1" && b.at("session_id")=="connection-1"
+            && other.at("session_id")=="connection-2","Наблюдение должно публиковать native connection session");
+    require(model.read("client-a",query(a_id)).at("events").size()==1
+            && model.read("client-b",query(b_id)).at("events").size()==1,"Клиенты не прочитали собственные baseline");
+    error("foreign_watch",[&]{model.read("client-b",query(a_id));});
+    error("foreign_watch",[&]{model.stop("client-b",query(a_id),1,2);});
+    error("foreign_watch",[&]{model.forget("client-b",query(a_id));});
+    error("foreign_watch",[&]{model.read("connection-1",query(a_id));});
+    require(model.stop("client-a",query(a_id),1,2).at("state")=="stopped","Клиент не остановил своё наблюдение");
+    require(model.read("client-b",query(b_id)).at("state")=="running","Остановка клиента A затронула клиента B");
+    error("foreign_watch",[&]{model.forget("client-b",query(a_id));});
+    model.disconnect("client-a");
+    require(model.size()==3,"Disconnect должен проверять connection session, а не владельца клиента");
+    model.disconnect("connection-1");
+    require(model.size()==1,"Disconnect не очистил running и terminal наблюдения всех клиентов соединения");
+    error("unknown_watch",[&]{model.read("client-a",query(a_id));});
+    error("unknown_watch",[&]{model.read("client-b",query(b_id));});
+    require(model.read("client-a",query(other_id)).at("state")=="running","Disconnect затронул другое соединение с тем же клиентом");
+    int calls=0;
+    model.pump(10,3,[&](const json&){++calls;return snapshot(2);});
+    require(calls==1 && model.read("client-a",query(other_id)).at("events").size()==2,
+            "После disconnect sampling должен продолжаться только для другого соединения");
+    model.disconnect("connection-2");
+    model.pump(20,4,[&](const json&){++calls;return snapshot(3);});
+    require(calls==1 && model.size()==0,"Disconnect последнего соединения оставил sampling");
+    const auto legacy=model.start("legacy-session",params(),snapshot(1),20,5);
+    const auto legacy_id=legacy.at("watch_id").get<std::string>();
+    require(legacy.at("session_id")=="legacy-session"
+            && model.read("legacy-session",query(legacy_id)).at("state")=="running","Legacy owner=session изменился");
+    model.stop("legacy-session",query(legacy_id),21,6);
+    require(model.forget("legacy-session",query(legacy_id)).at("forgotten")==true && model.size()==0,
+            "Legacy stop и forget должны сохранять прежнее владение");
+    error("invalid_owner",[&]{model.start("connection-1","",params(),snapshot(1),0,1);});
+}
+
 void two_watches_and_byte_bounds() {
     Observations model;
     auto one=model.start("owner",params(100,128),snapshot(1),0,1).at("watch_id").get<std::string>();
@@ -238,6 +281,7 @@ int main() {
     try {
         changes_limits_and_stop();
         expiry_invalidation_and_disconnect();
+        shared_connection_client_ownership();
         two_watches_and_byte_bounds();
         invalid_parameters_and_capacity();
         copied_values_byte_drop_and_no_catchup();

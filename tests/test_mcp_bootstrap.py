@@ -57,7 +57,7 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                                       "g1r_read_package_file_exact", "reconnect", "не повтор"):
                         self.assertIn(important, instructions)
                     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-                    self.assertEqual(len(tools), 41)
+                    self.assertEqual(len(tools), 42)
                     self.assertTrue(tools["g1r_list_source_functions"].annotations.read_only_hint)
                     self.assertTrue(tools["g1r_source_identity"].annotations.read_only_hint)
                     self.assertTrue(tools["g1r_verify_source_game"].annotations.read_only_hint)
@@ -70,6 +70,38 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(status["game"]["ready_known"])
                     self.assertFalse(game.exists())
                     catalog = await self.call_ok(client, "g1r_capabilities")
+                    contracts = {item["name"]: item for item in catalog["tool_contracts"]}
+                    self.assertEqual(len(catalog["tool_contracts"]), len(tools))
+                    self.assertEqual(set(contracts), set(tools))
+                    for name, tool in tools.items():
+                        contract = contracts[name]
+                        self.assertEqual(contract["description"], tool.description)
+                        self.assertEqual(contract["args"], tool.input_schema)
+                        self.assertEqual(contract["result"]["schema"], tool.output_schema)
+                        self.assertFalse(contract["result"]["fields_complete"])
+                        self.assertTrue(contract["result"]["fields"])
+                        self.assertEqual(contract["effects"]["read_only"], tool.annotations.read_only_hint)
+                        self.assertEqual(contract["effects"]["idempotent"], tool.annotations.idempotent_hint)
+                        self.assertEqual(contract["effects"]["destructive"], tool.annotations.destructive_hint)
+                        self.assertEqual(contract["source"]["handler"], "src/g1r_mcp/server.py:" + name)
+                        self.assertEqual(contract["source"]["verification_kind"], "source")
+                        self.assertTrue(contract["source"]["implementation"])
+                        self.assertFalse(contract["availability"]["checked"])
+                        self.assertIsNone(contract["availability"]["current"])
+                        self.assertTrue(set(contract["context"]["state_tools"]) <= set(tools))
+                    self.assertTrue(contracts["g1r_invoke"]["result"]["dynamic_fields"])
+                    self.assertIn("current_game_tick", contracts["g1r_invoke"]["context"]["requires"])
+                    key_context = contracts["g1r_development_key"]["context"]["requires"]
+                    self.assertIn("exact_expected_process", key_context)
+                    self.assertNotIn("current_game_tick", key_context)
+                    self.assertNotIn("native_tcp_channel", key_context)
+                    self.assertFalse(contracts["g1r_development_key"]["effects"]["read_only"])
+                    self.assertIn("handling_confirmed", contracts["g1r_development_key"]["result"]["fields"])
+                    self.assertNotIn("native_tcp_channel", contracts["g1r_read_source_exact"]["context"]["requires"])
+                    compile_group = next(group for group in catalog["game_groups"] if group["name"] == "compile_diagnostics")
+                    self.assertIsNone(compile_group["available"])
+                    self.assertEqual(compile_group["availability"], "caller_selected_file_or_native_compiler_manager")
+                    self.assertEqual(compile_group["reason_code"], "current_availability_not_checked")
                     self.assertEqual(catalog["source_identity"], {
                         "tool": "g1r_source_identity", "snapshot_kind": "sequential_git_reads",
                         "source_only": True, "revision_source": "caller_label",
@@ -119,7 +151,9 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(array_input["max_elements"], 2147483647)
                     script_errors = catalog["script_runtime_errors"]
                     self.assertEqual(script_errors["error_code"], "angelscript_exception")
-                    self.assertFalse(script_errors["stack_captured"])
+                    self.assertIsNone(script_errors["stack_captured"])
+                    self.assertTrue(script_errors["stack_capture_supported"])
+                    self.assertEqual(script_errors["stack_result_field"], "script_errors.stack_captured")
                     self.assertFalse(script_errors["absence_of_logged_errors_proves_script_completion"])
                     functions = await self.call_ok(client, "g1r_list_source_functions", {
                         "query": "ReadValue", "relative_path": "Script/Official.as", "limit": 500, "offset": 0})
@@ -132,13 +166,18 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                         "root_kind": "game_script"}])
                     development = catalog["development_tools"]["operations"]
                     self.assertEqual(set(development), {"g1r_development_recipe", "g1r_development_processes",
-                                                         "g1r_development_start", "g1r_development_stop", "g1r_native_load",
+                                                       "g1r_development_start", "g1r_development_stop", "g1r_development_key", "g1r_native_load",
                                                          "g1r_session_status", "g1r_session_acquire", "g1r_session_release", "g1r_compile_diagnostics"})
                     catalogued = {item["name"] for group in ("local_tools", "native_tools", "workspace_tools")
                                   for item in catalog[group]}
                     catalogued.update(development)
                     catalogued.add(catalog["snapshot_comparison"]["tool"])
                     self.assertEqual(catalogued, set(tools))
+                    observations = catalog["observations"]
+                    self.assertEqual(observations["ownership"], "mcp_client_in_shared_native_connection")
+                    self.assertEqual(observations["connection_lifecycle"], "native_tcp_session")
+                    self.assertEqual(observations["client_disconnect"], "continues_until_explicit_stop_or_existing_duration")
+                    self.assertFalse(observations["reconnect_reassigns_owner"])
                     bootstrap = catalog["bootstrap"]
                     sequence = bootstrap["game_sequence"]
                     self.assertTrue(all(isinstance(step, dict) and step.get("condition") for step in sequence))

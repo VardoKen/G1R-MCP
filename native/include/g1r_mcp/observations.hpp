@@ -23,18 +23,22 @@ public:
     static void validate_targets(const Json& targets);
     Json start(const std::string& owner, const Json& params, const Json& baseline,
                std::uint64_t now_ms, std::uint64_t tick);
+    Json start(const std::string& connection_session, const std::string& client_owner,
+               const Json& params, const Json& baseline,
+               std::uint64_t now_ms, std::uint64_t tick);
     Json read(const std::string& owner, const Json& params) const;
     Json stop(const std::string& owner, const Json& params,
               std::uint64_t now_ms, std::uint64_t tick);
     Json forget(const std::string& owner, const Json& params);
-    void disconnect(const std::string& owner);
+    void disconnect(const std::string& connection_session);
     void pump(std::uint64_t now_ms, std::uint64_t tick, const Reader& reader);
     std::size_t size() const noexcept { return watches_.size(); }
 
 private:
     struct Watch {
         std::string id;
-        std::string owner;
+        std::string connection_session;
+        std::string client_owner;
         Json targets;
         Json latest;
         std::uint64_t started{};

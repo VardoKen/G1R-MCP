@@ -44,6 +44,7 @@ class SessionNativeFixture:
     def __init__(self, steps):
         self.steps = steps
         self.requests = []
+        self.watch_client_owner = None
         self.connections = 0
         self.errors = []
         self.stop = threading.Event()
@@ -90,7 +91,17 @@ class SessionNativeFixture:
                     continue
                 step = self.steps[len(self.requests)]
                 self.requests.append(request)
-                if request.get("protocol") != 1 or request.get("op") != step["op"] or request.get("params") != step["params"]:
+                parameters = dict(request.get("params", {}))
+                if step.get("session_owner") is True:
+                    owner = parameters.pop("client_owner", None)
+                    if (not isinstance(owner, str) or not owner.startswith("local:0x")
+                            or not owner[8:] or any(character not in "0123456789abcdef" for character in owner[8:])):
+                        raise AssertionError("Не передан скрытый владелец stdio MCP-сессии")
+                    if self.watch_client_owner is None:
+                        self.watch_client_owner = owner
+                    elif owner != self.watch_client_owner:
+                        raise AssertionError(f"Владелец watch изменился внутри одной stdio MCP-сессии: {self.watch_client_owner!r} -> {owner!r}")
+                if request.get("protocol") != 1 or request.get("op") != step["op"] or parameters != step["params"]:
                     raise AssertionError(f"Неверный маршрут нативного запроса: {request}")
                 if not isinstance(request.get("id"), str) or not request["id"]:
                     raise AssertionError("Нет корреляционного ID")
@@ -115,6 +126,13 @@ class SessionNativeFixture:
                 self.errors.append(error)
         except Exception as error:
             self.errors.append(error)
+        finally:
+            if self.errors and self.stream is not None:
+                try:
+                    self.stream.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                self.stream.close()
 
     def __enter__(self):
         self.thread.start()
@@ -160,6 +178,10 @@ class MCPObservationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(answer.structured_content, expected)
         return answer.structured_content
 
+    def assert_fixture_errors(self, native):
+        if native.errors:
+            raise AssertionError(f"Ошибка native fixture: {native.errors[0]}") from native.errors[0]
+
     async def test_actual_snapshot_and_watch_schemas_routes_and_terminal_result(self):
         targets = [{"handle": "obj-1", "properties": ["Enabled", "Missing"]}]
         baseline = native_snapshot(partial=True)
@@ -181,11 +203,11 @@ class MCPObservationTests(unittest.IsolatedAsyncioTestCase):
         steps = [
             {"op": "snapshot", "params": {"targets": targets}, "result": baseline},
             {"op": "snapshot", "params": {"targets": targets}, "result": changed},
-            {"op": "watch_start", "params": start_params, "result": started},
-            {"op": "watch_read", "params": {"watch_id": "watch-1", "after_seq": 0, "limit": 100}, "result": running},
-            {"op": "watch_stop", "params": {"watch_id": "watch-1"}, "result": stopped},
-            {"op": "watch_read", "params": {"watch_id": "watch-1", "after_seq": 3, "limit": 10}, "result": final},
-            {"op": "watch_forget", "params": {"watch_id": "watch-1"}, "result": forgotten},
+            {"op": "watch_start", "params": start_params, "result": started, "session_owner": True},
+            {"op": "watch_read", "params": {"watch_id": "watch-1", "after_seq": 0, "limit": 100}, "result": running, "session_owner": True},
+            {"op": "watch_stop", "params": {"watch_id": "watch-1"}, "result": stopped, "session_owner": True},
+            {"op": "watch_read", "params": {"watch_id": "watch-1", "after_seq": 3, "limit": 10}, "result": final, "session_owner": True},
+            {"op": "watch_forget", "params": {"watch_id": "watch-1"}, "result": forgotten, "session_owner": True},
         ]
         with tempfile.TemporaryDirectory() as directory, SessionNativeFixture(steps) as native:
             root = Path(directory)
@@ -193,7 +215,7 @@ class MCPObservationTests(unittest.IsolatedAsyncioTestCase):
                 async with ClientSession(incoming, outgoing) as client:
                     await client.initialize()
                     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-                    self.assertEqual(len(tools), 41)
+                    self.assertEqual(len(tools), 42)
                     for name in ("g1r_snapshot", "g1r_compare_snapshots", "g1r_watch_read"):
                         self.assertTrue(tools[name].annotations.read_only_hint)
                     self.assertFalse(tools["g1r_watch_start"].annotations.read_only_hint)
@@ -227,7 +249,11 @@ class MCPObservationTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(result["provenance"], "unverified")
                     self.assertEqual((before, after), copies)
                     await self.call_ok(client, "g1r_watch_start", start_params, started)
-                    await self.call_ok(client, "g1r_watch_read", {"watch_id": "watch-1"}, running)
+                    try:
+                        await self.call_ok(client, "g1r_watch_read", {"watch_id": "watch-1"}, running)
+                    except BaseException:
+                        self.assert_fixture_errors(native)
+                        raise
                     await self.call_ok(client, "g1r_watch_stop", {"watch_id": "watch-1"}, stopped)
                     await self.call_ok(client, "g1r_watch_read", {"watch_id": "watch-1", "after_seq": 3, "limit": 10}, final)
                     await self.call_ok(client, "g1r_watch_forget", {"watch_id": "watch-1"}, forgotten)
@@ -242,9 +268,9 @@ class MCPObservationTests(unittest.IsolatedAsyncioTestCase):
                   "game_thread_id": 456, "native_route": "standalone_in_process"}
         unknown = {"code": "unknown_watch", "message": "Наблюдение отсутствует в этой сессии"}
         steps = [
-            {"op": "watch_start", "params": start_params, "drop": True},
+            {"op": "watch_start", "params": start_params, "drop": True, "session_owner": True},
             {"op": "status", "params": {}, "result": status},
-            {"op": "watch_read", "params": {"watch_id": "watch-1", "after_seq": 0, "limit": 100}, "error": unknown},
+            {"op": "watch_read", "params": {"watch_id": "watch-1", "after_seq": 0, "limit": 100}, "error": unknown, "session_owner": True},
         ]
         with tempfile.TemporaryDirectory() as directory, SessionNativeFixture(steps) as native:
             async with stdio_client(self.parameters(Path(directory), native.port)) as (incoming, outgoing):
@@ -259,6 +285,7 @@ class MCPObservationTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(error["request_id"], native.requests[0]["id"])
                     await self.call_ok(client, "g1r_native_status", {}, status)
                     stale = await client.call_tool("g1r_watch_read", {"watch_id": "watch-1"})
+                    self.assert_fixture_errors(native)
                     self.assertTrue(stale.is_error)
                     self.assertIn("unknown_watch", repr(stale.content))
                     before = native_snapshot()

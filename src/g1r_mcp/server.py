@@ -18,6 +18,7 @@ from . import __version__
 from .packages import PackageError, validate_package
 from .sources import SourceCatalog, SourceError
 from .native_client import NativeClient, NativeError
+from .tool_catalog import build_tool_contracts
 from pydantic import StrictBool, StrictInt, StrictStr
 from .workspace import PackageWorkspace, WorkspaceError
 from .snapshots import SnapshotError, compare_snapshots
@@ -115,6 +116,13 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             return ctx.session
         except ValueError:
             return local_owner
+
+    def watch_owner(ctx: Context | None) -> str:
+        if transport != "streamable-http":
+            return "local:" + hex(id(local_owner))
+        owner = request_owner(ctx)
+        return owner if isinstance(owner, str) else "local:" + hex(id(owner))
+
     def development_service() -> DevelopmentService:
         nonlocal development
         with development_lock:
@@ -187,11 +195,12 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
         }
 
     @server.tool(annotations=read_only)
-    def g1r_capabilities() -> dict[str, Any]:
+    async def g1r_capabilities() -> dict[str, Any]:
         """Получить каталог локальных инструментов и отсутствующих игровых групп."""
         return {
             "catalog_revision": __version__,
             "catalog_revision_kind": "server_tool_contract",
+            "tool_contracts": build_tool_contracts(await server.list_tools()),
             "local_tools": [
                 {"name": name, "description": description, "implemented": True,
                  "available": True, "effects": "read_only", "validation": "local_only"}
@@ -206,8 +215,9 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                 for name, description, effects in WORKSPACE_TOOLS
             ],
             "game_groups": [
-                {"name": "compile_diagnostics", "implemented": True, "available": False,
-                 "reason_code": "requires_live_native_status"},
+                {"name": "compile_diagnostics", "implemented": True, "available": None,
+                 "availability": "caller_selected_file_or_native_compiler_manager",
+                 "reason_code": "current_availability_not_checked"},
             ] + [
                 {"name": group, "implemented": False, "available": False,
                  "reason_code": "confirmed_operation_unavailable"}
@@ -229,7 +239,9 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             "script_runtime_errors": {"tool": "g1r_invoke", "implemented": True,
                                       "source": "observed_logging_entry", "scope": "current_thread_process_event",
                                       "error_code": "angelscript_exception", "details_field": "script_errors",
-                                      "historical_errors_available": False, "stack_captured": False,
+                                      "historical_errors_available": False, "stack_captured": None,
+                                      "stack_capture_supported": True,
+                                      "stack_result_field": "script_errors.stack_captured",
                                       "absence_of_logged_errors_proves_script_completion": False},
             "source_functions": {"tool": "g1r_list_source_functions", "parser_kind": "lexical",
                                  "result_field": "items", "prototype": "raw_source",
@@ -378,7 +390,10 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                            "scope": "function_bodies", "runtime_result_requires_verification": True},
             "observations": {"implemented": True, "availability": "requires_live_native_status",
                              "source": "selected_reflected_properties_on_existing_tick",
-                             "ownership": "native_tcp_session", "world_generation_confirmed": False},
+                             "ownership": "mcp_client_in_shared_native_connection",
+                             "connection_lifecycle": "native_tcp_session",
+                             "client_disconnect": "continues_until_explicit_stop_or_existing_duration",
+                             "reconnect_reassigns_owner": False, "world_generation_confirmed": False},
             "snapshot_comparison": {"implemented": True, "effects": "read_only",
                                     "tool": "g1r_compare_snapshots", "validation": "client_supplied_copies"},
             "limitations": [
@@ -752,28 +767,30 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=False))
     def g1r_watch_start(handle: str, properties: list[str], duration_ms: int,
-                         interval_ms: int, capacity: int = 32) -> dict[str, Any]:
+                         interval_ms: int, capacity: int = 32, ctx: Context = None) -> dict[str, Any]:
         """Наблюдать выбранные свойства на Tick с явными сроком, интервалом и ёмкостью буфера."""
         return native_request("watch_start", {"handle": handle, "properties": properties,
                               "duration_ms": duration_ms, "interval_ms": interval_ms,
-                              "capacity": capacity})
+                              "capacity": capacity, "client_owner": watch_owner(ctx)})
 
     @server.tool(annotations=read_only)
-    def g1r_watch_read(watch_id: str, after_seq: int = 0, limit: int = 100) -> dict[str, Any]:
+    def g1r_watch_read(watch_id: str, after_seq: int = 0, limit: int = 100,
+                       ctx: Context = None) -> dict[str, Any]:
         """Прочитать события после seq без удаления; пропуски и переполнение обозначены явно."""
-        return native_request("watch_read", {"watch_id": watch_id, "after_seq": after_seq, "limit": limit})
+        return native_request("watch_read", {"watch_id": watch_id, "after_seq": after_seq,
+                              "limit": limit, "client_owner": watch_owner(ctx)})
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=True, openWorldHint=False))
-    def g1r_watch_stop(watch_id: str) -> dict[str, Any]:
+    def g1r_watch_stop(watch_id: str, ctx: Context = None) -> dict[str, Any]:
         """Прекратить последующие чтения на игровом потоке; финальные события сохраняются."""
-        return native_request("watch_stop", {"watch_id": watch_id})
+        return native_request("watch_stop", {"watch_id": watch_id, "client_owner": watch_owner(ctx)})
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=False))
-    def g1r_watch_forget(watch_id: str) -> dict[str, Any]:
+    def g1r_watch_forget(watch_id: str, ctx: Context = None) -> dict[str, Any]:
         """Освободить уже завершённое наблюдение текущей сессии."""
-        return native_request("watch_forget", {"watch_id": watch_id})
+        return native_request("watch_forget", {"watch_id": watch_id, "client_owner": watch_owner(ctx)})
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def g1r_invoke(handle: str, function: str, arguments: dict[str, Any] | None = None,

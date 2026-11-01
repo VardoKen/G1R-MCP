@@ -400,7 +400,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.49"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.50"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
@@ -2282,11 +2282,11 @@ json GameAccess::execute(const json& request) {
             throw HandlerError("invalid_watch_params","Требуются handle и properties");
         auto targets=json::array({{{"handle",params.at("handle")},{"properties",params.at("properties")}}});
         Observations::validate_targets(targets);
-        return observations_.start(session,params,snapshot(targets),now,ticks_.load());
+        return observations_.start(session,params.value("client_owner",session),params,snapshot(targets),now,ticks_.load());
     }
-    if(op=="watch_read")return observations_.read(session,params);
-    if(op=="watch_stop")return observations_.stop(session,params,now,ticks_.load());
-    if(op=="watch_forget")return observations_.forget(session,params);
+    if(op=="watch_read")return observations_.read(params.value("client_owner",session),params);
+    if(op=="watch_stop")return observations_.stop(params.value("client_owner",session),params,now,ticks_.load());
+    if(op=="watch_forget")return observations_.forget(params.value("client_owner",session),params);
     if(op!="objects" && op!="properties" && op!="functions" && op!="invoke" && op!="read_array" && op!="read_struct")throw HandlerError("unknown_operation","Операция не поддержана");
     if(op=="objects") {
         auto query=params.value("query",std::string{}),class_query=params.value("class_query",std::string{});int limit=limit_of(params);if(query.size()>256||class_query.size()>256)throw HandlerError("invalid_query","Запрос слишком длинный");

@@ -56,7 +56,7 @@ void Observations::validate_targets(const Json& targets) {
 }
 
 Observations::Json Observations::metadata(const Watch& watch) {
-    return {{"watch_id", watch.id}, {"session_id", watch.owner}, {"state", watch.state},
+    return {{"watch_id", watch.id}, {"session_id", watch.connection_session}, {"state", watch.state},
             {"reason", watch.reason}, {"cleanup_complete", watch.state != "running"},
             {"next_seq", watch.next_seq}, {"last_seq", watch.next_seq - 1},
             {"oldest_seq", watch.events.empty() ? watch.next_seq : watch.events.front().at("seq").get<std::uint64_t>()},
@@ -104,7 +104,14 @@ void Observations::finish(Watch& watch, const std::string& state,
 Observations::Json Observations::start(const std::string& owner, const Json& params,
                                       const Json& baseline, std::uint64_t now_ms,
                                       std::uint64_t tick) {
-    if (owner.empty()) throw HandlerError("invalid_owner", "Владелец наблюдения отсутствует");
+    return start(owner, owner, params, baseline, now_ms, tick);
+}
+
+Observations::Json Observations::start(const std::string& connection_session,
+                                      const std::string& client_owner, const Json& params,
+                                      const Json& baseline, std::uint64_t now_ms,
+                                      std::uint64_t tick) {
+    if (client_owner.empty()) throw HandlerError("invalid_owner", "Владелец наблюдения отсутствует");
     if (!params.is_object() || !params.contains("handle") || !params.contains("properties"))
         throw HandlerError("invalid_watch_params", "Наблюдение требует handle и properties");
     Json targets = Json::array({{{"handle", params.at("handle")}, {"properties", params.at("properties")}}});
@@ -120,7 +127,8 @@ Observations::Json Observations::start(const std::string& owner, const Json& par
         throw HandlerError("unsupported_watch_target", "Исходный снимок превышает предел наблюдения");
     Watch watch;
     watch.id = "watch-" + std::to_string(++next_id_);
-    watch.owner = owner;
+    watch.connection_session = connection_session;
+    watch.client_owner = client_owner;
     watch.targets = std::move(targets);
     watch.latest = baseline.at("objects");
     watch.started = now_ms;
@@ -142,7 +150,7 @@ Observations::Json Observations::start(const std::string& owner, const Json& par
 const Observations::Watch& Observations::find(const std::string& owner, const Json& params) const {
     auto found = watches_.find(watch_id(params));
     if (found == watches_.end()) throw HandlerError("unknown_watch", "Наблюдение отсутствует в текущей среде");
-    if (found->second.owner != owner) throw HandlerError("foreign_watch", "Наблюдение принадлежит другой сессии");
+    if (found->second.client_owner != owner) throw HandlerError("foreign_watch", "Наблюдение принадлежит другому клиенту");
     return found->second;
 }
 Observations::Watch& Observations::find(const std::string& owner, const Json& params) {
@@ -188,9 +196,9 @@ Observations::Json Observations::forget(const std::string& owner, const Json& pa
     cursor_ = 0;
     return {{"watch_id", id}, {"forgotten", true}, {"cleanup_complete", true}};
 }
-void Observations::disconnect(const std::string& owner) {
+void Observations::disconnect(const std::string& connection_session) {
     for (auto item = watches_.begin(); item != watches_.end();) {
-        if (item->second.owner == owner) item = watches_.erase(item); else ++item;
+        if (item->second.connection_session == connection_session) item = watches_.erase(item); else ++item;
     }
     order_.erase(std::remove_if(order_.begin(), order_.end(), [&](const auto& id) { return !watches_.contains(id); }), order_.end());
     cursor_ = 0;
