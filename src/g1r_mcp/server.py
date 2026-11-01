@@ -800,8 +800,8 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                             idempotentHint=False, openWorldHint=True))
     def g1r_development_stop(expected_process: dict[str, Any], reason: str = "Verification complete", ctx: Context = None) -> dict[str, Any]:
         """Close only the confirmed game instance using retained HANDLEs."""
-        if not 1 <= len(reason) <= 256 or any(ord(c) < 32 for c in reason):
-            raise ToolError(json.dumps({"code":"invalid_stop_reason","message":"A stop reason is required (1–256 characters)","outcome_unknown":False}, ensure_ascii=False))
+        if not reason or any(ord(c) < 32 for c in reason):
+            raise ToolError(json.dumps({"code":"invalid_stop_reason","message":"A nonempty stop reason without control characters is required","outcome_unknown":False}, ensure_ascii=False))
         result = development_request("stop", expected_process=expected_process, ctx=ctx)
         result["stop_reason"] = reason
         return result

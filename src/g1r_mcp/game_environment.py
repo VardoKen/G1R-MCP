@@ -16,10 +16,10 @@ import re
 from .source_identity import inspect as inspect_source_identity
 
 
-MAX_MANIFEST_BYTES = 1024 * 1024
-MAX_MANIFEST_TOKENS = 100_000
-MAX_MANIFEST_DEPTH = 16
-MAX_SOURCE_FILES = 200_000
+MAX_MANIFEST_BYTES = None
+MAX_MANIFEST_TOKENS = None
+MAX_MANIFEST_DEPTH = None
+MAX_SOURCE_FILES = None
 HASH_CHUNK_BYTES = 1024 * 1024
 
 
@@ -82,8 +82,6 @@ def _tokens(text: str) -> list[str | tuple[str, str]]:
             offset += 1
         else:
             raise _invalid_manifest()
-        if len(tokens) > MAX_MANIFEST_TOKENS:
-            raise _invalid_manifest()
     return tokens
 
 
@@ -91,40 +89,37 @@ def parse_manifest(text: str) -> dict[str, str]:
     """Return only allowed metadata; exclude all other fields from the response."""
     tokens = _tokens(text.lstrip("\ufeff"))
     offset = 0
-
-    def parse_object(depth: int, nested: bool) -> dict:
-        nonlocal offset
-        if depth > MAX_MANIFEST_DEPTH:
-            raise _invalid_manifest()
-        result: dict = {}
-        while offset < len(tokens):
-            token = tokens[offset]
-            if token == "}":
-                if not nested:
-                    raise _invalid_manifest()
-                offset += 1
-                return result
-            if not isinstance(token, tuple):
+    tree: dict = {}
+    stack = [tree]
+    while offset < len(tokens):
+        token = tokens[offset]
+        if token == "}":
+            if len(stack) == 1:
                 raise _invalid_manifest()
-            key = token[1].casefold()
-            if key in result:
-                raise _invalid_manifest()
+            stack.pop()
             offset += 1
-            if offset >= len(tokens):
-                raise _invalid_manifest()
-            token = tokens[offset]
-            offset += 1
-            if token == "{":
-                result[key] = parse_object(depth + 1, True)
-            elif isinstance(token, tuple):
-                result[key] = token[1]
-            else:
-                raise _invalid_manifest()
-        if nested:
+            continue
+        if not isinstance(token, tuple):
             raise _invalid_manifest()
-        return result
-
-    tree = parse_object(0, False)
+        result = stack[-1]
+        key = token[1].casefold()
+        if key in result:
+            raise _invalid_manifest()
+        offset += 1
+        if offset >= len(tokens):
+            raise _invalid_manifest()
+        token = tokens[offset]
+        offset += 1
+        if token == "{":
+            child: dict = {}
+            result[key] = child
+            stack.append(child)
+        elif isinstance(token, tuple):
+            result[key] = token[1]
+        else:
+            raise _invalid_manifest()
+    if len(stack) != 1:
+        raise _invalid_manifest()
     if set(tree) != {"appstate"} or not isinstance(tree["appstate"], dict):
         raise _invalid_manifest()
     state = tree["appstate"]
@@ -197,7 +192,7 @@ def _hash_file(path: Path, boundary: Path) -> tuple[str, int]:
 
 
 def _source_files(root: Path) -> list[Path]:
-    """Traverse only Script/ without following links and with a file count limit."""
+    """Traverse only Script/ without following links."""
     result: list[Path] = []
 
     def fail_walk(error: OSError) -> None:
@@ -211,8 +206,6 @@ def _source_files(root: Path) -> list[Path]:
             if Path(name).suffix.casefold() != ".as":
                 continue
             result.append(_safe_path(parent / name, "file", root))
-            if len(result) > MAX_SOURCE_FILES:
-                raise InspectionError("limit_exceeded", "The diagnostic script count limit was exceeded")
     if not result:
         raise InspectionError("no_source_files", "No AngelScript files were found in the Modkit Script/ directory")
     return sorted(result, key=lambda file: file.relative_to(root).as_posix())
@@ -220,16 +213,14 @@ def _source_files(root: Path) -> list[Path]:
 
 def inspect_environment(options: InspectionOptions) -> dict:
     """Inspect three explicitly selected sources and return a safe JSON result."""
-    if options.max_list_entries is not None and not 0 <= options.max_list_entries <= 10_000:
-        raise InspectionError("invalid_arguments", "The list limit must be between 0 and 10000")
+    if options.max_list_entries is not None and options.max_list_entries < 0:
+        raise InspectionError("invalid_arguments", "The list limit must be nonnegative")
     game_root = _safe_path(options.game_root, "directory")
     modkit_root = _safe_path(options.modkit_root, "directory")
     manifest = _safe_path(options.steam_manifest, "file")
     try:
         with manifest.open("rb") as stream:
-            raw_manifest = stream.read(MAX_MANIFEST_BYTES + 1)
-        if len(raw_manifest) > MAX_MANIFEST_BYTES:
-            raise InspectionError("limit_exceeded", "The Steam manifest exceeds the diagnostic size limit")
+            raw_manifest = stream.read()
         metadata = parse_manifest(raw_manifest.decode("utf-8-sig", errors="strict"))
     except InspectionError:
         raise

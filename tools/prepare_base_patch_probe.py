@@ -24,10 +24,6 @@ from g1r_mcp.patches import ScriptPatchBuilder, PatchError
 from g1r_mcp.workspace import (PackageWorkspace, WorkspaceError, _checked,
                                _destination_lock, _guard_directories, _read_bytes)
 
-MAX_FILES = 10_000
-MAX_DIRECTORIES = 10_000
-MAX_FILE_BYTES = 16 * 1024 * 1024
-MAX_TOTAL_BYTES = 128 * 1024 * 1024
 PACKAGE_NAME = "G1RMCPBasePatchProbe"
 MARKER_NAME = "G1RMCPBasePatchProbe.as"
 ATTACK_SOURCE_PATH = "Script/AI/States/FightAI/CombatState/CombatMoves.as"
@@ -79,8 +75,8 @@ def _canonical_git_patch(source_path: str, before: bytes, after: bytes) -> bytes
         except (OSError, subprocess.TimeoutExpired):
             raise PackageError("patch_generation_failed", "Failed to obtain a bounded Git diff") from None
         raw = result.stdout
-        if result.returncode != 0 or len(raw) > 2 * 1024 * 1024 or not raw.startswith(("diff --git a/" + source_path).encode("utf-8")):
-            raise PackageError("patch_generation_failed", "The resulting Git diff is invalid or too large")
+        if result.returncode != 0 or not raw.startswith(("diff --git a/" + source_path).encode("utf-8")):
+            raise PackageError("patch_generation_failed", "The resulting Git diff is invalid")
         return raw
 
 
@@ -94,7 +90,7 @@ def _patch_probe(modkit: Path, target: str) -> tuple[bytes, dict]:
         raise PackageError("invalid_probe_target", "Allowed targets are own_marker and existing_attack")
     builder = ScriptPatchBuilder(modkit)
     info = builder.source_info(ATTACK_SOURCE_PATH)
-    raw = _read_bytes(modkit / ATTACK_SOURCE_PATH, modkit, 1024 * 1024)
+    raw = _read_bytes(modkit / ATTACK_SOURCE_PATH, modkit, None)
     text = raw.decode("utf-8-sig")
     expression = r"(bool ShouldInvalidateAttack\(\)\s*\{\s*)return false;(\s*\})"
     if len(re.findall(expression, text)) != 1:
@@ -130,29 +126,19 @@ def _target(path: Path, repository: Path) -> Path:
 
 def _source_manifest(script: Path) -> list[dict]:
     files = []
-    total = 0
-    directories_seen = 0
 
     def failure(error):
         raise PackageError("access_error", "Failed to enumerate all official Script sources")
 
     for directory, directories, names in os.walk(script, followlinks=False, onerror=failure):
-        directories_seen += 1
-        if directories_seen > MAX_DIRECTORIES:
-            raise PackageError("manifest_limit", "Script exceeds the directory count limit")
         parent = _checked(Path(directory), script, directory=True)
         for name in directories:
             _checked(parent / name, script, directory=True)
         for name in names:
-            if len(files) >= MAX_FILES:
-                raise PackageError("manifest_limit", "Script exceeds the file count limit")
             file = _checked(parent / name, script)
             if not file.is_file():
                 raise PackageError("unsafe_path", "Script contains a non-regular file")
-            raw = _read_bytes(file, script, min(MAX_FILE_BYTES, MAX_TOTAL_BYTES - total))
-            total += len(raw)
-            if total > MAX_TOTAL_BYTES:
-                raise PackageError("manifest_limit", "Script exceeds the total limit of 128 MiB")
+            raw = _read_bytes(file, script, None)
             if file.suffix.lower() == ".as":
                 raw.decode("utf-8-sig", errors="strict")
             files.append({"path": file.relative_to(script).as_posix(), "bytes": len(raw), "sha256": _sha(raw)})
@@ -186,7 +172,7 @@ def _cleanup(stage: Path, parent: Path, own_files: dict, own_directories: dict) 
             for relative, (identity, digest) in own_files.items():
                 file = _checked(stage / relative, stage)
                 with _guard_directories(file.parent, stage):
-                    if _identity(file) == identity and _sha(_read_bytes(file, stage, MAX_FILE_BYTES)) == digest:
+                    if _identity(file) == identity and _sha(_read_bytes(file, stage, None)) == digest:
                         file.unlink()
             for relative, identity in sorted(own_directories.items(), key=lambda item: item[0].count("/"), reverse=True):
                 if relative == ".":
@@ -210,8 +196,6 @@ def _exact_destination(stage: Path, expected_files: set[str], expected_directori
 
     for directory, children, names in os.walk(stage, followlinks=False, onerror=failure):
         parent = _checked(Path(directory), stage, directory=True)
-        if len(files) > MAX_FILES + 5 or len(directories) > MAX_DIRECTORIES + 4:
-            raise PackageError("copy_changed", "The prepared copy grew unexpectedly")
         for child in children:
             path = _checked(parent / child, stage, directory=True)
             directories.add(path.relative_to(stage).as_posix())
@@ -234,7 +218,7 @@ def prepare_probe(workspace_root: Path, *, modkit_root: Path | None = None,
     cache = _checked(binds_cache)
     if cache.name != "Binds.Cache" or not cache.is_file() or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_binds_sha256):
         raise PackageError("invalid_binds_cache", "The exact Binds.Cache file and its expected SHA-256 from the current game are required")
-    cache_raw = _read_bytes(cache, cache.parent, MAX_FILE_BYTES)
+    cache_raw = _read_bytes(cache, cache.parent, None)
     cache_hash = _sha(cache_raw)
     if cache_hash != expected_binds_sha256.lower():
         raise PackageError("cache_changed", "The Binds.Cache SHA-256 does not match the verified game file")
@@ -287,13 +271,13 @@ def prepare_probe(workspace_root: Path, *, modkit_root: Path | None = None,
                             except OSError:
                                 if partial_identity is not None:
                                     checked = _checked(file, stage)
-                                    current = _read_bytes(checked, stage, MAX_FILE_BYTES)
+                                    current = _read_bytes(checked, stage, None)
                                     if _identity(checked) == partial_identity and raw.startswith(current):
                                         checked.unlink()
                                 raise
 
                     for entry in manifest:
-                        raw = _read_bytes(scripts / entry["path"], scripts, MAX_FILE_BYTES)
+                        raw = _read_bytes(scripts / entry["path"], scripts, None)
                         if _sha(raw) != entry["sha256"]:
                             raise PackageError("source_changed", "Official Script sources changed while copying")
                         write("Script/" + entry["path"], raw)
@@ -309,10 +293,10 @@ def prepare_probe(workspace_root: Path, *, modkit_root: Path | None = None,
                         own_files[f"Mods/{PACKAGE_NAME}/{relative}"] = (_identity(stage / "Mods" / PACKAGE_NAME / relative), result["sha256"])
                     if _source_manifest(scripts) != manifest:
                         raise PackageError("source_changed", "The official Script contents changed while copying")
-                    if _sha(_read_bytes(cache, cache.parent, MAX_FILE_BYTES)) != cache_hash:
+                    if _sha(_read_bytes(cache, cache.parent, None)) != cache_hash:
                         raise PackageError("cache_changed", "Binds.Cache changed during preparation")
                     for relative, (identity, digest) in own_files.items():
-                        if _identity(_checked(stage / relative, stage)) != identity or _sha(_read_bytes(stage / relative, stage, MAX_FILE_BYTES)) != digest:
+                        if _identity(_checked(stage / relative, stage)) != identity or _sha(_read_bytes(stage / relative, stage, None)) != digest:
                             raise PackageError("copy_changed", "The prepared copy changed before completion")
                     _exact_destination(stage, set(own_files), set(own_directories))
                     package = validate_package(stage / "Mods", PACKAGE_NAME)
@@ -332,7 +316,7 @@ def prepare_probe(workspace_root: Path, *, modkit_root: Path | None = None,
                 raw = json.dumps(recipe, ensure_ascii=False, indent=2).encode("utf-8") + b"\n"
                 write("source-manifest.json", raw)
                 _exact_destination(stage, set(own_files), set(own_directories))
-                if _sha(_read_bytes(stage / "source-manifest.json", stage, MAX_FILE_BYTES)) != _sha(raw):
+                if _sha(_read_bytes(stage / "source-manifest.json", stage, None)) != _sha(raw):
                     raise PackageError("copy_changed", "The copy manifest changed before publication")
             if os.path.lexists(target):
                 raise PackageError("already_exists", "The probe directory appeared before publishing the copy")

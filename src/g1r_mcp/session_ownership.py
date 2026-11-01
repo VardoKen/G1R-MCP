@@ -25,8 +25,8 @@ class SessionOwnership:
     def acquire(self, owner: Any, reason: str, *, process: dict | None = None,
                 package: str | None = None, expected_claim_id: str | None = None) -> dict:
         with self.lock:
-            if not isinstance(reason, str) or not 1 <= len(reason) <= 256 or any(ord(c) < 32 for c in reason):
-                raise DevelopmentError("invalid_session_reason", "Provide a reason for controlling the shared game (1–256 characters)")
+            if not isinstance(reason, str) or not reason or any(ord(c) < 32 for c in reason):
+                raise DevelopmentError("invalid_session_reason", "Provide a nonempty reason for controlling the shared game without control characters")
             if expected_claim_id is not None:
                 if self._record is None or self._record["claim_id"] != expected_claim_id:
                     raise DevelopmentError("session_claim_changed", "The claim changed after the state was read")

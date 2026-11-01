@@ -93,9 +93,6 @@ class BasePatchProbeTests(unittest.TestCase):
         self.assertEqual(list((self.repository / "artifacts").iterdir()), [])
 
     def test_bounds_and_symlink_refused(self):
-        with patch.object(probe, "MAX_FILES", 1):
-            with self.assertRaises(probe.PackageError):
-                self.prepare()
         external = self.repository / "outside.as"
         external.write_text("user source", encoding="utf-8")
         try:
@@ -159,10 +156,6 @@ class BasePatchProbeTests(unittest.TestCase):
         self.assertEqual(list((self.repository / "artifacts").iterdir()), [])
 
     def test_source_walk_error_and_directory_limit_refuse_preparation(self):
-        with patch.object(probe, "MAX_DIRECTORIES", 1):
-            with self.assertRaises(probe.PackageError) as captured:
-                self.prepare()
-        self.assertEqual(captured.exception.code, "manifest_limit")
 
         def denied_walk(path, *, followlinks, onerror):
             onerror(PermissionError("isolated blocked subdirectory"))
