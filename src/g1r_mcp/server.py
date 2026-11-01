@@ -887,6 +887,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.transport == "streamable-http":
         server.run(transport="streamable-http", host=args.host, port=args.port,
                    streamable_http_path="/mcp", stateless_http=False, json_response=True,
+                   max_request_body_size=sys.maxsize,
                    transport_security=TransportSecuritySettings(
                        enable_dns_rebinding_protection=True,
                        allowed_hosts=[f"{args.host}:{args.port}"],

@@ -4,6 +4,7 @@ import io
 import json
 from pathlib import Path
 import socket
+import sys
 import struct
 import tempfile
 import unittest
@@ -100,7 +101,8 @@ class MCPTransportCLITests(unittest.TestCase):
                 options = run.call_args.kwargs
                 self.assertEqual({key: value for key, value in options.items() if key != "transport_security"}, {
                     "transport": "streamable-http", "host": "127.0.0.1", "port": port,
-                    "streamable_http_path": "/mcp", "stateless_http": False, "json_response": True})
+                    "streamable_http_path": "/mcp", "stateless_http": False, "json_response": True,
+                    "max_request_body_size": sys.maxsize})
                 security = options["transport_security"]
                 self.assertIsInstance(security, TransportSecuritySettings)
                 self.assertIs(security.enable_dns_rebinding_protection, True)
@@ -122,6 +124,76 @@ class MCPTransportCLITests(unittest.TestCase):
 class MCPHTTPSharedServerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self._asyncioRunner.get_loop().slow_callback_duration = 2.0
+
+    async def test_large_snapshot_comparison_over_http_preserves_same_session_without_native_requests(self):
+        large_text = "x" * 300_000
+        objects = [{"handle": f"obj-large-{index}", "path": f"/Script/Probe.Large{index}", "class": "Probe",
+                    "properties": [{"name": "LargeText", "type": "StrProperty", "supported": True, "value": large_text}] +
+                                  [{"name": f"Number{number}", "type": "IntProperty", "supported": True, "value": number}
+                                   for number in range(32)]}
+                   for index in range(17)]
+        before = {"snapshot_id": "large-before", "source": "live_native", "session_id": "fixture-native-session",
+                  "process_id": 123, "thread_id": 456, "tick_count": 10, "consistency": "single_tick_sequential",
+                  "truncated": False, "partial": False, "objects": objects}
+        after = {**before, "snapshot_id": "large-after", "tick_count": 11}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            modkit, workspace = root / "Modkit", root / "workspace"
+            source = modkit / "Script" / "Fixture.as"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"class UFixture {}\n")
+            original = source.read_bytes()
+            workspace.mkdir()
+            with patch("g1r_mcp.server.NativeClient") as factory:
+                backend = factory.return_value
+                server = create_server(modkit, workspace, transport="streamable-http")
+            app = server.streamable_http_app(host="127.0.0.1", streamable_http_path="/mcp",
+                stateless_http=False, json_response=True, max_request_body_size=sys.maxsize,
+                transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=True,
+                    allowed_hosts=["127.0.0.1:27124"], allowed_origins=["http://127.0.0.1:27124"]))
+            async with app.router.lifespan_context(app):
+                async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app),
+                                             base_url="http://127.0.0.1:27124") as client:
+                    initialized = await client.post("/mcp", headers={"Accept": "application/json, text/event-stream"},
+                        json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                            "protocolVersion": "2025-06-18", "capabilities": {},
+                            "clientInfo": {"name": "large-snapshot-client", "version": "1"}}})
+                    self.assertEqual(initialized.status_code, 200, initialized.text[:500])
+                    session = initialized.headers["mcp-session-id"]
+                    headers = {"Mcp-Session-Id": session, "Accept": "application/json, text/event-stream"}
+                    notified = await client.post("/mcp", headers=headers,
+                        json={"jsonrpc": "2.0", "method": "notifications/initialized"})
+                    self.assertEqual(notified.status_code, 202, notified.text[:500])
+                    response = await client.post("/mcp", headers=headers,
+                        json={"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+                            "name": "g1r_compare_snapshots", "arguments": {"before": before, "after": after}}})
+                    self.assertGreater(len(response.request.content), 4 * 1024 * 1024)
+                    self.assertEqual(response.status_code, 200, response.text[:500])
+                    result = response.json()["result"]
+                    self.assertFalse(result.get("isError", False), str(result)[:500])
+                    comparison = result["structuredContent"]
+                    self.assertTrue(comparison["comparable"])
+                    self.assertTrue(comparison["equal_selected_values"])
+                    self.assertEqual(comparison["items"], [])
+                    self.assertEqual(comparison["total_items"], 0)
+                    self.assertEqual(comparison["coverage"]["before_targets"], 17)
+                    self.assertEqual(comparison["coverage"]["after_targets"], 17)
+                    self.assertTrue(comparison["coverage"]["complete"])
+                    self.assertFalse(comparison["truncated"])
+                    status = await client.post("/mcp", headers=headers,
+                        json={"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
+                            "name": "g1r_status", "arguments": {}}})
+                    self.assertEqual(status.status_code, 200, status.text[:500])
+                    self.assertFalse(status.json()["result"].get("isError", False))
+                    self.assertEqual(status.request.headers["Mcp-Session-Id"], session)
+                    self.assertEqual(status.json()["result"]["structuredContent"]["server"]["transport"], "streamable-http")
+                    backend.request.assert_not_called()
+                    terminated = await client.delete("/mcp", headers=headers)
+                    self.assertEqual(terminated.status_code, 200, terminated.text[:500])
+            backend.request.assert_not_called()
+            factory.assert_called_once()
+            self.assertEqual(source.read_bytes(), original)
+            self.assertEqual(list(workspace.iterdir()), [])
 
     async def test_large_string_request_and_result_share_connection_after_http_session_delete(self):
         handle, token = "obj-large-http-string", "sig-large-http-string"
@@ -173,7 +245,7 @@ class MCPHTTPSharedServerTests(unittest.IsolatedAsyncioTestCase):
                 server = create_server(modkit, workspace, native_port=native.port, transport="streamable-http")
                 factory.assert_called_once_with(port=native.port)
                 app = server.streamable_http_app(host="127.0.0.1", streamable_http_path="/mcp",
-                    stateless_http=False, json_response=True,
+                    stateless_http=False, json_response=True, max_request_body_size=sys.maxsize,
                     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=True,
                         allowed_hosts=["127.0.0.1:27124"], allowed_origins=["http://127.0.0.1:27124"]))
                 counter = 0
@@ -271,7 +343,8 @@ class MCPHTTPSharedServerTests(unittest.IsolatedAsyncioTestCase):
             security = TransportSecuritySettings(enable_dns_rebinding_protection=True,
                 allowed_hosts=["127.0.0.1:27124"], allowed_origins=["http://127.0.0.1:27124"])
             app = server.streamable_http_app(host="127.0.0.1", streamable_http_path="/mcp",
-                stateless_http=False, json_response=True, transport_security=security)
+                stateless_http=False, json_response=True, max_request_body_size=sys.maxsize,
+                transport_security=security)
             counter = 0
 
             async def rpc(client, method, params, session=None):
@@ -323,7 +396,7 @@ class MCPHTTPSharedServerTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse((await tool(second, second_session, "g1r_session_status"))["claimed"])
                     listed = await rpc(second, "tools/list", {}, second_session)
                     self.assertEqual(listed.status_code, 200, listed.text)
-                    self.assertEqual(len(listed.json()["result"]["tools"]), 41)
+                    self.assertEqual(len(listed.json()["result"]["tools"]), 44)
                     self.assertEqual((await tool(second, second_session, "g1r_status"))["server"]["transport"], "streamable-http")
                     self.assertEqual(await tool(first, first_session, "g1r_native_status"), native_status)
                     found = await tool(first, first_session, "g1r_find_objects", {"query": "Probe"})

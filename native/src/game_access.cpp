@@ -400,7 +400,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.56"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.57"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
@@ -408,7 +408,7 @@ json GameAccess::status() const {
                      {"last_tick_monotonic_ms",observed?json(observed):json(nullptr)},
                      {"tick_age_ms",observed?json(age):json(nullptr)},
                      {"freshness_limit_ms",kRequestWaitMs},{"world_ready_confirmed",false}}},
-            {"requests",{{"queue_depth",pending},{"queue_limit",8},{"active",active},{"metadata_available",queue_metadata_available},
+            {"requests",{{"queue_depth",pending},{"queue_limit",nullptr},{"active",active},{"metadata_available",queue_metadata_available},
                          {"completed",completed_jobs_.load()},{"cancelled_before_start",cancelled_jobs_.load()},
                          {"wait_timeout_ms",kRequestWaitMs},{"cancelled_jobs_can_execute",false}}},
             {"build_hash",kHash},{"startup_error",startup_error_},
@@ -485,7 +485,7 @@ json GameAccess::request(const json& envelope) {
     {std::unique_lock lock(queue_mutex_,std::try_to_lock);
      if(!lock.owns_lock())throw HandlerError("game_thread_busy","Очередь занята обслуживанием игрового потока; запрос не поставлен",
         {{"executed",false},{"may_have_executed",false},{"do_not_retry",false},{"request_started",false},{"stage","not_queued"}});
-     if(queue_.size()>=8)throw HandlerError("queue_full","Очередь игрового потока заполнена");queue_.push_back(job);}
+     queue_.push_back(job);}
     if(future.wait_for(std::chrono::milliseconds(kRequestWaitMs))!=std::future_status::ready) {
         if(job->state.cancel()) {
             ++cancelled_jobs_;
