@@ -15,6 +15,52 @@ class MCPPODReadTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self._asyncioRunner.get_loop().slow_callback_duration = 2.0
 
+    async def test_large_array_page_and_high_offset_keep_exact_values_and_native_connection(self):
+        offset, limit = 1_000_001, 9_000
+        page = {
+            "source": "live_native", "session_id": "fixture-session-1", "handle": "obj-pod",
+            "property_name": "LargeNumbers", "consistency": "single_tick_sequential",
+            "element_type": "IntProperty", "element_size": 4, "array_dim": 1,
+            "total_count": offset + limit + 3, "offset": offset, "next_offset": offset + limit,
+            "has_more": True, "truncated": True, "partial": False,
+            "items": [{"index": index, "supported": True, "value": index * 3 - 7}
+                      for index in range(offset, offset + limit)],
+        }
+        envelope = {"protocol": 1, "id": "fixture-size-check", "type": "response",
+                    "session_id": "fixture-session-1", "result": page}
+        response_bytes = len(json.dumps(envelope, ensure_ascii=False).encode("utf-8"))
+        self.assertGreater(response_bytes, 64 * 1024)
+        self.assertLess(response_bytes, 1024 * 1024)
+        status = {"ready": True, "session_id": "fixture-session-1", "tick_count": 51}
+        steps = [
+            {"op": "read_array", "params": {"handle": "obj-pod", "property_name": "LargeNumbers",
+             "offset": offset, "limit": limit}, "result": page},
+            {"op": "status", "params": {}, "result": status},
+        ]
+        with tempfile.TemporaryDirectory() as temporary, SessionNativeFixture(steps) as native:
+            root = Path(temporary)
+            modkit = root / "Modkit"
+            (modkit / "Script").mkdir(parents=True)
+            (modkit / "Script" / "Fixture.as").write_text("class UFixture {}\n", encoding="utf-8")
+            workspace = root / "workspace"
+            workspace.mkdir()
+            parameters = StdioServerParameters(command=sys.executable, args=[
+                "-B", "-m", "g1r_mcp.server", "--modkit-root", str(modkit),
+                "--workspace-root", str(workspace), "--native-port", str(native.port)])
+            async with stdio_client(parameters) as (incoming, outgoing):
+                async with ClientSession(incoming, outgoing) as client:
+                    await client.initialize()
+                    response = await client.call_tool("g1r_read_array", {
+                        "handle": "obj-pod", "property_name": "LargeNumbers", "offset": offset, "limit": limit})
+                    self.assertFalse(response.is_error, response.content)
+                    self.assertEqual(response.structured_content, page)
+                    checked = await client.call_tool("g1r_native_status", {})
+                    self.assertFalse(checked.is_error, checked.content)
+                    self.assertEqual(checked.structured_content, status)
+            self.assertEqual(native.connections, 1)
+            self.assertEqual([request["op"] for request in native.requests], ["read_array", "status"])
+            self.assertEqual(len({request["id"] for request in native.requests}), 2)
+
     async def test_paged_array_struct_metadata_and_unsupported_layout_keep_owner_and_values(self):
         common = {"source": "live_native", "session_id": "fixture-session-1", "handle": "obj-pod"}
         page = {**common, "property_name": "Numbers", "consistency": "single_tick_sequential",

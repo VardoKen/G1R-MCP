@@ -29,8 +29,8 @@ json GameAccess::read_array(const json& params) {
             throw HandlerError("invalid_array_params","offset/limit требуют целое число в допустимом диапазоне");
         return static_cast<int>(value.get<uint64_t>());
     };
-    const auto offset=integer("offset",0,0,MaxArrayElements);
-    const auto limit=integer("limit",64,1,200);
+    const auto offset=integer("offset",0,0,std::numeric_limits<int32_t>::max());
+    const auto limit=integer("limit",64,1,std::numeric_limits<int32_t>::max());
     auto object=resolve(handle);
     const auto initial=validate_object(object);
     struct Metadata {
@@ -152,8 +152,6 @@ json GameAccess::read_array(const json& params) {
             } else value=property_value(address,metadata.element_type,metadata.stride,metadata.inner);
             if(value.is_null() && metadata.element_type!="ObjectProperty" && metadata.element_type!="ClassProperty")
                 throw HandlerError("unsupported_array_value","Значение элемента не поддержано");
-            if(value.dump().size()>16384)
-                throw HandlerError("array_value_too_large","Значение элемента превышает 16 КиБ");
             item["value"]=std::move(value);item["supported"]=true;
         } catch(const HandlerError& error) {
             item["error"]={{"code",error.code()},{"message",error.what()}};partial=true;
