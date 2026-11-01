@@ -52,8 +52,10 @@ private:
     using TickFn = void(__fastcall*)(void*);
     using ProcessEventFn = void(__fastcall*)(void*, void*, void*);
     using ASExceptionLoggerFn = void(__fastcall*)(const char*);
+    using ASStackTraceFn = void(__fastcall*)(void*);
     TickFn original_tick_{};
     ASExceptionLoggerFn original_as_exception_logger_{};
+    ASStackTraceFn original_as_stack_trace_{};
     ProcessEventFn process_event_{};
     uintptr_t base_{};
     std::atomic<bool> enabled_{false};
@@ -122,6 +124,7 @@ private:
                           const std::string& target_handle, const nlohmann::json* expected_token);
     static void __fastcall hooked_tick(void* loop);
     static void __fastcall hooked_as_exception_logger(const char* message);
+    static void __fastcall hooked_as_stack_trace(void* output);
     static GameAccess* active_;
 };
 }

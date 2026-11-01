@@ -169,6 +169,8 @@ constexpr uintptr_t kAngelscriptManager = 0xa02fdb8;
 constexpr uintptr_t kFormatDiagnostics = 0x417d2b0;
 constexpr uintptr_t kASExceptionLogger = 0x4183050;
 constexpr uint8_t kASExceptionLoggerBytes[] = {0x48,0x89,0x5c,0x24,0x18,0x56,0x48,0x81,0xec,0xc0,0x01,0x00,0x00};
+constexpr uintptr_t kASStackTrace = 0x4180060;
+constexpr uint8_t kASStackTraceBytes[] = {0x40,0x55,0x53,0x57,0x41,0x55,0x41,0x56,0x48,0x8d,0xac,0x24,0xa0,0xfc,0xff,0xff};
 constexpr uintptr_t kStringConstruct = 0x10316e0;
 constexpr uintptr_t kNameConstruct = 0x11b37a0;
 constexpr uintptr_t kObjectArrayRealloc = 0x108f6a0;
@@ -301,12 +303,14 @@ bool GameAccess::start() {
     if(enabled_) return true;
     try {ensure_image_base();}
     catch(const HandlerError&) {return false;}
-    uint8_t tick[sizeof(kTickBytes)]{},event[sizeof(kEventBytes)]{},exception_logger[sizeof(kASExceptionLoggerBytes)]{};
+    uint8_t tick[sizeof(kTickBytes)]{},event[sizeof(kEventBytes)]{},exception_logger[sizeof(kASExceptionLoggerBytes)]{},stack_trace[sizeof(kASStackTraceBytes)]{};
     if(!copy_memory(tick,reinterpret_cast<void*>(base_+kTick),sizeof(tick)) ||
        !copy_memory(event,reinterpret_cast<void*>(base_+kProcessEvent),sizeof(event)) ||
        !copy_memory(exception_logger,reinterpret_cast<void*>(base_+kASExceptionLogger),sizeof(exception_logger)) ||
+       !copy_memory(stack_trace,reinterpret_cast<void*>(base_+kASStackTrace),sizeof(stack_trace)) ||
        std::memcmp(tick,kTickBytes,sizeof(tick)) || std::memcmp(event,kEventBytes,sizeof(event)) ||
-       std::memcmp(exception_logger,kASExceptionLoggerBytes,sizeof(exception_logger))) {
+       std::memcmp(exception_logger,kASExceptionLoggerBytes,sizeof(exception_logger)) ||
+       std::memcmp(stack_trace,kASStackTraceBytes,sizeof(stack_trace))) {
         startup_error_="signature_mismatch";return false;
     }
     auto initialized=MH_Initialize();
@@ -318,21 +322,61 @@ bool GameAccess::start() {
         MH_RemoveHook(reinterpret_cast<void*>(base_+kASExceptionLogger));startup_error_="as_exception_hook_failed";return false;
     }
     diagnostic("hook_create_enter");
+    if(MH_CreateHook(reinterpret_cast<void*>(base_+kASStackTrace),reinterpret_cast<void*>(&hooked_as_stack_trace),
+                     reinterpret_cast<void**>(&original_as_stack_trace_))!=MH_OK) {
+        MH_DisableHook(reinterpret_cast<void*>(base_+kASExceptionLogger));MH_RemoveHook(reinterpret_cast<void*>(base_+kASExceptionLogger));
+        startup_error_="as_stack_hook_failed";return false;
+    }
+    if(MH_EnableHook(reinterpret_cast<void*>(base_+kASStackTrace))!=MH_OK) {
+        MH_RemoveHook(reinterpret_cast<void*>(base_+kASStackTrace));
+        MH_DisableHook(reinterpret_cast<void*>(base_+kASExceptionLogger));MH_RemoveHook(reinterpret_cast<void*>(base_+kASExceptionLogger));
+        startup_error_="as_stack_hook_failed";return false;
+    }
     if(MH_CreateHook(reinterpret_cast<void*>(base_+kTick),reinterpret_cast<void*>(&hooked_tick),reinterpret_cast<void**>(&original_tick_))!=MH_OK) {
+        MH_DisableHook(reinterpret_cast<void*>(base_+kASStackTrace));MH_RemoveHook(reinterpret_cast<void*>(base_+kASStackTrace));
         MH_DisableHook(reinterpret_cast<void*>(base_+kASExceptionLogger));MH_RemoveHook(reinterpret_cast<void*>(base_+kASExceptionLogger));
         startup_error_="tick_hook_failed";return false;
     }
     if(MH_EnableHook(reinterpret_cast<void*>(base_+kTick))!=MH_OK) {
+        MH_DisableHook(reinterpret_cast<void*>(base_+kASStackTrace));MH_RemoveHook(reinterpret_cast<void*>(base_+kASStackTrace));
         MH_RemoveHook(reinterpret_cast<void*>(base_+kTick));MH_DisableHook(reinterpret_cast<void*>(base_+kASExceptionLogger));
         MH_RemoveHook(reinterpret_cast<void*>(base_+kASExceptionLogger));startup_error_="tick_hook_failed";return false;
     }
     diagnostic("hook_enabled");enabled_=true;return true;
 }
 void __fastcall GameAccess::hooked_as_exception_logger(const char* message) {
+    as_exception_capture::LoggerScope logger;
     as_exception_capture::record(message,[](uintptr_t address,char& value) {
         return copy_memory(&value,reinterpret_cast<const void*>(address),sizeof(value));
     });
     active_->original_as_exception_logger_(message);
+}
+void __fastcall GameAccess::hooked_as_stack_trace(void* output) {
+    active_->original_as_stack_trace_(output);
+    if(!as_exception_capture::active_logger || !as_exception_capture::active ||
+       as_exception_capture::active_logger->owner()!=as_exception_capture::active)return;
+    std::vector<std::string> frames;
+    bool complete=false;
+    try {
+        ArrayHeader header{};
+        if(!copy_memory(&header,output,sizeof(header)))throw HandlerError("invalid_memory","Стек недоступен");
+        if(header.count<0 || header.capacity<header.count ||
+           (!header.data && (header.count || header.capacity)) ||
+           (header.data && (!header.capacity || header.data%alignof(StringHeader))))
+            throw HandlerError("invalid_array_header","Некорректный массив стека");
+        const auto capacity_bytes=static_cast<uintptr_t>(header.capacity)*sizeof(StringHeader);
+        if(header.data>std::numeric_limits<uintptr_t>::max()-capacity_bytes)
+            throw HandlerError("invalid_array_header","Адресный диапазон стека переполняется");
+        frames.reserve(static_cast<size_t>(header.count));
+        for(int32_t index=0;index<header.count;++index) {
+            StringHeader frame{};
+            if(!copy_memory(&frame,reinterpret_cast<const void*>(header.data+static_cast<uintptr_t>(index)*sizeof(frame)),sizeof(frame)))
+                throw HandlerError("invalid_memory","Кадр стека недоступен");
+            frames.push_back(copied_string(frame));
+        }
+        complete=true;
+    } catch(...) {}
+    as_exception_capture::record_stack(std::move(frames),complete);
 }
 void __fastcall GameAccess::hooked_tick(void* loop) {
     static std::atomic<int> reports{0};auto count=reports.fetch_add(1);
@@ -356,9 +400,9 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.42"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.43"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
-                {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_captured",false}}},
+                {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
             {"pump",{{"state",!observed?"not_observed":recent?"recent_tick":"tick_stale"},
                      {"last_tick_monotonic_ms",observed?json(observed):json(nullptr)},

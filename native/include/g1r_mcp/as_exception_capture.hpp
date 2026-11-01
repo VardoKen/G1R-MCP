@@ -10,24 +10,55 @@
 
 namespace g1r_mcp::as_exception_capture {
 
+struct Stack {
+    std::size_t exception_index{};
+    std::vector<std::string> frames;
+    bool complete{};
+};
+
 struct State {
     std::size_t exception_count{};
     std::vector<std::string> messages;
     bool full_capture{true};
+    std::vector<Stack> stacks;
 };
 
 inline thread_local State* active{};
+class LoggerScope;
+inline thread_local LoggerScope* active_logger{};
 
 // Область существует только вокруг текущего ProcessEvent. Вложенный вызов
 // временно принадлежит своей записи, затем возвращает прежнего владельца.
+// Logger восстанавливается здесь также после native SEH, который при /EHsc
+// может пропустить его собственный C++ деструктор внутри ProcessEvent.
 class Scope {
 public:
-    explicit Scope(State& state) noexcept:previous_(std::exchange(active,&state)) {}
-    ~Scope() {active=previous_;}
+    explicit Scope(State& state) noexcept:previous_(std::exchange(active,&state)),
+        previous_logger_(std::exchange(active_logger,nullptr)) {}
+    ~Scope() {active_logger=previous_logger_;active=previous_;}
     Scope(const Scope&)=delete;
     Scope& operator=(const Scope&)=delete;
 private:
     State* previous_;
+    LoggerScope* previous_logger_;
+};
+
+// Logger и вызываемый им formatter разделяют индекс исключения даже тогда,
+// когда сообщение не удалось скопировать. Вложенный logger возвращает владельца.
+class LoggerScope {
+public:
+    LoggerScope() noexcept:owner_(active),previous_(std::exchange(active_logger,this)) {
+        if(owner_)exception_index_=owner_->exception_count++;
+    }
+    ~LoggerScope() {active_logger=previous_;}
+    LoggerScope(const LoggerScope&)=delete;
+    LoggerScope& operator=(const LoggerScope&)=delete;
+    State* owner() const noexcept {return owner_;}
+    std::size_t exception_index() const noexcept {return exception_index_;}
+private:
+    State* owner_;
+    LoggerScope* previous_;
+    std::size_t exception_index_{};
 };
 
 // Reader копирует один байт через существующий SEH-reader. Ни указатель logger,
@@ -36,7 +67,7 @@ private:
 template<class Reader>void record(const char* message,Reader&& read) noexcept {
     auto* state=active;
     if(!state)return;
-    ++state->exception_count;
+    if(!active_logger || active_logger->owner()!=state)++state->exception_count;
     try {
         std::string copied;
         if(!message)copied="NO EXCEPTION";
@@ -54,6 +85,15 @@ template<class Reader>void record(const char* message,Reader&& read) noexcept {
         }
         state->messages.push_back(std::move(copied));
     } catch(...) {state->full_capture=false;}
+}
+
+// Вызывающая сторона передаёт собственные UTF-8 строки после копирования
+// borrowed результата formatter. Указатели игрового массива здесь не хранятся.
+inline void record_stack(std::vector<std::string> frames,bool complete) noexcept {
+    if(!active_logger || !active || active_logger->owner()!=active)return;
+    try {
+        active->stacks.push_back({active_logger->exception_index(),std::move(frames),complete});
+    } catch(...) {active->full_capture=false;}
 }
 
 inline nlohmann::json describe(const State& state) {
@@ -78,6 +118,15 @@ inline nlohmann::json describe(const State& state) {
         }
     }
     if(!message_bytes.empty())result["message_bytes"]=std::move(message_bytes);
+    if(!state.stacks.empty()) {
+        result["stacks_source"]="observed_engine_formatter";
+        result["stacks"]=nlohmann::json::array();
+        for(const auto& stack:state.stacks) {
+            result["stacks"].push_back({{"exception_index",stack.exception_index},
+                {"frames",stack.frames},{"complete",stack.complete}});
+            if(stack.complete)result["stack_captured"]=true;
+        }
+    }
     return result;
 }
 
