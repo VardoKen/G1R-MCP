@@ -39,7 +39,9 @@ TOOLS = (
     "prepare_world_lifecycle_probe.py", "probe_world_lifecycle_mcp.py",
 )
 FIXTURE_DIRS = ("angelscript_probe", "object_probe", "class_probe", "name_probe", "patch_probe", "enum_probe", "lifecycle_probe", "pod_read_probe", "world_lifecycle_probe")
-SOURCE_FILES = ("__init__.py", "server.py", "native_client.py", "development.py", "packages.py", "patches.py", "sources.py", "source_functions.py", "source_identity.py", "game_environment.py", "workspace.py", "snapshots.py", "session_ownership.py", "compile_diagnostics.py")
+SOURCE_FILES = ("__init__.py", "server.py", "native_client.py", "development.py", "packages.py", "patches.py", "sources.py", "source_functions.py", "source_identity.py", "game_environment.py", "workspace.py", "snapshots.py", "session_ownership.py", "compile_diagnostics.py", "process_observer.py")
+HELPER_FILES = ("development/helpers/G1RMCPDevelopmentHelpers/GothicMod.json",
+                "development/helpers/G1RMCPDevelopmentHelpers/Script/G1RMCPDevelopmentHelpers.as")
 FIXTURE_SCRIPTS = {"angelscript_probe": "G1RMCPProbe.as", "object_probe": "G1RMCPObjectProbe.as",
                    "class_probe": "G1RMCPClassProbe.as", "name_probe": "G1RMCPNameProbe.as", "patch_probe": "G1RMCPPatchProbe.as",
                    "enum_probe": "G1RMCPEnumProbe.as", "lifecycle_probe": "G1RMCPLifecycleProbe.as",
@@ -108,7 +110,7 @@ def _compatibility(repository: Path, version: str, dll: bytes, loader: bytes) ->
 
 
 def _enumerate(repository: Path) -> list[str]:
-    paths = list(DOCUMENTS) + ["tools/" + name for name in TOOLS] + list(BINARIES)
+    paths = list(DOCUMENTS) + ["tools/" + name for name in TOOLS] + list(BINARIES) + list(HELPER_FILES)
 
     def failure(error):
         raise BundleError("access_error", "Не удалось перечислить все разрешённые исходники комплекта")
@@ -417,6 +419,7 @@ def verify_bundle(bundle_root: Path) -> dict:
         raise BundleError("integrity_mismatch", "Полный состав комплекта отличается от manifest")
     required = set(DOCUMENTS) | {"tools/" + name for name in TOOLS} | set(BINARIES) | {"НАЧАТЬ.md"}
     required |= {"src/g1r_mcp/" + name for name in SOURCE_FILES}
+    required |= set(HELPER_FILES)
     required |= {f"tests/fixtures/{name}/GothicMod.json" for name in FIXTURE_DIRS}
     required |= {f"tests/fixtures/{name}/Script/{script}" for name, script in FIXTURE_SCRIPTS.items()}
     required.add("tests/fixtures/patch_probe/ScriptPatches/Marker.patch")

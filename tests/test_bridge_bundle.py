@@ -36,6 +36,8 @@ class BridgeBundleTests(unittest.TestCase):
                 self.write("src/g1r_mcp/" + name, b"# isolated source\n")
         for name in bundle.TOOLS:
             self.write("tools/" + name, b"# isolated helper\n")
+        for name in bundle.HELPER_FILES:
+            self.write(name, b"# isolated development helper\n")
         for name in bundle.DOCUMENTS:
             self.write(name, b"# isolated document\n")
         self.write("pyproject.toml", f'[project]\nversion = "{self.version}"\ndependencies=["mcp==2.3.0"]\n'.encode())
@@ -200,6 +202,68 @@ class BridgeBundleTests(unittest.TestCase):
         with self.assertRaises(bundle.BundleError) as captured:
             bundle.prepare_bundle(new_target, repository_root=self.repository)
         self.assertEqual(captured.exception.code, "lock_mismatch")
+
+
+class BridgeBundleDependencyTests(unittest.TestCase):
+    DEPENDENCIES = (
+        "src/g1r_mcp/process_observer.py",
+        "development/helpers/G1RMCPDevelopmentHelpers/GothicMod.json",
+        "development/helpers/G1RMCPDevelopmentHelpers/Script/G1RMCPDevelopmentHelpers.as",
+    )
+
+    def test_selected_dependencies_copy_exact_bytes_without_bundle_generation(self):
+        repository = TOOL.parents[1]
+        selected = bundle._enumerate(repository)
+        self.assertTrue(set(self.DEPENDENCIES).issubset(selected))
+        helper_prefix = "development/helpers/G1RMCPDevelopmentHelpers/"
+        self.assertEqual({path for path in selected if path.startswith(helper_prefix)}, set(self.DEPENDENCIES[1:]))
+        with tempfile.TemporaryDirectory() as temp:
+            destination = Path(temp)
+            for relative in self.DEPENDENCIES:
+                raw = bundle._read(repository / relative, repository)
+                target = destination / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(raw)
+                copied = bundle._read(target, destination)
+                self.assertEqual(copied, raw)
+                self.assertEqual(bundle._sha(copied), bundle._sha(raw))
+            self.assertEqual(bundle._file_set(destination), set(self.DEPENDENCIES))
+
+    def test_verification_rejects_each_missing_dependency(self):
+        repository = TOOL.parents[1]
+        selected = set(bundle._enumerate(repository)) | {"НАЧАТЬ.md"}
+        # Состав baseline моделируется в памяти: инструкции и полный комплект не создаются.
+        contents = {path: b"baseline" for path in selected}
+        contents.update({path: bundle._read(repository / path, repository) for path in self.DEPENDENCIES})
+
+        def verify_with(omitted):
+            files = {path: raw for path, raw in contents.items() if path != omitted}
+            manifest = {"schema_version": 1, "kind": "internal_bridge_folder",
+                        "files": [{"path": path, "bytes": len(raw), "sha256": bundle._sha(raw)}
+                                  for path, raw in sorted(files.items())],
+                        "file_count": len(files), "total_bytes": sum(len(raw) for raw in files.values())}
+            directories = {"."}
+            for path in files:
+                directories.update(parent.as_posix() for parent in Path(path).parents if parent.as_posix() != ".")
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+
+                def read(path, boundary):
+                    relative = path.relative_to(root).as_posix()
+                    return json.dumps(manifest).encode("utf-8") if relative == "manifest.json" else files[relative]
+
+                with patch.object(bundle, "_read", side_effect=read), \
+                     patch.object(bundle, "_file_set", return_value=set(files) | {"manifest.json"}), \
+                     patch.object(bundle, "_directory_set", return_value=directories), \
+                     patch.object(bundle, "_version", side_effect=RuntimeError("required dependency gate passed")):
+                    return bundle.verify_bundle(root)
+
+        with self.assertRaisesRegex(RuntimeError, "required dependency gate passed"):
+            verify_with(None)
+        for missing in self.DEPENDENCIES:
+            with self.subTest(missing=missing), self.assertRaises(bundle.BundleError) as captured:
+                verify_with(missing)
+            self.assertEqual(captured.exception.code, "incomplete_bundle")
 
 
 if __name__ == "__main__":
