@@ -487,23 +487,20 @@ class DevelopmentService:
         manifest = self._composition_manifest(relative_package, companion_packages,
                                               enable_ingame_tools=enable_ingame_tools,
                                               show_script_errors=show_script_errors)
-        package = self.workspace.root / manifest["package_path"]
         try:
             artifact = {"available": True, **self.native_artifact()}
         except DevelopmentError as error:
             artifact = {"available": False, "reason_code": error.code}
-        composed = "packages" in manifest
         return {"manifest": manifest, "process_state": self.process_state(), "native_artifact": artifact,
-                "launch": {"mods_directory": None if composed else str(package.parent),
-                           "mods": manifest["selected_mods"] if composed else [manifest["package_name"]],
+                "launch": {"mods_directory": None,
+                           "mods": manifest.get("selected_mods", [manifest["package_name"]]),
                            "enable_ingame_tools": enable_ingame_tools,
                            "show_script_errors": show_script_errors,
                            "compiler_exit_on_error": not show_script_errors,
                            "effects": "Replace the package selection only in the game session being launched",
                            "compilation_trigger": "game_startup", "hot_reload": "function_bodies_file_watch",
-                           **({"staging_created_by": "development_start", "edit_target": "staged_copy_only",
-                               "staging_retention": "retain_for_review", "source_packages_modified": False}
-                              if composed else {})},
+                           "staging_created_by": "development_start", "edit_target": "staged_copy_only",
+                           "staging_retention": "retain_for_review", "source_packages_modified": False},
                 "diagnostics_available": False, "dedicated_compile_command": False,
                 "compiled": False, "runtime_validation": "not_performed"}
 
@@ -542,7 +539,7 @@ class DevelopmentService:
         if manifest["manifest_sha256"] != expected_manifest_sha256.lower():
             raise DevelopmentError("package_changed", "The package changed after the recipe was prepared")
         state = self.process_state()
-        composed = "packages" in manifest
+        selected_mods = manifest.get("selected_mods", [manifest["package_name"]])
         arguments = ["-GameRoot", str(self.game)]
         if enable_ingame_tools:
             arguments.append("-EnableIngameTools")
@@ -556,19 +553,16 @@ class DevelopmentService:
             raise DevelopmentError("game_running", "A running game requires restart and an exact process identity")
         elif expected_process is not None:
             raise DevelopmentError("invalid_arguments", "expected_process is used only with restart")
-        stage = self._stage_composition(manifest) if composed else None
-        if stage is not None:
-            fresh = self._composition_manifest(relative_package, companion_packages,
-                                               enable_ingame_tools=enable_ingame_tools,
-                                               show_script_errors=show_script_errors)
-            if fresh["manifest_sha256"] != manifest["manifest_sha256"]:
-                raise DevelopmentError("package_changed", "Source packages changed while the development session was being prepared")
-            self._verify_staged_composition(stage)
-            arguments.extend(["-ModsDirectory", stage["mods_directory"], "-ModsCsv",
-                              ",".join(manifest["selected_mods"])])
-        else:
-            arguments.extend(["-ModsDirectory", str((self.workspace.root / manifest["package_path"]).parent),
-                              "-Mods", manifest["package_name"]])
+        stage_manifest = manifest if "packages" in manifest else {
+            **manifest, "packages": [{"role": "main", **manifest}], "selected_mods": selected_mods}
+        stage = self._stage_composition(stage_manifest)
+        fresh = self._composition_manifest(relative_package, companion_packages,
+                                           enable_ingame_tools=enable_ingame_tools,
+                                           show_script_errors=show_script_errors)
+        if fresh["manifest_sha256"] != manifest["manifest_sha256"]:
+            raise DevelopmentError("package_changed", "Source packages changed while the development session was being prepared")
+        self._verify_staged_composition(stage)
+        arguments.extend(["-ModsDirectory", stage["mods_directory"], "-ModsCsv", ",".join(selected_mods)])
         try:
             self._close_process_lease()
         except Exception:
@@ -577,12 +571,9 @@ class DevelopmentService:
             self._launch_observation.update(stage="observation_closed", observer_closed=True, outcome_unknown=True)
         request_started_at = datetime.now(timezone.utc).isoformat()
         response = self._command("start_g1r_development.ps1", arguments, mutating=True)
-        receipt_matches = response.get("package_name") == manifest["package_name"]
-        if stage is not None:
-            receipt_root = response.get("mods_directory")
-            receipt_matches = (response.get("mods") == manifest["selected_mods"]
-                and isinstance(receipt_root, str)
-                and os.path.normcase(receipt_root) == os.path.normcase(stage["mods_directory"]))
+        receipt_root = response.get("mods_directory")
+        receipt_matches = (response.get("mods") == selected_mods and isinstance(receipt_root, str)
+            and os.path.normcase(receipt_root) == os.path.normcase(stage["mods_directory"]))
         if response.get("state") != "launch_requested" or not receipt_matches:
             raise DevelopmentError("tool_protocol_error", "The launch response did not confirm that the selected package was passed to Steam",
                                    outcome_unknown=True)
@@ -596,9 +587,8 @@ class DevelopmentService:
             "capture_attempted": False, "exit_code": None, "exit_time": None,
             "compiler_exit_on_error": not show_script_errors, "compiler_failure_confirmed": False,
             "compiled_confirmed": False, "runtime_validation": "not_performed",
-            "manifest_provenance": "requested_package_bytes", "outcome_unknown": True,
-            **({"selected_mods": manifest["selected_mods"], "development_staging": stage,
-                "manifest_provenance": "source_packages_verified_staged_bytes_at_launch"} if stage is not None else {})}
+            "manifest_provenance": "source_packages_verified_staged_bytes_at_launch", "outcome_unknown": True,
+            "selected_mods": selected_mods, "development_staging": stage}
         return {"state": "launch_requested", "manifest_sha256": manifest["manifest_sha256"],
                 "package_name": manifest["package_name"], "tool_result": response,
                 "enable_ingame_tools": enable_ingame_tools,
@@ -607,12 +597,12 @@ class DevelopmentService:
                 "compiled": False, "runtime_validation": "not_performed",
                 "game_ready": False, "outcome_unknown": False,
                 "launch_observation": copy.deepcopy(self._launch_observation),
-                **({"development_staging": copy.deepcopy(stage),
-                    "active_staging_packages": [{key: item[key] for key in
+                "development_staging": copy.deepcopy(stage),
+                "active_staging_packages": [{key: item[key] for key in
                         ("role", "source_package_path", "relative_package", "package_name", "manifest_sha256_at_launch")}
-                        for item in stage["packages"]], "source_packages_modified": False,
-                    "edit_target": "staged_copy_only", "hot_reload": "function_bodies_file_watch",
-                    "staging_retention": "retain_for_review"} if stage is not None else {})}
+                    for item in stage["packages"]], "source_packages_modified": False,
+                "edit_target": "staged_copy_only", "hot_reload": "function_bodies_file_watch",
+                "staging_retention": "retain_for_review"}
 
     def apply_staged_file(self, relative_package: str, file_path: str,
                           expected_source_sha256: str, expected_staged_sha256: str,

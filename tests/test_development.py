@@ -54,7 +54,9 @@ class DevelopmentTests(unittest.TestCase):
         if script in self.responses:
             return self.responses[script]
         if script == "start_g1r_development.ps1":
-            result = {"state": "launch_requested", "package_name": "Probe"}
+            result = {"state": "launch_requested", "package_name": "Probe",
+                      "mods": arguments[arguments.index("-ModsCsv") + 1].split(","),
+                      "mods_directory": arguments[arguments.index("-ModsDirectory") + 1]}
         elif script == "stop_g1r_development.ps1":
             result = {"state": "stopped", "process": self.identity}
         else:
@@ -72,7 +74,10 @@ class DevelopmentTests(unittest.TestCase):
         manifest = result["manifest"]
         self.assertEqual([entry["path"] for entry in manifest["files"]],
                          ["Content/asset.bin", "GothicMod.json", "Script/Probe.as"])
-        self.assertEqual(result["launch"]["mods_directory"], str(self.package.parent))
+        self.assertIsNone(result["launch"]["mods_directory"])
+        self.assertEqual(result["launch"]["staging_created_by"], "development_start")
+        self.assertEqual(result["launch"]["edit_target"], "staged_copy_only")
+        self.assertFalse((self.workspace / "artifacts").exists())
         self.assertEqual(result["launch"]["mods"], ["Probe"])
         self.assertFalse(result["compiled"])
         self.assertFalse(result["diagnostics_available"])
@@ -85,14 +90,29 @@ class DevelopmentTests(unittest.TestCase):
 
     def test_start_binds_recipe_hash_and_requests_only_fixed_command(self):
         recipe = self.recipe()
+        source_bytes = {path.relative_to(self.package).as_posix(): path.read_bytes()
+                        for path in self.package.rglob("*") if path.is_file()}
         result = self.service.start("Nested/Probe", recipe["manifest"]["manifest_sha256"])
         self.assertEqual(result["state"], "launch_requested")
         self.assertFalse(result["compiled"])
         self.assertFalse(result["game_ready"])
         arguments = self.calls[-1][0]
         self.assertEqual(arguments[0], "fixed-powershell")
-        self.assertEqual(arguments[arguments.index("-Mods") + 1], "Probe")
-        self.assertEqual(arguments[arguments.index("-ModsDirectory") + 1], str(self.package.parent))
+        self.assertEqual(arguments[arguments.index("-ModsCsv") + 1], "Probe")
+        stage = result["development_staging"]
+        self.assertEqual(arguments[arguments.index("-ModsDirectory") + 1], stage["mods_directory"])
+        self.assertNotEqual(stage["mods_directory"], str(self.package.parent))
+        self.assertNotIn("-Mods", arguments)
+        active = result["active_staging_packages"][0]
+        staged_package = self.workspace / active["relative_package"]
+        self.assertEqual({path.relative_to(staged_package).as_posix(): path.read_bytes()
+                          for path in staged_package.rglob("*") if path.is_file()}, source_bytes)
+        self.assertEqual({path.relative_to(self.package).as_posix(): path.read_bytes()
+                          for path in self.package.rglob("*") if path.is_file()}, source_bytes)
+        self.assertEqual(self.service._manifest(active["relative_package"])["manifest_sha256"],
+                         active["manifest_sha256_at_launch"])
+        self.assertEqual(result["manifest_sha256"], recipe["manifest"]["manifest_sha256"])
+        self.assertFalse(result["source_packages_modified"])
         self.assertEqual(arguments[-1], "-Json")
         (self.package / "Script" / "Probe.as").write_text("class UChanged {}", encoding="utf-8")
         before = len(self.calls)
@@ -150,7 +170,7 @@ class DevelopmentTests(unittest.TestCase):
                 self.assertEqual(result["state"], "launch_requested")
                 arguments = self.calls[-1][0]
                 self.assertEqual(arguments.count("-EnableIngameTools"), 1 if requested else 0)
-                self.assertEqual(arguments[arguments.index("-Mods") + 1], "Probe")
+                self.assertEqual(arguments[arguments.index("-ModsCsv") + 1], "Probe")
                 self.assertFalse(result["compiled"])
 
     def test_restart_requires_current_exact_process_identity(self):
