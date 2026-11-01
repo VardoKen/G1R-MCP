@@ -23,9 +23,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from g1r_mcp.workspace import WorkspaceError, _checked, _destination_lock, _guard_directories, _read_bytes
 
-MAX_FILES = 512
-MAX_FILE_BYTES = 16 * 1024 * 1024
-MAX_TOTAL_BYTES = 64 * 1024 * 1024
 TOOLS = (
     "start_shared_mcp.ps1", "stop_shared_mcp.ps1",
     "game_process_common.ps1", "game_process_state.ps1", "start_g1r_development.ps1", "stop_g1r_development.ps1",
@@ -66,7 +63,7 @@ def _identity(path: Path) -> tuple[int, int]:
 
 
 def _read(path: Path, boundary: Path) -> bytes:
-    return _read_bytes(_checked(path, boundary), boundary, MAX_FILE_BYTES)
+    return _read_bytes(_checked(path, boundary), boundary, None)
 
 
 def _version(repository: Path) -> str:
@@ -118,25 +115,19 @@ def _enumerate(repository: Path) -> list[str]:
     for root, allowed_suffix in ((repository / "src/g1r_mcp", {".py"}),
                                  *[(repository / "tests/fixtures" / name, {".json", ".as", ".patch"}) for name in FIXTURE_DIRS]):
         _checked(root, repository, directory=True)
-        directory_count = 0
         for directory, directories, files in os.walk(root, followlinks=False, onerror=failure):
-            directory_count += 1
-            if directory_count > MAX_FILES:
-                raise BundleError("bundle_limit", "The source area contains too many directories")
             parent = _checked(Path(directory), repository, directory=True)
             directories[:] = [name for name in directories if name != "__pycache__"]
             for name in directories:
                 _checked(parent / name, repository, directory=True)
             for name in files:
-                if len(paths) >= MAX_FILES:
-                    raise BundleError("bundle_limit", "Sources exceed the file count limit")
                 path = _checked(parent / name, repository)
                 if not path.is_file():
                     raise BundleError("unsafe_file", "The allowed area contains a non-regular file")
                 if path.suffix.lower() in allowed_suffix:
                     paths.append(path.relative_to(repository).as_posix())
-    if len(paths) > MAX_FILES or len(set(paths)) != len(paths):
-        raise BundleError("bundle_limit", "The bundle exceeds a limit or contains duplicate paths")
+    if len(set(paths)) != len(paths):
+        raise BundleError("bundle_limit", "The bundle contains duplicate paths")
     return sorted(paths)
 
 
@@ -181,17 +172,11 @@ def _file_set(root: Path) -> set[str]:
     def failure(error):
         raise BundleError("copy_changed", "Failed to verify the complete bundle contents")
 
-    directory_count = 0
     for directory, directories, files in os.walk(root, followlinks=False, onerror=failure):
-        directory_count += 1
-        if directory_count > MAX_FILES or len(paths) > MAX_FILES + 2:
-            raise BundleError("bundle_limit", "The prepared bundle grew unexpectedly")
         parent = _checked(Path(directory), root, directory=True)
         for name in directories:
             _checked(parent / name, root, directory=True)
         for name in files:
-            if len(paths) >= MAX_FILES + 2:
-                raise BundleError("bundle_limit", "The bundle exceeds the file count limit")
             path = _checked(parent / name, root)
             if not path.is_file():
                 raise BundleError("unsafe_file", "The bundle contains a non-regular file")
@@ -207,8 +192,6 @@ def _directory_set(root: Path) -> set[str]:
         for name in children:
             path = _checked(parent / name, root, directory=True)
             directories.add(path.relative_to(root).as_posix())
-            if len(directories) > MAX_FILES:
-                raise BundleError("bundle_limit", "The bundle contains too many directories")
     return directories
 
 
@@ -298,12 +281,8 @@ def prepare_bundle(destination: Path, *, repository_root: Path = ROOT) -> dict:
     version = _version(repository)
     selected = _enumerate(repository)
     raw_files = {}
-    total = 0
     for relative in selected:
         raw = _read(repository / relative, repository)
-        total += len(raw)
-        if total > MAX_TOTAL_BYTES:
-            raise BundleError("bundle_limit", "The bundle exceeds the 64 MiB limit")
         raw_files[relative] = raw
     compatibility = _compatibility(repository, version, raw_files[BINARIES[0]], raw_files[BINARIES[1]])
     compatibility_source = _sha(_read(repository / "native/src/game_access.cpp", repository))
@@ -390,7 +369,7 @@ def verify_bundle(bundle_root: Path) -> dict:
     if not isinstance(manifest, dict) or manifest.get("schema_version") != 1 or manifest.get("kind") != "internal_bridge_folder":
         raise BundleError("invalid_manifest", "Unsupported bundle manifest")
     files = manifest.get("files")
-    if not isinstance(files, list) or not 1 <= len(files) <= MAX_FILES:
+    if not isinstance(files, list) or not files:
         raise BundleError("invalid_manifest", "Invalid bundle file list")
     expected = {"manifest.json"}
     expected_directories = {"."}
@@ -412,8 +391,6 @@ def verify_bundle(bundle_root: Path) -> dict:
         if type(entry.get("bytes")) is not int or entry["bytes"] != len(content) or entry.get("sha256") != _sha(content):
             raise BundleError("integrity_mismatch", "A bundle file hash or size does not match")
         total += len(content)
-        if total > MAX_TOTAL_BYTES:
-            raise BundleError("bundle_limit", "The bundle exceeds the size limit")
     if (_file_set(root) != expected or _directory_set(root) != expected_directories
             or manifest.get("file_count") != len(files) or manifest.get("total_bytes") != total):
         raise BundleError("integrity_mismatch", "The complete bundle contents differ from the manifest")
