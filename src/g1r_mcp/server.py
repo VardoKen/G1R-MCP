@@ -57,7 +57,7 @@ NATIVE_TOOLS = (
     ("g1r_native_enable", "Включить очередь игрового Tick в уже загруженной DLL"),
     ("g1r_find_objects", "Поиск объектов текущего процесса игры"),
     ("g1r_object_properties", "Чтение отражённых скалярных свойств"),
-    ("g1r_read_array", "Ограниченное чтение страницы отражённого массива"),
+    ("g1r_read_array", "Копирование страницы массива, включая структуры с собственными скалярными полями"),
     ("g1r_read_struct", "Копирование собственных отражённых скалярных полей структуры"),
     ("g1r_object_functions", "Список отражённых функций объекта"),
     ("g1r_invoke", "Один явный вызов отражённой функции"),
@@ -243,6 +243,19 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                       "stack_capture_supported": True,
                                       "stack_result_field": "script_errors.stack_captured",
                                       "absence_of_logged_errors_proves_script_completion": False},
+            "array_values": {"tool": "g1r_read_array", "source": "runtime_reflection",
+                             "result_field": "items", "item_fields": ["index", "supported", "value", "error"],
+                             "struct_element_type": "StructProperty", "struct_value_shape": "object",
+                             "struct_metadata_field": "element_struct",
+                             "struct_metadata_fields": ["struct_path", "struct_name", "properties_size", "min_alignment", "components"],
+                             "struct_component_fields": ["name", "type", "element_size", "offset"],
+                             "struct_field_types": ["BoolProperty", "IntProperty", "Int64Property", "UInt32Property",
+                                                    "UInt64Property", "FloatProperty", "DoubleProperty"],
+                             "own_fields_only": True, "nested_struct_fields_supported": False,
+                             "string_struct_fields_supported": False, "nested_arrays_supported": False,
+                             "consistency": "single_tick_sequential", "multiple_pages_atomic": False,
+                             "availability": "requires_live_native_status_and_current_game_tick",
+                             "current_checked": False},
             "struct_values": {"tool": "g1r_read_struct", "source": "runtime_reflection",
                               "result_field": "components",
                               "component_fields": ["name", "type", "element_size", "offset", "value"],
@@ -747,7 +760,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_read_array(handle: str, property_name: str, offset: int = 0, limit: int = 64) -> dict[str, Any]:
-        """Скопировать страницу массива; между страницами нет атомарного снимка."""
+        """Скопировать страницу массива, включая скалярные DTO-структуры; между страницами нет атомарного снимка."""
         return native_request("read_array", {"handle": handle, "property_name": property_name, "offset": offset, "limit": limit})
 
     @server.tool(annotations=read_only)

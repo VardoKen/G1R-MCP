@@ -2,9 +2,12 @@
 #include "g1r_mcp/game_memory.hpp"
 #include "g1r_mcp/array_page.hpp"
 #include "g1r_mcp/scalar_arguments.hpp"
+#include "g1r_mcp/scalar_struct_values.hpp"
 #include <array>
 #include <limits>
+#include <optional>
 #include <set>
+#include <span>
 
 namespace g1r_mcp {
 using json=nlohmann::json;
@@ -40,6 +43,7 @@ json GameAccess::read_array(const json& params) {
         uint8_t array_flags{};
         std::string element_type;
         std::vector<uint64_t> auxiliary;
+        std::optional<scalar_struct_values::Snapshot> element_struct;
         Handle owner_identity;
     };
     auto capture=[&]() {
@@ -84,10 +88,17 @@ json GameAccess::read_array(const json& params) {
             || (type=="NameProperty" && result.stride==8)
             || (type=="ObjectProperty" && result.stride==8)
             || (type=="ClassProperty" && result.stride==8)
-            || type=="BoolProperty" || type=="EnumProperty";
+            || type=="BoolProperty" || type=="EnumProperty" || type=="StructProperty";
         if(!supported || result.inner_dim!=1)
             throw HandlerError("unsupported_array_element","Тип или ArrayDim элемента массива пока не поддержан");
-        if(type=="BoolProperty") {
+        if(type=="StructProperty") {
+            result.element_struct=scalar_struct_values::capture(result.inner,result.stride,result.inner_dim,
+                []<class Value>(uintptr_t address){return read<Value>(address);},
+                [this](uint64_t value){return name(value);},
+                [this](uintptr_t value){return serial_identity(validate_object(reinterpret_cast<void*>(value)));},
+                [this](uintptr_t value){validate_class(reinterpret_cast<void*>(value));},
+                [this](uintptr_t value){return object_path(reinterpret_cast<void*>(value));});
+        } else if(type=="BoolProperty") {
             const auto byte_offset=read<uint8_t>(result.inner+0x71),mask=read<uint8_t>(result.inner+0x73);
             validate_bool_layout(result.stride,byte_offset,mask);
             result.auxiliary={byte_offset,mask};
@@ -135,7 +146,7 @@ json GameAccess::read_array(const json& params) {
            || metadata.owner_size!=after.owner_size || metadata.stride!=after.stride
            || metadata.inner_dim!=after.inner_dim || metadata.inner_offset!=after.inner_offset
            || metadata.array_flags!=after.array_flags || metadata.element_type!=after.element_type
-           || metadata.auxiliary!=after.auxiliary)
+           || metadata.auxiliary!=after.auxiliary || metadata.element_struct!=after.element_struct)
             throw HandlerError("array_changed","Объект, заголовок или раскладка массива изменились при чтении");
         resolve(handle);
     };
@@ -146,7 +157,11 @@ json GameAccess::read_array(const json& params) {
         try {
             const auto address=reinterpret_cast<uintptr_t>(copied.data()+static_cast<size_t>(index)*metadata.stride);
             json value;
-            if(metadata.element_type=="EnumProperty" || metadata.element_type=="ByteProperty") {
+            if(metadata.element_struct) {
+                const auto element=std::span<const std::byte>(copied).subspan(
+                    static_cast<size_t>(index)*metadata.stride,static_cast<size_t>(metadata.stride));
+                value=scalar_struct_values::decode(metadata.element_struct->layout,element);
+            } else if(metadata.element_type=="EnumProperty" || metadata.element_type=="ByteProperty") {
                 const auto result=enum_property(address,metadata.element_type,metadata.stride,metadata.inner);
                 value=result.at("value");if(result.contains("enum"))item["enum"]=result.at("enum");
             } else value=property_value(address,metadata.element_type,metadata.stride,metadata.inner);
@@ -159,12 +174,23 @@ json GameAccess::read_array(const json& params) {
         items.push_back(std::move(item));
     }
     revalidate();
-    return {{"source","live_native"},{"session_id",handle_session_},{"process_id",GetCurrentProcessId()},
+    json result={{"source","live_native"},{"session_id",handle_session_},{"process_id",GetCurrentProcessId()},
         {"thread_id",GetCurrentThreadId()},{"tick_count",ticks_.load()},{"handle",handle},
         {"property_name",property_name},{"element_type",metadata.element_type},{"element_size",metadata.stride},
         {"array_dim",metadata.inner_dim},{"total_count",header.count},{"offset",page.offset},
         {"next_offset",page.has_more?json(page.next_offset):json(nullptr)},{"has_more",page.has_more},
         {"truncated",page.has_more},{"consistency","single_tick_sequential"},{"partial",partial},{"items",items}};
+    if(metadata.element_struct) {
+        const auto& structure=*metadata.element_struct;
+        json components=json::array();
+        for(const auto& component:structure.layout.components)
+            components.push_back({{"name",component.name},{"type",component.layout.type},
+                {"element_size",component.layout.element_size},{"offset",component.offset}});
+        result["element_struct"]={{"struct_path",structure.path},{"struct_name",structure.struct_name},
+            {"properties_size",structure.layout.properties_size},{"min_alignment",structure.layout.min_alignment},
+            {"components",std::move(components)}};
+    }
+    return result;
 }
 
 } // namespace g1r_mcp

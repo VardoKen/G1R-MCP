@@ -73,6 +73,16 @@ class MCPPODReadTests(unittest.IsolatedAsyncioTestCase):
                  "element_type": "NameProperty", "element_size": 8, "array_dim": 1,
                  "total_count": 0, "offset": 0, "next_offset": None, "has_more": False,
                  "truncated": False, "partial": False, "items": []}
+        struct_array = {**common, "property_name": "Positions2D", "consistency": "single_tick_sequential",
+                        "element_type": "StructProperty", "element_size": 16, "array_dim": 1,
+                        "total_count": 5, "offset": 2, "next_offset": 4, "has_more": True,
+                        "truncated": True, "partial": False,
+                        "element_struct": {"struct_path": "/Script/CoreUObject.Vector2D", "struct_name": "Vector2D",
+                                           "properties_size": 16, "min_alignment": 8,
+                                           "components": [{"name": "X", "type": "DoubleProperty", "element_size": 8, "offset": 0},
+                                                          {"name": "Y", "type": "DoubleProperty", "element_size": 8, "offset": 8}]},
+                        "items": [{"index": 2, "supported": True, "value": {"X": 12345.0625, "Y": -9876.125}},
+                                  {"index": 3, "supported": True, "value": {"X": -0.03125, "Y": 32768.25}}]}
         struct = {**common, "property_name": "StoredVector",
                   "consistency": "copied_bytes_then_metadata_revalidated",
                   "struct_path": "/Script/ActualReflection.Vector", "properties_size": 24,
@@ -98,6 +108,8 @@ class MCPPODReadTests(unittest.IsolatedAsyncioTestCase):
              "offset": 200, "limit": 200}, "result": page},
             {"op": "read_array", "params": {"handle": "obj-pod", "property_name": "EmptyNames",
              "offset": 0, "limit": 64}, "result": empty},
+            {"op": "read_array", "params": {"handle": "obj-pod", "property_name": "Positions2D",
+             "offset": 2, "limit": 2}, "result": struct_array},
             {"op": "read_struct", "params": {"handle": "obj-pod", "property_name": "StoredVector"}, "result": struct},
             {"op": "read_struct", "params": {"handle": "obj-pod", "property_name": "StoredVector2D"}, "result": vector2d},
             {"op": "read_struct", "params": {"handle": "obj-pod", "property_name": "NestedTransform"},
@@ -123,6 +135,11 @@ class MCPPODReadTests(unittest.IsolatedAsyncioTestCase):
                     struct_schema = tools["g1r_read_struct"].input_schema
                     self.assertEqual(set(struct_schema["properties"]), {"handle", "property_name"})
                     self.assertEqual(set(struct_schema["required"]), {"handle", "property_name"})
+                    array_schema = tools["g1r_read_array"].input_schema
+                    self.assertEqual(set(array_schema["properties"]), {"handle", "property_name", "offset", "limit"})
+                    self.assertEqual(set(array_schema["required"]), {"handle", "property_name"})
+                    self.assertEqual(array_schema["properties"]["offset"]["default"], 0)
+                    self.assertEqual(array_schema["properties"]["limit"]["default"], 64)
                     capabilities = await client.call_tool("g1r_capabilities", {})
                     self.assertFalse(capabilities.is_error, capabilities.content)
                     contract = capabilities.structured_content["struct_values"]
@@ -131,6 +148,12 @@ class MCPPODReadTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(contract["properties_size"], "reflected")
                     self.assertTrue(contract["own_fields_only"])
                     self.assertFalse(contract["current_checked"])
+                    array_contract = capabilities.structured_content["array_values"]
+                    self.assertEqual(array_contract["struct_value_shape"], "object")
+                    self.assertEqual(array_contract["struct_metadata_field"], "element_struct")
+                    self.assertEqual(array_contract["struct_metadata_fields"], list(struct_array["element_struct"]))
+                    self.assertFalse(array_contract["multiple_pages_atomic"])
+                    self.assertFalse(array_contract["current_checked"])
                     for name in ("g1r_read_array", "g1r_read_struct"):
                         annotations = tools[name].annotations
                         self.assertTrue(annotations.read_only_hint)
@@ -139,6 +162,7 @@ class MCPPODReadTests(unittest.IsolatedAsyncioTestCase):
                     for tool, params, expected in (
                         ("g1r_read_array", {"handle": "obj-pod", "property_name": "Numbers", "offset": 200, "limit": 200}, page),
                         ("g1r_read_array", {"handle": "obj-pod", "property_name": "EmptyNames"}, empty),
+                        ("g1r_read_array", {"handle": "obj-pod", "property_name": "Positions2D", "offset": 2, "limit": 2}, struct_array),
                         ("g1r_read_struct", {"handle": "obj-pod", "property_name": "StoredVector"}, struct),
                         ("g1r_read_struct", {"handle": "obj-pod", "property_name": "StoredVector2D"}, vector2d),
                     ):
@@ -152,14 +176,14 @@ class MCPPODReadTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(error["code"], "unsupported_struct_layout")
                     self.assertIs(error["may_have_executed"], False)
                     self.assertEqual(error["effect"], no_effect)
-                    self.assertEqual(error["request_id"], native.requests[4]["id"])
+                    self.assertEqual(error["request_id"], native.requests[5]["id"])
                     checked = await client.call_tool("g1r_native_status", {})
                     self.assertFalse(checked.is_error, checked.content)
                     self.assertEqual(checked.structured_content, status)
             self.assertEqual(native.connections, 1)
             self.assertEqual([request["op"] for request in native.requests],
-                             ["read_array", "read_array", "read_struct", "read_struct", "read_struct", "status"])
-            self.assertEqual(len({request["id"] for request in native.requests}), 6)
+                             ["read_array", "read_array", "read_array", "read_struct", "read_struct", "read_struct", "status"])
+            self.assertEqual(len({request["id"] for request in native.requests}), 7)
 
 
 if __name__ == "__main__":
