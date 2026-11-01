@@ -551,7 +551,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.68"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.69"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -1596,8 +1596,6 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         if(type=="StrProperty" && (flags&0x400))has_string_return=true;
         if(type=="ArrayProperty")contains_object_array=true;
     }
-    if(contains_object_array && (contains_string_input || has_string_return))
-        throw HandlerError("unsupported_signature","Object array inputs cannot currently be combined with FString inputs or returns");
     const bool strict_pod_contract=contains_vector || contains_transform || contains_color || contains_rotator || contains_scalar_struct || contains_scalar_output || contains_string_input || contains_object_array;
     if(strict_pod_contract) {
         pod_function_contract=capture_function_contract(object,function_owner,function,target_handle);
@@ -1752,6 +1750,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         string_ledger.prepare(string_inputs.size());
         require_same_function_contract(pod_function_contract,capture_function_contract(object,function_owner,function,target_handle));
     }
+    if(!contains_string_input && contains_object_array && has_string_return)string_ledger.prepare(0);
     auto validate_string_inputs=[&] {
         if(!contains_string_input)return;
         for(size_t index=0;index<string_inputs.size();++index) {
@@ -1769,6 +1768,28 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             }
         }
         require_same_function_contract(pod_function_contract,capture_function_contract(object,function_owner,function,target_handle));
+    };
+    auto release_mixed_strings=[&](json& details) {
+        if(!contains_string_input && !has_string_return)return;
+        if(string_event_completed && contains_string_input && !string_cleanup_done && !string_ledger.uncertain()) {
+            try{validate_string_inputs();}catch(...) {string_ledger.mark_uncertain();string_quarantine_cause=3;}
+        }
+        if(!script_errors.exception_count && string_event_completed && has_string_return && !string_cleanup_done && !string_return_registered && !string_ledger.uncertain()) {
+            StringHeader header{};
+            try {
+                if(!copy_memory(&header,buffer+return_offset,sizeof(header)))throw HandlerError("invalid_string_storage","The FString result is unavailable");
+                string_ledger.add_return(header);string_return_registered=true;
+            }catch(...) {string_ledger.mark_uncertain();string_quarantine_cause=4;}
+        }
+        const auto cleanup=release_strings();
+        if(contains_string_input)details["input_cleanup_confirmed"]=cleanup.confirmed;
+        const bool return_confirmed=!has_string_return || !string_event_started || (string_return_registered && cleanup.confirmed);
+        if(has_string_return)details["return_cleanup_confirmed"]=return_confirmed;
+        details["cleanup_confirmed"]=details.value("cleanup_confirmed",true) && cleanup.confirmed && return_confirmed;
+        details["cleanup_attempted"]=details.value("cleanup_attempted",false) || cleanup.attempted;
+        details["cleanup_state"]=details["cleanup_confirmed"].get<bool>()?"released":"unknown";
+        details["do_not_retry"]=details.value("do_not_retry",false) || !details["cleanup_confirmed"].get<bool>();
+        details["string_input_quarantined"]=string_inputs_quarantined_.load();
     };
     try {
     for(const auto field:parameter_fields) {
@@ -2109,7 +2130,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         event_returned=call_event(reinterpret_cast<void*>(process_event_),object,reinterpret_cast<void*>(function),buffer,&native_fault);
     }
     if(!event_returned) {
-        if(contains_string_input){string_ledger.mark_uncertain();string_quarantine_cause=2;}
+        if(contains_string_input || (contains_object_array && has_string_return)){string_ledger.mark_uncertain();string_quarantine_cause=2;}
         if(contains_object_array){array_ledger.mark_uncertain();array_quarantine_cause=2;}
         json details={{"executed",false},{"may_have_executed",true},{"do_not_retry",true},
             {"native_exception",native_exception::describe(native_fault)}};
@@ -2124,15 +2145,17 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         json details={{"executed",true},{"may_have_executed",true},{"do_not_retry",true},
             {"process_event_returned",true},{"script_completion_confirmed",false},
             {"script_errors",as_exception_capture::describe(script_errors)}};
-        if(return_type=="StrProperty")details["return_cleanup_confirmed"]=false;
+        if(return_type=="StrProperty") {
+            details["return_cleanup_confirmed"]=false;details["cleanup_confirmed"]=false;
+        }
         if(contains_string_input) {
             try {validate_string_inputs();}
             catch(const HandlerError& error) {string_ledger.mark_uncertain();string_quarantine_cause=3;details["cleanup_error"]=error.code();}
             catch(...) {string_ledger.mark_uncertain();string_quarantine_cause=3;details["cleanup_error"]="input_validation_failed";}
             const auto cleanup=release_strings();
             details["input_cleanup_confirmed"]=cleanup.confirmed;
-            details["cleanup_confirmed"]=cleanup.confirmed;
-            details["cleanup_attempted"]=cleanup.attempted;
+            details["cleanup_confirmed"]=details.value("cleanup_confirmed",true) && cleanup.confirmed;
+            details["cleanup_attempted"]=details.value("cleanup_attempted",false) || cleanup.attempted;
         }
         if(contains_object_array) {
             try {validate_array_inputs();}
@@ -2140,8 +2163,8 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             catch(...) {array_ledger.mark_uncertain();array_quarantine_cause=3;details["cleanup_error"]="input_validation_failed";}
             const auto cleanup=release_arrays();
             details["array_input_cleanup_confirmed"]=cleanup.confirmed;
-            details["cleanup_confirmed"]=cleanup.confirmed;
-            details["cleanup_attempted"]=cleanup.attempted;
+            details["cleanup_confirmed"]=details.value("cleanup_confirmed",true) && cleanup.confirmed;
+            details["cleanup_attempted"]=details.value("cleanup_attempted",false) || cleanup.attempted;
         }
         throw HandlerError("angelscript_exception","An AngelScript exception was recorded during ProcessEvent",std::move(details));
     }
@@ -2265,14 +2288,21 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         if(!copy_memory(&header,buffer+return_offset,sizeof(header)))
             throw HandlerError("game_result_error","The call executed but FString could not be read; cleanup is unconfirmed",
                                string_cleanup_details(false,false,"invalid_string_storage"));
-        if(contains_string_input) {
+        if(contains_string_input || contains_object_array) {
             string_ledger.add_return(header);string_return_registered=true;
             result=copied_string(header);
             decode_pod_outputs();validate_string_inputs();
             const auto cleanup=release_strings();
             if(!cleanup.confirmed)throw HandlerError("game_result_error","FString release is unconfirmed; do not repeat the request");
-            return append_pod_results({{"function",function_name},{"return_type",return_type},{"result",result},{"executed",true},
-                {"thread_id",GetCurrentThreadId()},{"cleanup_confirmed",true},{"input_cleanup_confirmed",true}});
+            json response={{"function",function_name},{"return_type",return_type},{"result",result},{"executed",true},
+                {"thread_id",GetCurrentThreadId()},{"cleanup_confirmed",true},{"return_cleanup_confirmed",true}};
+            if(contains_string_input)response["input_cleanup_confirmed"]=true;
+            if(contains_object_array) {
+                const auto arrays=release_arrays();
+                if(!arrays.confirmed)throw HandlerError("game_result_error","Object array release is unconfirmed; do not repeat the request");
+                response["array_input_cleanup_confirmed"]=true;
+            }
+            return append_pod_results(std::move(response));
         }
         result=copied_owned_string_return(header,
             [](const StringHeader& copied){return copied_string(copied);},
@@ -2333,11 +2363,12 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                 {"cleanup_attempted",cleanup.attempted},{"cleanup_confirmed",cleanup.confirmed},
                 {"array_input_cleanup_confirmed",cleanup.confirmed},{"cleanup_state",cleanup.confirmed?"released":"unknown"},
                 {"object_array_input_quarantined",object_array_inputs_quarantined_.load()}};
+            release_mixed_strings(details);
             if(script_errors.exception_count) {
                 details["script_errors"]=as_exception_capture::describe(script_errors);
                 details["script_completion_confirmed"]=false;
             }
-            if(string_event_started || !cleanup.confirmed)
+            if(string_event_started || !details["cleanup_confirmed"].get<bool>())
                 throw HandlerError("game_result_error",string_event_completed?"The call executed; Object array processing or cleanup is incomplete":
                     string_event_started?"The call effect is unknown; Object array ownership is unconfirmed":"The call did not execute; Object array ownership is unconfirmed",std::move(details));
             throw HandlerError(error.code(),error.what(),std::move(details));
@@ -2375,17 +2406,18 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                 catch(...) {array_ledger.mark_uncertain();array_quarantine_cause=3;}
             }
             const auto cleanup=release_arrays();
-            if(script_errors.exception_count)
-                throw HandlerError("angelscript_exception","An AngelScript exception was recorded; the complete report could not be prepared",
-                    {{"executed",true},{"may_have_executed",true},{"do_not_retry",true},{"process_event_returned",string_event_completed},
-                     {"script_completion_confirmed",false},{"script_errors",{{"source","observed_logging_entry"},
-                        {"exception_count",script_errors.exception_count},{"full_capture",false},{"messages",json::array()},{"stack_captured",false}}},
-                     {"array_input_cleanup_confirmed",cleanup.confirmed},{"cleanup_confirmed",cleanup.confirmed}});
-            throw HandlerError("game_result_error","Object array processing is incomplete; do not repeat the request",
-                {{"executed",string_event_completed},{"may_have_executed",string_event_started},{"do_not_retry",true},
-                 {"cause_code","result_processing_failed"},{"cleanup_attempted",cleanup.attempted},{"cleanup_confirmed",cleanup.confirmed},
-                 {"array_input_cleanup_confirmed",cleanup.confirmed},{"cleanup_state",cleanup.confirmed?"released":"unknown"},
-                 {"object_array_input_quarantined",object_array_inputs_quarantined_.load()}});
+            json details={{"executed",string_event_completed},{"may_have_executed",string_event_started},{"do_not_retry",true},
+                {"cause_code","result_processing_failed"},{"cleanup_attempted",cleanup.attempted},{"cleanup_confirmed",cleanup.confirmed},
+                {"array_input_cleanup_confirmed",cleanup.confirmed},{"cleanup_state",cleanup.confirmed?"released":"unknown"},
+                {"object_array_input_quarantined",object_array_inputs_quarantined_.load()}};
+            release_mixed_strings(details);
+            if(script_errors.exception_count) {
+                details["process_event_returned"]=string_event_completed;details["script_completion_confirmed"]=false;
+                details["script_errors"]={{"source","observed_logging_entry"},{"exception_count",script_errors.exception_count},
+                    {"full_capture",false},{"messages",json::array()},{"stack_captured",false}};
+                throw HandlerError("angelscript_exception","An AngelScript exception was recorded; the complete report could not be prepared",std::move(details));
+            }
+            throw HandlerError("game_result_error","Object array processing is incomplete; do not repeat the request",std::move(details));
         }
         if(!contains_string_input) {
             if(script_errors.exception_count)

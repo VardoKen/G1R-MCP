@@ -34,8 +34,8 @@ def _timeout(value: float) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError("Timeout must be a number")
     value = float(value)
-    if not math.isfinite(value) or not 0 < value <= MAX_TIMEOUT:
-        raise ValueError("Timeout must be greater than zero and no more than 5 seconds")
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError("Timeout must be finite and greater than zero")
     return value
 
 
@@ -152,8 +152,7 @@ class NativeClient:
         if response.get("type") == "error":
             error = response.get("error")
             if (isinstance(error, dict) and isinstance(error.get("code"), str)
-                    and 0 < len(error["code"]) <= 128 and isinstance(error.get("message"), str)
-                    and len(error["message"]) <= 8192):
+                    and error["code"] and isinstance(error.get("message"), str)):
                 # The format does not guarantee absence of effects after a handler error.
                 details = error.get("details")
                 if details is not None:
@@ -175,13 +174,11 @@ class NativeClient:
                 *, timeout: float | None = None) -> dict[str, Any]:
         """Send one command. A retry after failure requires a new explicit call."""
         if not isinstance(op, str) or not op or any(ord(char) < 32 for char in op):
-            raise ValueError("The operation name must contain 1 to 64 UTF-8 bytes without control characters")
+            raise ValueError("The operation name must be nonempty UTF-8 text without control characters")
         try:
-            encoded_op = op.encode("utf-8")
+            op.encode("utf-8")
         except UnicodeError:
             raise ValueError("The operation name cannot be represented as UTF-8") from None
-        if len(encoded_op) > 64:
-            raise ValueError("The operation name exceeds 64 UTF-8 bytes")
         if params is None:
             params = {}
         if not isinstance(params, dict):

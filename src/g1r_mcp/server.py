@@ -374,7 +374,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                  "ownership": "engine_owned_pointer_copy", "objects_owned": False,
                                  "by_value_input_supported": False, "out_supported": False,
                                  "inout_supported": False, "return_supported": False,
-                                 "mixed_string_signatures_supported": False,
+                                 "mixed_string_signatures_supported": True,
                                  "requires_signature_validation": True,
                                  "availability": "requires_live_native_status_and_per_invoke_allocator_validation"},
                 "string": {"type": "FString", "input_shape": "string",

@@ -162,6 +162,7 @@ class NativeClientTests(unittest.TestCase):
 
     def test_persistent_unique_requests_and_fragmented_unicode_reply(self):
         received = []
+        operation = "x" * 65
 
         def handler(stream):
             for _ in range(2):
@@ -172,11 +173,12 @@ class NativeClientTests(unittest.TestCase):
                     stream.sendall(wire[start:start + 3])
 
         with FakeServer(handler) as server, NativeClient(port=server.port) as client:
-            self.assertEqual(client.request("read", {"text": "Жизнь"})["text"], "Мир 😀")
+            self.assertEqual(client.request(operation, {"text": "Жизнь"}, timeout=6)["text"], "Мир 😀")
             self.assertEqual(client.status()["op"], "status")
             self.assertEqual(server.accepted, 1)
         self.assertNotEqual(received[0]["id"], received[1]["id"])
         self.assertEqual(received[0]["protocol"], 1)
+        self.assertEqual(received[0]["op"], operation)
         self.assertEqual(received[0]["params"], {"text": "Жизнь"})
 
     def test_request_and_echo_larger_than_one_mib_keep_connection_without_retry(self):
@@ -312,17 +314,20 @@ class NativeClientTests(unittest.TestCase):
                     self.assertEqual(caught.exception.code, "native_protocol_error")
 
     def test_structured_error_keeps_connection_and_does_not_invent_no_effects(self):
+        code = "world_not_ready_" + "x" * 129
+        message = "Мир не готов 😀\n" + "x" * 10_011
         def handler(stream):
             value = request(stream)
             stream.sendall(frame({"protocol": 1, "id": value["id"], "type": "error",
-                                  "error": {"code": "world_not_ready", "message": "Мир не готов"}}))
+                                  "error": {"code": code, "message": message}}))
             value = request(stream)
             stream.sendall(frame(response(value, {"ready": True})))
 
         with FakeServer(handler) as server, NativeClient(port=server.port) as client:
             with self.assertRaises(NativeError) as caught:
                 client.request("read")
-            self.assertEqual(caught.exception.code, "world_not_ready")
+            self.assertEqual(caught.exception.code, code)
+            self.assertEqual(caught.exception.message, message)
             self.assertTrue(caught.exception.may_have_executed)
             self.assertEqual(client.status(), {"ready": True})
             self.assertEqual(server.accepted, 1)
@@ -348,11 +353,12 @@ class NativeClientTests(unittest.TestCase):
 
     def test_invalid_options_and_payload_do_not_open_socket(self):
         for values in ({"host": "example.com"}, {"host": "192.0.2.1"}, {"port": True},
-                       {"port": 80}, {"timeout": float("inf")}, {"timeout": 6}, {"timeout": False}):
+                       {"port": 80}, {"timeout": float("inf")}, {"timeout": False}):
             with self.subTest(values=values), self.assertRaises(ValueError):
                 NativeClient(**values)
-        with NativeClient() as client, patch("g1r_mcp.native_client.socket.socket") as opened:
-            for operation, params in (("", {}), ("x" * 65, {}), ("\ud800", {}), ("x", [])):
+        with NativeClient(timeout=6) as client, patch("g1r_mcp.native_client.socket.socket") as opened:
+            self.assertEqual(client.timeout, 6)
+            for operation, params in (("", {}), ("\ud800", {}), ("x", [])):
                 with self.subTest(operation=operation[:10]), self.assertRaises(ValueError):
                     client.request(operation, params)
             with self.assertRaises(NativeError) as caught:
