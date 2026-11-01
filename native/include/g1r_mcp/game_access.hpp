@@ -75,12 +75,12 @@ private:
     std::atomic<uint64_t> last_tick_ms_{0};
     std::atomic<uint64_t> completed_jobs_{0};
     std::atomic<uint64_t> cancelled_jobs_{0};
-    // Сохраняется до выгрузки процесса; новая MCP-сессия не снимает карантин.
+    // Retained until process exit; a new MCP session does not clear quarantine.
     std::atomic<bool> string_inputs_quarantined_{false};
     std::atomic<std::size_t> string_inputs_retained_count_{0};
     std::atomic<std::size_t> string_inputs_retained_bytes_{0};
     std::atomic<uint32_t> string_inputs_quarantine_cause_{0};
-    // Смена MCP-сессии не снимает карантин собственного буфера массива.
+    // Changing MCP sessions does not clear quarantine of the owned array buffer.
     std::atomic<bool> object_array_inputs_quarantined_{false};
     std::atomic<std::size_t> object_array_inputs_retained_count_{0};
     std::atomic<std::size_t> object_array_inputs_retained_bytes_{0};

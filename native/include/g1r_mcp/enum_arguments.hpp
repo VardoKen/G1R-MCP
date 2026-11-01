@@ -37,27 +37,27 @@ inline EncodedInteger encode_integer(std::string_view type, int element_size, co
     g1r::enum_values::IntegerLayout layout{};
     try { layout = g1r::enum_values::integer_layout(type, element_size); }
     catch (const std::invalid_argument& error) {
-        throw HandlerError(error.what(), "Неподдерживаемая раскладка числового enum-аргумента");
+        throw HandlerError(error.what(), "Unsupported numeric enum argument layout");
     }
     if (!value.is_number_integer())
-        throw HandlerError("invalid_argument", "Enum/Byte требует целое JSON-число без логических или дробных значений");
+        throw HandlerError("invalid_argument", "Enum or Byte requires an integer JSON number, excluding booleans and fractions");
 
     if (layout.is_unsigned) {
         std::uint64_t integer{};
         if (value.is_number_unsigned()) integer = value.get<std::uint64_t>();
         else {
             const auto signed_integer = value.get<std::int64_t>();
-            if (signed_integer < 0) throw HandlerError("invalid_argument", "Отрицательное число не входит в беззнаковый enum/Byte");
+            if (signed_integer < 0) throw HandlerError("invalid_argument", "A negative number cannot be represented by an unsigned enum or Byte");
             integer = static_cast<std::uint64_t>(signed_integer);
         }
         if (layout.bytes == 1) {
             if (integer > std::numeric_limits<std::uint8_t>::max())
-                throw HandlerError("invalid_argument", "Аргумент вне диапазона ByteProperty");
+                throw HandlerError("invalid_argument", "The argument is outside the ByteProperty range");
             return encoded(static_cast<std::uint8_t>(integer));
         }
         if (layout.bytes == 4) {
             if (integer > std::numeric_limits<std::uint32_t>::max())
-                throw HandlerError("invalid_argument", "Аргумент вне диапазона UInt32Property");
+                throw HandlerError("invalid_argument", "The argument is outside the UInt32Property range");
             return encoded(static_cast<std::uint32_t>(integer));
         }
         return encoded(integer);
@@ -67,18 +67,18 @@ inline EncodedInteger encode_integer(std::string_view type, int element_size, co
     if (value.is_number_unsigned()) {
         const auto unsigned_integer = value.get<std::uint64_t>();
         if (unsigned_integer > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
-            throw HandlerError("invalid_argument", "Беззнаковое число вне диапазона знакового enum");
+            throw HandlerError("invalid_argument", "The unsigned number is outside the signed enum range");
         integer = static_cast<std::int64_t>(unsigned_integer);
     } else integer = value.get<std::int64_t>();
     if (layout.bytes == 4) {
         if (integer < std::numeric_limits<std::int32_t>::min() || integer > std::numeric_limits<std::int32_t>::max())
-            throw HandlerError("invalid_argument", "Аргумент вне диапазона IntProperty");
+            throw HandlerError("invalid_argument", "The argument is outside the IntProperty range");
         return encoded(static_cast<std::int32_t>(integer));
     }
     return encoded(integer);
 }
 
-// Работа только с проверенной копией UEnum.Names. Имена, aliases и индексы не влияют на число.
+// Operate only on a validated UEnum.Names copy. Names, aliases and indices do not change the integer value.
 inline bool contains_value(const g1r::enum_values::Integer& value,
                            std::span<const g1r::enum_values::Entry> entries) {
     std::int64_t signed_value{};

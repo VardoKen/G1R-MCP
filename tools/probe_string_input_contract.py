@@ -1,4 +1,4 @@
-"""FString const input на собственном AS-CDO, UTF-16 и подтверждённая очистка."""
+"""FString const input on the owned AS CDO, UTF-16, and confirmed cleanup."""
 from __future__ import annotations
 
 import argparse
@@ -20,7 +20,7 @@ from probe_scalar_out_contract import UNKNOWN_GAME, check_rejection, check_scala
 HOST = "G1RMCPStringInputProbe"
 MARKER = 211
 METHODS = ("ReadMarker", "ReadCallsCount", "ResetProbe", "ReadInputLength", "ReadEcho", "ConcatInputs")
-SAMPLES = ("", "Bridge", "Готика", "A😀Б")
+SAMPLES = ("", "Bridge", "Gothic", "A😀B")
 CONSTRAINTS = {"max_utf16_units": 2147483646, "embedded_nul": "rejected", "ownership": "engine_owned_copy"}
 
 
@@ -32,15 +32,15 @@ def check_signature(listing: dict, name: str):
     if (name not in METHODS or not isinstance(listing, dict) or listing.get("truncated") is not False
             or listing.get("scan_complete") is not True or listing.get("scan_truncated") is not False
             or not isinstance(listing.get("items"), list)):
-        raise ProbeError("probe_signature_invalid", "Не подтверждён полный каталог FString fixture")
+        raise ProbeError("probe_signature_invalid", "The full FString fixture catalog was not confirmed")
     matches = [item for item in listing["items"] if isinstance(item, dict) and item.get("name") == name]
-    if len(matches) != 1: raise ProbeError("probe_signature_absent", "FString метод не найден однозначно")
+    if len(matches) != 1: raise ProbeError("probe_signature_absent", "The FString method was not uniquely found")
     method = matches[0]
     fields, size = method.get("parameters"), method.get("parameter_size")
     if (not isinstance(fields, list) or any(not isinstance(field, dict) for field in fields)
             or method.get("parameters_truncated") is not False or type(size) is not int or not 0 <= size <= 64
             or type(method.get("parameter_count")) is not int or method["parameter_count"] != len(fields)):
-        raise ProbeError("probe_signature_mismatch", "Не подтверждены NumParms и ограниченный FString буфер")
+        raise ProbeError("probe_signature_mismatch", "NumParms and the bounded FString buffer were not confirmed")
     returned = [field for field in fields if field.get("return") is True]
     arguments = [field for field in fields if field.get("return") is False]
     expected_return = {"ReadMarker": ("IntProperty", 4), "ReadCallsCount": ("IntProperty", 4),
@@ -52,7 +52,7 @@ def check_signature(listing: dict, name: str):
             or returned and (returned[0].get("type"), returned[0].get("element_size")) != expected_return
             or any(not isinstance(field.get("name"), str) for field in fields)
             or {field["name"] for field in arguments} != set(expected_names)):
-        raise ProbeError("probe_signature_mismatch", "Не совпали exact входные имена, типы и возврат FString метода")
+        raise ProbeError("probe_signature_mismatch", "Exact FString method input names, types, and return did not match")
     spans = []
     for field in fields:
         flags, offset, width = field.get("flags"), field.get("offset"), field.get("element_size")
@@ -62,26 +62,26 @@ def check_signature(listing: dict, name: str):
                 or type(offset) is not int or offset < 0 or type(width) is not int or width < 1 or offset + width > 64
                 or type(field.get("array_dim")) is not int or field["array_dim"] != 1
                 or field["return"] is False and offset + width > size):
-            raise ProbeError("probe_signature_flags", "CPF-флаги, ArrayDim или границы FString параметра не подтверждены")
+            raise ProbeError("probe_signature_flags", "CPF flags, ArrayDim, or FString parameter bounds were not confirmed")
         if any(offset < end and start < offset + width for start, end in spans):
-            raise ProbeError("probe_signature_mismatch", "Диапазоны FString параметров пересекаются")
+            raise ProbeError("probe_signature_mismatch", "FString parameter ranges overlap")
         spans.append((offset, offset + width))
         if field["return"]:
-            if flags & (0x2 | 0x08000000): raise ProbeError("probe_signature_flags", "Возврат FString метода должен быть по значению")
+            if flags & (0x2 | 0x08000000): raise ProbeError("probe_signature_flags", "The FString method return must be by value")
         elif (field.get("type") != "StrProperty" or width != 16 or not flags & 0x2
               or not flags & (0x100 | 0x08000000) or field.get("direction") != "input"
               or field.get("passing") != "const_reference" or field.get("argument_constraints") != CONSTRAINTS
               or "argument_marker" in field):
-            raise ProbeError("probe_string_input_policy", "FString input не подтвердил const-reference с engine_owned_copy/UTF16 лимитом")
+            raise ProbeError("probe_string_input_policy", "FString input did not confirm const-reference with engine_owned_copy/UTF16 limit")
     token = method.get("signature_token")
     if not isinstance(token, str) or not TOKEN.fullmatch(token):
-        raise ProbeError("probe_signature_token_absent", "FString метод не получил signature token")
+        raise ProbeError("probe_signature_token_absent", "The FString method did not receive a signature token")
     return method, token
 
 
 def check_cleanup(result: dict, method: str) -> dict:
     if result.get("cleanup_confirmed") is not True or result.get("input_cleanup_confirmed") is not True:
-        error = ProbeError("probe_string_cleanup_unconfirmed", "Не подтверждена очистка engine FString входа/возврата: " + method)
+        error = ProbeError("probe_string_cleanup_unconfirmed", "Engine FString input/return cleanup was not confirmed: " + method)
         error.add_note("FString cleanup payload: " + json.dumps(result, ensure_ascii=False))
         raise error
     return {key: result[key] for key in result if "cleanup" in key}
@@ -95,22 +95,22 @@ async def exercise(call):
         status = await call("g1r_native_status", {})
         session_id = status.get("session_id")
         if status.get("ready") is not True or not isinstance(session_id, str) or not session_id:
-            raise ProbeError("game_not_ready", "Не подтверждены Tick и native-сессия")
+            raise ProbeError("game_not_ready", "Tick and the native session were not confirmed")
         found = await call("g1r_find_objects", {"query": "Default__" + HOST, "class_query": HOST,
             "exact_path": "/Script/Angelscript.Default__" + HOST, "limit": 2})
         if (found.get("truncated") is not False or not isinstance(found.get("items"), list) or len(found["items"]) != 1):
-            raise ProbeError("probe_object_absent", "Exact собственный FString CDO не найден однозначно")
+            raise ProbeError("probe_object_absent", "The exact owned FString CDO was not uniquely found")
         target = found["items"][0]
         if (not isinstance(target, dict) or target.get("name") != "Default__" + HOST or target.get("class") != HOST
                 or target.get("path") != "/Script/Angelscript.Default__" + HOST or not isinstance(target.get("handle"), str)
                 or not target["handle"].startswith("obj-")):
-            raise ProbeError("unsafe_probe_target", "Не подтверждён exact собственный FString CDO")
+            raise ProbeError("unsafe_probe_target", "The exact owned FString CDO was not confirmed")
         handle, tokens = target["handle"], {}
         for name in METHODS:
             listing = await call("g1r_object_functions", {"handle": handle, "function_query": name, "limit": 10})
             report["reflected_functions"][name] = listing
             _, tokens[name] = check_signature(listing, name)
-        if len(set(tokens.values())) != len(tokens): raise ProbeError("probe_signature_token_alias", "Разные FString методы получили один токен")
+        if len(set(tokens.values())) != len(tokens): raise ProbeError("probe_signature_token_alias", "Different FString methods received the same token")
 
         async def invoke(name, arguments=None, *, expected_error=None):
             return await call("g1r_invoke", {"handle": handle, "function": name,
@@ -130,7 +130,7 @@ async def exercise(call):
                 count += 1
                 check_scalar(await invoke("ReadCallsCount"), "IntProperty", count)
                 report["calls"].append({"method": name, "input": text, "utf16_units": utf16_units(text), "result": expected, "cleanup": cleanup})
-        supplied = {"Left": "Готика ", "Right": "😀"}
+        supplied = {"Left": "Gothic ", "Right": "😀"}
         cleanup_required = True
         result = await invoke("ConcatInputs", supplied)
         expected = supplied["Left"] + supplied["Right"]
@@ -140,11 +140,11 @@ async def exercise(call):
         check_scalar(await invoke("ReadCallsCount"), "IntProperty", count)
         report["calls"].append({"method": "ConcatInputs", "inputs": supplied, "utf16_units": utf16_units(expected), "result": expected, "cleanup": cleanup})
         report["checks"].append("empty_ascii_cyrillic_emoji_utf16_length_echo_and_two_owned_inputs_concat")
-        invalid = [None, True, 1, 1.25, [], {}, {"out": True}, "A\0Б", "x" * 32768, "😀" * 16384]
+        invalid = [None, True, 1, 1.25, [], {}, {"out": True}, "A\0B", "x" * 32768, "😀" * 16384]
         cases = [("ReadInputLength", {"Input": value}, "invalid_argument") for value in invalid]
         cases += [("ReadEcho", {"Input": {"value": "Bridge"}}, "invalid_argument"),
                   ("ReadEcho", {}, "missing_argument"), ("ReadEcho", {"Input": "Bridge", "UnexpectedForProbe": 1}, "unknown_argument"),
-                  ("ConcatInputs", {"Left": "Bridge", "Right": "A\0Б"}, "invalid_argument"),
+                  ("ConcatInputs", {"Left": "Bridge", "Right": "A\0B"}, "invalid_argument"),
                   ("ConcatInputs", {"Left": "Bridge"}, "missing_argument"),
                   ("ConcatInputs", {**supplied, "UnexpectedForProbe": 1}, "unknown_argument")]
         for name, arguments, code in cases:
@@ -172,7 +172,7 @@ async def exercise(call):
                     "game_result_error", "probe_string_cleanup_unconfirmed", "string_ownership_unknown",
                     "string_input_quarantined", "string_inputs_quarantined"}:
                 report["cleanup"].append("skipped_unusable_or_unknown_game_root_stops")
-                failure.add_note("Очистка FString fixture пропущена после неопределённого владения или недоступного соединения; игру завершает владелец development-сеанса")
+                failure.add_note("FString fixture cleanup was skipped after uncertain ownership or an unavailable connection; the development session owner terminates the game")
             else:
                 async def finish_cleanup():
                     check_scalar(await invoke("ResetProbe"), "", None)
@@ -182,12 +182,12 @@ async def exercise(call):
                 try: await settle_task(asyncio.create_task(finish_cleanup()), timeout=30, label="string input contract cleanup")
                 except BaseException as error:
                     if failure is None: raise
-                    failure.add_note("Не подтверждена очистка собственного FString CDO: " + str(error))
+                    failure.add_note("Owned FString CDO cleanup was not confirmed: " + str(error))
 
 
 async def run(args):
     if args.mcp_url not in {"http://127.0.0.1:27124/mcp", "http://localhost:27124/mcp"}:
-        raise ProbeError("invalid_mcp_url", "FString проба использует общий локальный HTTP MCP")
+        raise ProbeError("invalid_mcp_url", "The FString probe uses the shared local HTTP MCP")
     async with streamable_http_client(args.mcp_url) as connection:
         async with ClientSession(connection[0], connection[1]) as session:
             initialized = await session.initialize()
@@ -195,7 +195,7 @@ async def run(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Проверить dev.21 const FString входы своей fixture через общий HTTP MCP")
+    parser = argparse.ArgumentParser(description="Check dev.21 const FString inputs of the owned fixture through the shared HTTP MCP")
     parser.add_argument("--mcp-url", default="http://127.0.0.1:27124/mcp")
     args = parser.parse_args()
     async def protected():

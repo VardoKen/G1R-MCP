@@ -7,7 +7,7 @@
         $nativeResult.ok -isnot [bool] -or $nativeResult.ok -ne $true -or $nativeResult.status -isnot [string] -or
         $nativeResult.status -notin @('loaded', 'already_loaded') -or
         ($nativeResult.pid -isnot [int] -and $nativeResult.pid -isnot [long]) -or $nativeResult.pid -ne $ExpectedPid) {
-        throw 'Загрузчик не подтвердил LoadLibraryW для исходного PID.'
+        throw 'The loader did not confirm LoadLibraryW for the original PID.'
     }
     $nativeResult
 }

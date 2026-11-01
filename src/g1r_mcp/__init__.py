@@ -1,3 +1,3 @@
-"""Локальные инструменты G1R MCP; игровой канал ещё не реализован."""
+"""Local G1R MCP tools; the game channel is not implemented yet."""
 
-__version__ = "1.0.0-dev.62"
+__version__ = "1.0.0-dev.63"

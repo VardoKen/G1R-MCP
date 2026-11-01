@@ -1,4 +1,4 @@
-"""Подготовить собственную FTransform input-fixture без запуска игры."""
+"""Prepare an isolated FTransform input fixture without launching the game."""
 from __future__ import annotations
 
 import argparse
@@ -54,22 +54,22 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
             "rotator_components_as_vector": "Script/IngameTools/IngameTool_SelectedActorProperties.as:305",
             "ufunction_value_struct_input": "Script/GAS/GASCharacterMixins.as:1363-1364"}}
     result["limitations"] = [
-        "FTransform input в UFUNCTION — согласованная композиционная runtime-гипотеза по текущим AS-примерам",
-        "Подготовка не подтверждает компиляцию, CPF-флаги или ABI FTransform/FQuat",
-        "Проверка входа использует независимые AS-getters; FTransform return/out и mutable ref не включены",
-        "AcceptTransform меняет только StoredTransform и CallsCount собственного CDO; ResetProbe сбрасывает оба",
-        "Игровые объекты, мир и сохранения не используются"]
+        "An FTransform input in UFUNCTION is an approved runtime composition hypothesis based on current AS examples",
+        "Preparation does not confirm compilation, CPF flags, or the FTransform/FQuat ABI",
+        "Input verification uses independent AS getters; FTransform return/out and mutable references are not included",
+        "AcceptTransform changes only StoredTransform and CallsCount on the fixture CDO; ResetProbe resets both",
+        "Game objects, the world, and saved games are not used"]
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
     class RussianArgumentParser(argparse.ArgumentParser):
         def format_help(self):
-            return super().format_help().replace("usage:", "Использование:", 1).replace("options:", "Параметры:", 1)
-    parser = RussianArgumentParser(description="Подготовить собственную FTransform input-fixture внутри artifacts", add_help=False)
-    parser.add_argument("-h", "--help", action="help", help="Показать справку")
+            return super().format_help().replace("usage:", "Usage:", 1).replace("options:", "Options:", 1)
+    parser = RussianArgumentParser(description="Prepare an isolated FTransform input fixture within artifacts", add_help=False)
+    parser.add_argument("-h", "--help", action="help", help="Show help")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT / "artifacts/transform-probe-dev19",
-                        help="Отдельный каталог внутри artifacts")
+                        help="A separate directory within artifacts")
     args = parser.parse_args(argv)
     try:
         result = prepare_probe(args.workspace_root)

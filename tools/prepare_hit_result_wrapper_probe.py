@@ -1,4 +1,4 @@
-"""Подготовить собственную AS-обёртку FHitResult без запуска игры."""
+"""Prepare an isolated AS wrapper for FHitResult without launching the game."""
 from __future__ import annotations
 
 import argparse
@@ -65,28 +65,28 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
             "hit_result_impact_point": "Script/Gameplay/Magic/Components/Spell/Summon/SummonManagerComponent.as:53",
             "vector_zero": "Script/AI/States/FightAI/WatchFightState/AIState_WatchFight.as:245"}}
     result["limitations"] = [
-        "TraceImpactPoint UFUNCTION — согласованная композиционная runtime-гипотеза по текущим AS-примерам",
-        "Подготовка не подтверждает компиляцию, CPF-флаги, создание живой подсистемы, её world context или выполнение трассировки",
-        "HasWorld читает GetWorld без изменения счётчика; при false проба должна пропустить TraceImpactPoint",
-        "TraceImpactPoint при отсутствии мира возвращает false и ZeroVector до вызова System::LineTraceSingle",
-        "FHitResult создаётся и уничтожается внутри AngelScript; его layout не передаётся через MCP",
-        "ReadDefaultImpactPoint создаёт локальный FHitResult без трассировки; проверяются конечные XYZ и сохраняется фактический результат",
-        "TraceImpactPoint читает коллизию мира и возвращает FVector; actors не создаются и не меняются",
-        "ActorsToIgnore содержит только runtime-дескрипторы AActor; runtime-совместимость типа требует проверки",
-        "Нужно выбрать живой экземпляр собственной UScriptWorldSubsystem и проверить HasWorld; CDO не использовать как доказательство контекста",
-        "Меняется только CallsCount собственной подсистемы; ResetProbe сбрасывает счётчик",
-        "Установка, запуск игры, сохранения и пользовательские моды не входят в подготовку"]
+        "TraceImpactPoint UFUNCTION is an approved runtime composition hypothesis based on current AS examples",
+        "Preparation does not confirm compilation, CPF flags, creation of a live subsystem, its world context, or trace execution",
+        "HasWorld reads GetWorld without changing the counter; when false, the probe must skip TraceImpactPoint",
+        "Without a world, TraceImpactPoint returns false and ZeroVector before calling System::LineTraceSingle",
+        "FHitResult is created and destroyed within AngelScript; its layout is not marshaled through MCP",
+        "ReadDefaultImpactPoint creates a local FHitResult without tracing; finite XYZ are checked and the actual result is retained",
+        "TraceImpactPoint queries world collision and returns FVector; actors are neither created nor changed",
+        "ActorsToIgnore contains only runtime AActor descriptors; runtime type compatibility requires verification",
+        "Select a live instance of the fixture UScriptWorldSubsystem and check HasWorld; a CDO does not prove the world context",
+        "Only CallsCount on the fixture subsystem changes; ResetProbe resets the counter",
+        "Installation, game launch, saved games, and user mods are outside the preparation scope"]
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
     class RussianArgumentParser(argparse.ArgumentParser):
         def format_help(self):
-            return super().format_help().replace("usage:", "Использование:", 1).replace("options:", "Параметры:", 1)
-    parser = RussianArgumentParser(description="Подготовить собственную AS-обёртку FHitResult внутри artifacts", add_help=False)
-    parser.add_argument("-h", "--help", action="help", help="Показать справку")
+            return super().format_help().replace("usage:", "Usage:", 1).replace("options:", "Options:", 1)
+    parser = RussianArgumentParser(description="Prepare an isolated AS wrapper for FHitResult within artifacts", add_help=False)
+    parser.add_argument("-h", "--help", action="help", help="Show help")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT / "artifacts/hit-result-wrapper-world-probe-dev25",
-                        help="Отдельный каталог внутри artifacts")
+                        help="A separate directory within artifacts")
     args = parser.parse_args(argv)
     try:
         result = prepare_probe(args.workspace_root)

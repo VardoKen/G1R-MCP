@@ -12,13 +12,13 @@ namespace g1r_mcp::aligned_parameter_buffer {
 
 inline constexpr std::size_t alignment=16;
 
-// Память принадлежит host-коду: игровой allocator и деструкторы не используются.
+// Host code owns this memory; engine allocators and destructors are not used.
 class alignas(alignment) Buffer {
 public:
     explicit Buffer(std::size_t extent):size_(extent) {
         const auto blocks=extent/alignment+(extent%alignment!=0);
         if(blocks>std::numeric_limits<std::size_t>::max()/alignment || blocks>storage_.max_size())
-            throw HandlerError("unsupported_signature", "Размер выровненного буфера параметров не представим");
+            throw HandlerError("unsupported_signature", "The aligned parameter buffer size is not representable");
         storage_.resize(blocks);
     }
     Buffer(const Buffer&)=default;
@@ -42,7 +42,7 @@ public:
     std::span<const std::byte> bytes() const noexcept {return {reinterpret_cast<const std::byte*>(storage_.data()),size_};}
 
 private:
-    // Обнуляется вся округлённая память, включая POD-padding за текущим extent.
+    // Zero the entire rounded allocation, including POD padding beyond the current extent.
     struct alignas(alignment) Block {std::array<std::byte,alignment> bytes{};};
     static_assert(sizeof(Block)==alignment && alignof(Block)==alignment);
     std::vector<Block> storage_;

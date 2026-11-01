@@ -1,8 +1,8 @@
-"""Проверить существующий мост через stdio MCP, не запуская игру и DLL.
+"""Check the existing bridge through stdio MCP without starting the game or DLL.
 
-По умолчанию проверяет компиляционный маркер. --reload явно заменяет только
-константу подготовленного fixture после проверки SHA-256. --observations
-проверяет снимки/наблюдение выбранных пользователем свойств без их изменения.
+Check the compilation marker by default. --reload explicitly replaces only
+the prepared fixture constant after verifying SHA-256. --observations
+checks snapshots/observation of user-selected properties without changing them.
 """
 
 import argparse
@@ -27,25 +27,25 @@ class ProbeError(Exception):
 
 
 def check_signature(functions: dict) -> dict:
-    """Не вызывать метод до проверки его реально прочитанной сигнатуры."""
+    """Do not call a method before checking its actually read signature."""
     matches = [item for item in functions.get("items", []) if item.get("name") == METHOD_NAME]
     if len(matches) != 1:
-        raise ProbeError("probe_signature_absent", "Точный проверочный метод не найден однозначно")
+        raise ProbeError("probe_signature_absent", "The exact probe method was not uniquely found")
     method = matches[0]
     parameters = method.get("parameters")
     if not isinstance(parameters, list) or len(parameters) != 1:
-        raise ProbeError("probe_signature_mismatch", "Проверочный метод должен иметь только параметр возврата")
+        raise ProbeError("probe_signature_mismatch", "The probe method must have only a return parameter")
     result = parameters[0]
     if (result.get("return") is not True or result.get("type") != "IntProperty"
             or result.get("element_size") != 4 or result.get("reference") is True
             or method.get("parameter_size") != 4):
-        raise ProbeError("probe_signature_mismatch", "Не подтверждён скалярный int32 результат без входных параметров")
+        raise ProbeError("probe_signature_mismatch", "A scalar int32 result without input parameters was not confirmed")
     return method
 
 
 async def run_probe(args: argparse.Namespace) -> dict:
     if args.reload and (args.probe_workspace is None or args.expected_sha256 is None):
-        raise ProbeError("invalid_reload", "Для reload нужны --probe-workspace и --expected-sha256")
+        raise ProbeError("invalid_reload", "Reload requires --probe-workspace and --expected-sha256")
     parameters = StdioServerParameters(
         command=sys.executable,
         args=["-B", "-m", "g1r_mcp.server", "--modkit-root", str(args.modkit_root),
@@ -65,10 +65,10 @@ async def run_probe(args: argparse.Namespace) -> dict:
             async def call(name: str, arguments: dict) -> dict:
                 result = await client.call_tool(name, arguments)
                 if result.is_error:
-                    message = next((item.text for item in result.content if item.type == "text"), "Ошибка MCP")
+                    message = next((item.text for item in result.content if item.type == "text"), "MCP error")
                     raise ProbeError("mcp_call_failed", f"{name}: {message}")
                 if not isinstance(result.structured_content, dict):
-                    raise ProbeError("mcp_result_invalid", f"{name}: ответ не является структурированным объектом")
+                    raise ProbeError("mcp_result_invalid", f"{name}: the response is not a structured object")
                 return result.structured_content
 
             status = await call("g1r_native_status", {})
@@ -82,14 +82,14 @@ async def run_probe(args: argparse.Namespace) -> dict:
                     await asyncio.sleep(0.1)
             report["status"] = status
             if not status.get("ready"):
-                raise ProbeError("game_not_ready", "Игровой Tick не подтверждён; включите существующий мост")
+                raise ProbeError("game_not_ready", "Game Tick was not confirmed; enable the existing bridge")
 
             found = await call("g1r_find_objects", {"query": "Default__G1RMCPCompileProbe",
                                                     "class_query": "G1RMCPCompileProbe", "limit": 50})
             matches = [item for item in found.get("items", [])
                        if item.get("name") == "Default__G1RMCPCompileProbe"]
             if len(matches) != 1:
-                raise ProbeError("probe_object_absent", "Точный CDO компиляционного маркера не найден однозначно")
+                raise ProbeError("probe_object_absent", "The exact compilation marker CDO was not uniquely found")
             target = matches[0]
             report["probe_object"] = target
             functions = await call("g1r_object_functions", {"handle": target["handle"], "limit": 100})
@@ -97,17 +97,17 @@ async def run_probe(args: argparse.Namespace) -> dict:
             baseline = await call("g1r_invoke", {"handle": target["handle"], "function": METHOD_NAME, "arguments": {}})
             report["baseline_call"] = baseline
             if baseline.get("executed") is not True or type(baseline.get("result")) is not int or baseline["result"] != args.expected_value:
-                raise ProbeError("probe_value_mismatch", "Маркер вернул значение, отличное от ожидаемого")
+                raise ProbeError("probe_value_mismatch", "The marker returned a value different from the expected value")
             report["compiled_probe"] = True
 
             if args.observations:
                 if not args.observe_query or not args.property:
-                    raise ProbeError("invalid_observation", "Для observations нужны --observe-query и хотя бы один --property")
+                    raise ProbeError("invalid_observation", "Observations require --observe-query and at least one --property")
                 found = await call("g1r_find_objects", {"query": args.observe_query,
                                                         "class_query": args.observe_class or "", "limit": 50})
                 exact = [item for item in found.get("items", []) if item.get("name") == args.observe_query]
                 if len(exact) != 1:
-                    raise ProbeError("observation_object_absent", "Точный наблюдаемый объект не найден однозначно")
+                    raise ProbeError("observation_object_absent", "The exact observed object was not uniquely found")
                 observed = exact[0]
                 previous_handle = observed["handle"]
                 targets = [{"handle": observed["handle"], "properties": args.property}]
@@ -135,10 +135,10 @@ async def run_probe(args: argparse.Namespace) -> dict:
 
             if args.reload:
                 if args.expected_value != 1:
-                    raise ProbeError("invalid_reload", "Фаза reload начинается только с подтверждённого baseline 1")
+                    raise ProbeError("invalid_reload", "The reload phase starts only with a confirmed baseline of 1")
                 prepared = prepare_probe(args.probe_workspace, phase="reload", expected_sha256=args.expected_sha256)
                 report["reload_preparation"] = prepared
-                # Только read-only маркер повторяется, игровые действия не повторяются.
+                # Only the read-only marker is repeated; game actions are not repeated.
                 deadline = time.monotonic() + 5
                 attempts = 0
                 while time.monotonic() < deadline:
@@ -167,25 +167,25 @@ async def run_probe(args: argparse.Namespace) -> dict:
                     message = next((item.text for item in result.content if item.type == "text"), "")
                     stale[name] = {"is_error": result.is_error, "message": message}
                     if not result.is_error:
-                        raise ProbeError("owner_boundary_failed", "Новая MCP-сессия приняла ссылку предыдущей сессии")
+                        raise ProbeError("owner_boundary_failed", "The new MCP session accepted a reference from the previous session")
                 report["new_session_rejections"] = stale
     return report
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Проверить готовую игровую сессию через настоящий MCP-клиент")
+    parser = argparse.ArgumentParser(description="Check a ready game session through a real MCP client")
     parser.add_argument("--modkit-root", type=Path, default=REPOSITORY_ROOT.parent / "G1R-Modkit")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT)
     parser.add_argument("--native-port", type=int, default=27123)
-    parser.add_argument("--enable", action="store_true", help="Явно включить очередь существующей DLL")
+    parser.add_argument("--enable", action="store_true", help="Explicitly enable the existing DLL queue")
     parser.add_argument("--expected-value", type=int, choices=(1, 2), default=1)
-    parser.add_argument("--reload", action="store_true", help="Явно изменить baseline константу и проверить reload")
+    parser.add_argument("--reload", action="store_true", help="Explicitly change the baseline constant and check reload")
     parser.add_argument("--probe-workspace", type=Path)
     parser.add_argument("--expected-sha256")
     parser.add_argument("--observations", action="store_true")
-    parser.add_argument("--observe-query", help="Точное имя объекта для read-only снимков/наблюдения")
+    parser.add_argument("--observe-query", help="Exact object name for read-only snapshots/observation")
     parser.add_argument("--observe-class")
-    parser.add_argument("--property", action="append", help="Имя наблюдаемого свойства; можно повторять")
+    parser.add_argument("--property", action="append", help="Observed property name; may be repeated")
     args = parser.parse_args()
     try:
         report = asyncio.run(run_probe(args))

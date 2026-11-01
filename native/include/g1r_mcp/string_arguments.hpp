@@ -10,11 +10,11 @@ namespace g1r_mcp::string_arguments {
 
 inline constexpr std::size_t max_utf16_units = static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())-1;
 
-// Буфер служит только источником копирования для подтверждённого конструктора.
-// Его указатель нельзя помещать непосредственно в игровой FString.
+// The buffer is only a copy source for the confirmed constructor.
+// Its pointer must not be placed directly into an engine FString.
 inline std::u16string encode(const nlohmann::json& value) {
     if (!value.is_string())
-        throw HandlerError("invalid_argument", "FString требует строковый UTF-8 аргумент");
+        throw HandlerError("invalid_argument", "FString requires a UTF-8 string argument");
     const auto& input = value.get_ref<const std::string&>();
     std::u16string result;
     result.reserve(input.size() < max_utf16_units ? input.size() : max_utf16_units);
@@ -38,21 +38,21 @@ inline std::u16string encode(const nlohmann::json& value) {
             continuation_count = 3;
             minimum = 0x10000;
         }
-        else throw HandlerError("invalid_argument", "FString содержит неверную последовательность UTF-8");
+        else throw HandlerError("invalid_argument", "FString contains an invalid UTF-8 sequence");
         if (continuation_count > input.size() - offset)
-            throw HandlerError("invalid_argument", "FString содержит оборванную последовательность UTF-8");
+            throw HandlerError("invalid_argument", "FString contains a truncated UTF-8 sequence");
         for (std::size_t i = 0; i < continuation_count; ++i) {
             const auto next = static_cast<unsigned char>(input[offset++]);
             if ((next & 0xc0) != 0x80)
-                throw HandlerError("invalid_argument", "FString содержит неверную последовательность UTF-8");
+                throw HandlerError("invalid_argument", "FString contains an invalid UTF-8 sequence");
             scalar = (scalar << 6) | (next & 0x3f);
         }
         if (scalar < minimum || scalar > 0x10ffff || (scalar >= 0xd800 && scalar <= 0xdfff))
-            throw HandlerError("invalid_argument", "FString содержит недопустимое значение Unicode");
-        if (!scalar) throw HandlerError("invalid_argument", "FString не принимает встроенный NUL");
+            throw HandlerError("invalid_argument", "FString contains an invalid Unicode value");
+        if (!scalar) throw HandlerError("invalid_argument", "FString cannot contain an embedded NUL");
         const auto units = scalar <= 0xffff ? 1u : 2u;
         if (result.size() > max_utf16_units - units)
-            throw HandlerError("invalid_argument", "FString с терминатором не помещается в int32");
+            throw HandlerError("invalid_argument", "FString including its terminator does not fit int32");
         if (units == 1) result.push_back(static_cast<char16_t>(scalar));
         else {
             scalar -= 0x10000;

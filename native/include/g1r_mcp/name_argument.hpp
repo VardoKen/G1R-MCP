@@ -14,15 +14,15 @@ struct NameArgumentSource {
 };
 inline void validate_name_argument_layout(int size,int array_dim) {
     if(size!=8 || array_dim!=1)
-        throw HandlerError("unsupported_signature","Аргумент FName требует 8 байт и ArrayDim=1");
+        throw HandlerError("unsupported_signature","A FName argument requires 8 bytes and ArrayDim=1");
 }
 inline NameArgumentSource name_argument_source(const nlohmann::json& value) {
     if(!value.is_object() || value.size()!=1 || !value.contains("name_from"))
-        throw HandlerError("invalid_name_argument","FName требует только {name_from:{handle,property_name}}");
+        throw HandlerError("invalid_name_argument","FName requires only {name_from:{handle,property_name}}");
     const auto& source=value.at("name_from");
     if(!source.is_object() || source.size()!=2 || !source.contains("handle") || !source.contains("property_name")
        || !source.at("handle").is_string() || !source.at("property_name").is_string())
-        throw HandlerError("invalid_name_argument","Источник FName требует только handle и property_name");
+        throw HandlerError("invalid_name_argument","A FName source requires only handle and property_name");
     auto handle=source.at("handle").get<std::string>(),property=source.at("property_name").get<std::string>();
     if(handle.empty() || handle.find('\0')!=std::string::npos
        || property.empty() || property.find('\0')!=std::string::npos)

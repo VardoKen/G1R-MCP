@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "g1r-mcp"
-version = "1.0.0-dev.62"
-description = "Инструменты разработки модов Gothic 1 Remake через MCP"
+version = "1.0.0-dev.63"
+description = "Gothic 1 Remake mod development tools through MCP"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = ["mcp==2.3.0"]

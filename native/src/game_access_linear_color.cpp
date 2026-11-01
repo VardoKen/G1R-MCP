@@ -16,7 +16,7 @@ linear_color_layout::Snapshot GameAccess::capture_linear_color_parameter(std::ui
     const auto before=capture();
     const auto after=capture();
     if(before!=after)
-        throw HandlerError("linear_color_metadata_changed","Отражённые метаданные FLinearColor изменились при проверке");
+        throw HandlerError("linear_color_metadata_changed","Reflected FLinearColor metadata changed during validation");
     return before;
 }
 

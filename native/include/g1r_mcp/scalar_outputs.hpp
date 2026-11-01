@@ -10,7 +10,7 @@
 
 namespace g1r_mcp::scalar_outputs {
 
-// POD-поле из копии параметров ProcessEvent. Проверка CPF и offset — у вызывающего кода.
+// POD field from a ProcessEvent parameter copy. The caller checks CPF and offset.
 struct Layout {
     std::string type;
     int element_size{};
@@ -21,24 +21,24 @@ struct Layout {
 
 inline void validate_layout(const Layout& layout) {
     if(layout.array_dim!=1)
-        throw HandlerError("unsupported_scalar_output_layout","Скалярный out требует ArrayDim=1");
+        throw HandlerError("unsupported_scalar_output_layout","Scalar output requires ArrayDim=1");
     if(layout.type=="BoolProperty") {
         const auto mask=layout.field_mask;
         const bool byte_mask_valid=layout.byte_mask!=0
             && (layout.byte_mask==0xff || !(layout.byte_mask&(layout.byte_mask-1)));
-        // Native bool читает весь байт (FieldMask=0xff), а setter может писать только ByteMask=1.
-        // Для битового bool сохраняется точная одинаковая одиночная маска чтения/записи.
+        // Native bool reads the whole byte (FieldMask=0xff); its setter may write only ByteMask=1.
+        // Bitfield bool preserves the exact same single read/write mask.
         const bool masks_valid=mask==0xff?byte_mask_valid:
             mask!=0 && !(mask&(mask-1)) && layout.byte_mask==mask;
         if(layout.element_size!=1 || layout.field_size!=1 || layout.byte_offset!=0
            || !masks_valid)
-            throw HandlerError("unsupported_scalar_output_layout","Bool out требует один байт и подтверждённую маску");
+            throw HandlerError("unsupported_scalar_output_layout","Bool output requires one byte and a confirmed mask");
         return;
     }
     const int expected=(layout.type=="IntProperty" || layout.type=="UInt32Property" || layout.type=="FloatProperty")?4:
         (layout.type=="Int64Property" || layout.type=="UInt64Property" || layout.type=="DoubleProperty")?8:0;
     if(expected==0 || layout.element_size!=expected)
-        throw HandlerError("unsupported_scalar_output_layout","Тип или размер скалярного out не поддержан");
+        throw HandlerError("unsupported_scalar_output_layout","The scalar output type or size is unsupported");
 }
 
 template<class T>inline T copied_value(std::span<const std::byte> bytes) {
@@ -50,7 +50,7 @@ template<class T>inline T copied_value(std::span<const std::byte> bytes) {
 inline nlohmann::json decode(const Layout& layout,std::span<const std::byte> bytes) {
     scalar_outputs::validate_layout(layout);
     if(bytes.size()!=static_cast<std::size_t>(layout.element_size))
-        throw HandlerError("invalid_scalar_copy","Размер копии скалярного out не совпадает с reflection");
+        throw HandlerError("invalid_scalar_copy","The scalar output copy size does not match reflection");
     if(layout.type=="BoolProperty")
         return (copied_value<std::uint8_t>(bytes)&layout.field_mask)!=0;
     if(layout.type=="IntProperty")return copied_value<std::int32_t>(bytes);
@@ -59,7 +59,7 @@ inline nlohmann::json decode(const Layout& layout,std::span<const std::byte> byt
     if(layout.type=="UInt64Property")return copied_value<std::uint64_t>(bytes);
     const double value=layout.type=="FloatProperty"?static_cast<double>(copied_value<float>(bytes)):copied_value<double>(bytes);
     if(!std::isfinite(value))
-        throw HandlerError("invalid_scalar_value","Скалярный out содержит NaN или Infinity");
+        throw HandlerError("invalid_scalar_value","Scalar output contains NaN or Infinity");
     return value;
 }
 

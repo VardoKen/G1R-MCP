@@ -1,8 +1,8 @@
-"""Подготовить полную внешнюю Script-базу и изолированный ScriptPatch.
+"""Prepare a complete external Script base and an isolated ScriptPatch.
 
-Читаются Modkit/Script и явно выбранный Binds.Cache текущей игры. Исходники
-сохраняются побайтно, затем добавляется собственный UObject с постоянным маркером. Пакет содержит только
-ScriptPatches. Применение патча и компиляция требуют игрового подтверждения.
+Modkit/Script and the explicitly selected Binds.Cache from the current game are read. Sources
+are preserved byte for byte, then a fixture UObject with a constant marker is added. The package contains only
+ScriptPatches. Patch application and compilation require game verification.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ MAX_TOTAL_BYTES = 128 * 1024 * 1024
 PACKAGE_NAME = "G1RMCPBasePatchProbe"
 MARKER_NAME = "G1RMCPBasePatchProbe.as"
 ATTACK_SOURCE_PATH = "Script/AI/States/FightAI/CombatState/CombatMoves.as"
-MARKER_SOURCE = """// Изолированный маркер в копии основной Script-базы.
+MARKER_SOURCE = """// Isolated marker in a copy of the main Script base.
 UCLASS()
 class UG1RMCPBasePatchProbe : UObject
 {
@@ -60,7 +60,7 @@ def _sha(raw: bytes) -> str:
 
 
 def _canonical_git_patch(source_path: str, before: bytes, after: bytes) -> bytes:
-    """Получить тот же Git-формат, который показывает официальная инструкция."""
+    """Obtain the same Git format shown in the official instructions."""
     with tempfile.TemporaryDirectory(prefix="g1r-script-patch-") as temporary:
         directory = Path(temporary)
         target = directory / source_path
@@ -72,15 +72,15 @@ def _canonical_git_patch(source_path: str, before: bytes, after: bytes) -> bytes
             for arguments in (["init", "-q"], ["add", "--", source_path]):
                 result = subprocess.run([*prefix, *arguments], cwd=directory, capture_output=True, timeout=10, check=False)
                 if result.returncode != 0:
-                    raise PackageError("patch_generation_failed", "Git отказал при подготовке изолированного патча")
+                    raise PackageError("patch_generation_failed", "Git failed while preparing the isolated patch")
             target.write_bytes(after)
             result = subprocess.run([*prefix, "diff", "--no-ext-diff", "--no-color", "--no-textconv", "--", source_path],
                                     cwd=directory, capture_output=True, timeout=10, check=False)
         except (OSError, subprocess.TimeoutExpired):
-            raise PackageError("patch_generation_failed", "Не удалось получить ограниченный Git-diff") from None
+            raise PackageError("patch_generation_failed", "Failed to obtain a bounded Git diff") from None
         raw = result.stdout
         if result.returncode != 0 or len(raw) > 2 * 1024 * 1024 or not raw.startswith(("diff --git a/" + source_path).encode("utf-8")):
-            raise PackageError("patch_generation_failed", "Получен неподходящий или слишком большой Git-diff")
+            raise PackageError("patch_generation_failed", "The resulting Git diff is invalid or too large")
         return raw
 
 
@@ -91,25 +91,25 @@ def _patch_probe(modkit: Path, target: str) -> tuple[bytes, dict]:
                 "signature": {"input_parameters": [], "return_type": "IntProperty", "return_bytes": 4},
                 "source_value": 10, "patched_value": 11}
     if target != "existing_attack":
-        raise PackageError("invalid_probe_target", "Допустимы own_marker и existing_attack")
+        raise PackageError("invalid_probe_target", "Allowed targets are own_marker and existing_attack")
     builder = ScriptPatchBuilder(modkit)
     info = builder.source_info(ATTACK_SOURCE_PATH)
     raw = _read_bytes(modkit / ATTACK_SOURCE_PATH, modkit, 1024 * 1024)
     text = raw.decode("utf-8-sig")
     expression = r"(bool ShouldInvalidateAttack\(\)\s*\{\s*)return false;(\s*\})"
     if len(re.findall(expression, text)) != 1:
-        raise PackageError("source_contract_changed", "В официальном исходнике нет единственного ожидаемого тела ShouldInvalidateAttack")
+        raise PackageError("source_contract_changed", "The official source does not contain exactly one expected ShouldInvalidateAttack body")
     replacement = re.sub(expression, lambda match: match[1] + "return true;" + match[2], text, count=1)
     built = builder.build_script_patch(ATTACK_SOURCE_PATH, replacement, info["source_sha256"])
     if built["hunks"] != 1:
-        raise PackageError("source_contract_changed", "Проверочный патч должен менять ровно одно тело функции")
+        raise PackageError("source_contract_changed", "The probe patch must change exactly one function body")
     canonical = _canonical_git_patch(ATTACK_SOURCE_PATH, raw, replacement.encode("utf-8"))
     return canonical, {"target": target, "patch_source_format": "git_diff", "class_name": "UCM_Attack",
             "object_name": "Default__CM_Attack", "function_name": "ShouldInvalidateAttack",
             "signature": {"input_parameters": [], "return_type": "BoolProperty", "return_bytes": 1},
             "source_value": False, "patched_value": True, "source_path": ATTACK_SOURCE_PATH,
             "source_sha256": info["source_sha256"], "replacement_sha256": built["replacement_sha256"],
-            "test_effect": "В изолированной Script-базе меняется только возврат тестового вызова; игровое прохождение и сохранения не используются"}
+            "test_effect": "Only the test call return changes in the isolated Script base; gameplay progress and saved games are not used"}
 
 
 def _identity(path: Path) -> tuple[int, int]:
@@ -121,10 +121,10 @@ def _target(path: Path, repository: Path) -> Path:
     absolute = Path(os.path.abspath(path))
     artifacts = _checked(repository / "artifacts", repository, directory=True)
     if absolute == artifacts or not absolute.is_relative_to(artifacts):
-        raise PackageError("unsafe_path", "Для пробы нужен отдельный каталог внутри artifacts подпроекта")
+        raise PackageError("unsafe_path", "The probe requires a separate directory within the subproject artifacts directory")
     _checked(absolute.parent, artifacts, directory=True)
     if os.path.lexists(absolute):
-        raise PackageError("already_exists", "Каталог пробы уже существует")
+        raise PackageError("already_exists", "The probe directory already exists")
     return absolute
 
 
@@ -134,31 +134,31 @@ def _source_manifest(script: Path) -> list[dict]:
     directories_seen = 0
 
     def failure(error):
-        raise PackageError("access_error", "Не удалось полностью перечислить официальные Script")
+        raise PackageError("access_error", "Failed to enumerate all official Script sources")
 
     for directory, directories, names in os.walk(script, followlinks=False, onerror=failure):
         directories_seen += 1
         if directories_seen > MAX_DIRECTORIES:
-            raise PackageError("manifest_limit", "Script превышает предел числа каталогов")
+            raise PackageError("manifest_limit", "Script exceeds the directory count limit")
         parent = _checked(Path(directory), script, directory=True)
         for name in directories:
             _checked(parent / name, script, directory=True)
         for name in names:
             if len(files) >= MAX_FILES:
-                raise PackageError("manifest_limit", "Script превышает предел числа файлов")
+                raise PackageError("manifest_limit", "Script exceeds the file count limit")
             file = _checked(parent / name, script)
             if not file.is_file():
-                raise PackageError("unsafe_path", "Script содержит не обычный файл")
+                raise PackageError("unsafe_path", "Script contains a non-regular file")
             raw = _read_bytes(file, script, min(MAX_FILE_BYTES, MAX_TOTAL_BYTES - total))
             total += len(raw)
             if total > MAX_TOTAL_BYTES:
-                raise PackageError("manifest_limit", "Script превышает общий предел 128 МиБ")
+                raise PackageError("manifest_limit", "Script exceeds the total limit of 128 MiB")
             if file.suffix.lower() == ".as":
                 raw.decode("utf-8-sig", errors="strict")
             files.append({"path": file.relative_to(script).as_posix(), "bytes": len(raw), "sha256": _sha(raw)})
     files.sort(key=lambda item: item["path"])
     if not files or not any(item["path"].endswith(".as") for item in files):
-        raise PackageError("empty_source", "Основная Script-база не содержит .as")
+        raise PackageError("empty_source", "The main Script base contains no .as files")
     return files
 
 
@@ -176,7 +176,7 @@ def _revision(modkit: Path) -> dict:
 
 
 def _cleanup(stage: Path, parent: Path, own_files: dict, own_directories: dict) -> None:
-    """Удалять только неизменённые собственные объекты проверенного дерева."""
+    """Remove only unchanged owned objects in the validated tree."""
     try:
         with _guard_directories(stage, parent):
             for relative, identity in own_directories.items():
@@ -206,22 +206,22 @@ def _exact_destination(stage: Path, expected_files: set[str], expected_directori
     directories = {"."}
 
     def failure(error):
-        raise PackageError("copy_changed", "Не удалось полностью проверить подготовленное дерево")
+        raise PackageError("copy_changed", "Failed to validate the entire prepared tree")
 
     for directory, children, names in os.walk(stage, followlinks=False, onerror=failure):
         parent = _checked(Path(directory), stage, directory=True)
         if len(files) > MAX_FILES + 5 or len(directories) > MAX_DIRECTORIES + 4:
-            raise PackageError("copy_changed", "Подготовленная копия неожиданно увеличилась")
+            raise PackageError("copy_changed", "The prepared copy grew unexpectedly")
         for child in children:
             path = _checked(parent / child, stage, directory=True)
             directories.add(path.relative_to(stage).as_posix())
         for name in names:
             path = _checked(parent / name, stage)
             if not path.is_file():
-                raise PackageError("copy_changed", "Подготовленная копия содержит не обычный файл")
+                raise PackageError("copy_changed", "The prepared copy contains a non-regular file")
             files.add(path.relative_to(stage).as_posix())
     if files != expected_files or directories != expected_directories:
-        raise PackageError("copy_changed", "Подготовленная копия содержит посторонние файлы или каталоги")
+        raise PackageError("copy_changed", "The prepared copy contains unrelated files or directories")
 
 
 def prepare_probe(workspace_root: Path, *, modkit_root: Path | None = None,
@@ -233,18 +233,18 @@ def prepare_probe(workspace_root: Path, *, modkit_root: Path | None = None,
     scripts = _checked(modkit / "Script", modkit, directory=True)
     cache = _checked(binds_cache)
     if cache.name != "Binds.Cache" or not cache.is_file() or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_binds_sha256):
-        raise PackageError("invalid_binds_cache", "Нужен точный файл Binds.Cache и его ожидаемый SHA-256 из текущей игры")
+        raise PackageError("invalid_binds_cache", "The exact Binds.Cache file and its expected SHA-256 from the current game are required")
     cache_raw = _read_bytes(cache, cache.parent, MAX_FILE_BYTES)
     cache_hash = _sha(cache_raw)
     if cache_hash != expected_binds_sha256.lower():
-        raise PackageError("cache_changed", "SHA-256 Binds.Cache не совпадает с проверенным файлом игры")
+        raise PackageError("cache_changed", "The Binds.Cache SHA-256 does not match the verified game file")
     target = _target(workspace_root, repository)
     if target.is_relative_to(modkit) or modkit.is_relative_to(target):
-        raise PackageError("unsafe_path", "Каталог назначения пересекается с официальным Modkit")
+        raise PackageError("unsafe_path", "The destination directory overlaps the official Modkit")
     parent = _checked(target.parent, repository / "artifacts", directory=True)
     manifest = _source_manifest(scripts)
     if any(item["path"].casefold() in {MARKER_NAME.casefold(), "binds.cache"} for item in manifest):
-        raise PackageError("conflict", "Официальная база уже содержит имя проверочного маркера")
+        raise PackageError("conflict", "The official base already contains the probe marker name")
     provenance = _revision(modkit)
     patch_raw, expected = _patch_probe(modkit, probe_target)
     stage = None
@@ -253,7 +253,7 @@ def prepare_probe(workspace_root: Path, *, modkit_root: Path | None = None,
     with _destination_lock(target), _guard_directories(parent, repository / "artifacts"):
         try:
             if os.path.lexists(target):
-                raise PackageError("already_exists", "Каталог пробы появился до начала записи")
+                raise PackageError("already_exists", "The probe directory appeared before writing started")
             stage = Path(tempfile.mkdtemp(prefix=".g1r-base-patch-", dir=parent))
             own_directories["."] = _identity(stage)
             with _guard_directories(stage, parent):
@@ -295,29 +295,29 @@ def prepare_probe(workspace_root: Path, *, modkit_root: Path | None = None,
                     for entry in manifest:
                         raw = _read_bytes(scripts / entry["path"], scripts, MAX_FILE_BYTES)
                         if _sha(raw) != entry["sha256"]:
-                            raise PackageError("source_changed", "Официальный Script изменился во время копирования")
+                            raise PackageError("source_changed", "Official Script sources changed while copying")
                         write("Script/" + entry["path"], raw)
                     write("Script/Binds.Cache", cache_raw)
                     write("Script/" + MARKER_NAME, MARKER_SOURCE.encode("utf-8"))
-                    descriptor = {"name": PACKAGE_NAME, "title": "Проверка патча основной Script-базы", "author": "G1R MCP",
-                                  "description": "Изолированный патч собственного UObject-маркера во внешней копии Script.", "modVersion": "1.0.0"}
-                    # Только эти два файла относятся к включаемому официальному пакету.
+                    descriptor = {"name": PACKAGE_NAME, "title": "Main Script Base Patch Probe", "author": "G1R MCP",
+                                  "description": "An isolated patch to a fixture UObject marker in an external Script copy.", "modVersion": "1.0.0"}
+                    # Only these two files belong to the enabled official package.
                     writer = PackageWorkspace(stage / "Mods")
                     for relative, raw in (("GothicMod.json", json.dumps(descriptor, ensure_ascii=False, indent=2).encode("utf-8") + b"\n"),
                                           ("ScriptPatches/Marker.patch", patch_raw)):
                         result = writer.write_package_file(PACKAGE_NAME, relative, raw.decode("utf-8"))
                         own_files[f"Mods/{PACKAGE_NAME}/{relative}"] = (_identity(stage / "Mods" / PACKAGE_NAME / relative), result["sha256"])
                     if _source_manifest(scripts) != manifest:
-                        raise PackageError("source_changed", "Состав официального Script изменился во время копирования")
+                        raise PackageError("source_changed", "The official Script contents changed while copying")
                     if _sha(_read_bytes(cache, cache.parent, MAX_FILE_BYTES)) != cache_hash:
-                        raise PackageError("cache_changed", "Binds.Cache изменился во время подготовки")
+                        raise PackageError("cache_changed", "Binds.Cache changed during preparation")
                     for relative, (identity, digest) in own_files.items():
                         if _identity(_checked(stage / relative, stage)) != identity or _sha(_read_bytes(stage / relative, stage, MAX_FILE_BYTES)) != digest:
-                            raise PackageError("copy_changed", "Подготовленная копия изменилась до завершения")
+                            raise PackageError("copy_changed", "The prepared copy changed before completion")
                     _exact_destination(stage, set(own_files), set(own_directories))
                     package = validate_package(stage / "Mods", PACKAGE_NAME)
                     if not package["valid_structure"] or package["script_count"] != 0 or package.get("patch_count") != 1:
-                        raise PackageError("fixture_invalid", "Пакет должен содержать только один ScriptPatch")
+                        raise PackageError("fixture_invalid", "The package must contain exactly one ScriptPatch")
                 source_manifest_hash = _sha(json.dumps(manifest, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
                 recipe = {"source_root": str(scripts), "source_file_count": len(manifest), "source_bytes": sum(item["bytes"] for item in manifest),
                           "source_manifest_sha256": source_manifest_hash, "source_provenance": provenance,
@@ -328,14 +328,14 @@ def prepare_probe(workspace_root: Path, *, modkit_root: Path | None = None,
                           "expected": expected,
                           "control": {"object_name": "Default__G1RMCPBasePatchProbe", "function_name": "ReadBasePatchMarker", "value": 10},
                           "launch_options": [f"-ScriptDirectory={(target / 'Script').as_posix()}", f"-ModsDirectory={(target / 'Mods').as_posix()}", f"-Mods={PACKAGE_NAME}"],
-                          "limitations": ["Полная копия и её SHA-256 не доказывают компиляцию или применение патча", "Сопоставление a/Script/ с переопределённой основной базой требует игровой проверки"]}
+                          "limitations": ["A complete copy and its SHA-256 do not prove compilation or patch application", "Mapping a/Script/ to the overridden main base requires game verification"]}
                 raw = json.dumps(recipe, ensure_ascii=False, indent=2).encode("utf-8") + b"\n"
                 write("source-manifest.json", raw)
                 _exact_destination(stage, set(own_files), set(own_directories))
                 if _sha(_read_bytes(stage / "source-manifest.json", stage, MAX_FILE_BYTES)) != _sha(raw):
-                    raise PackageError("copy_changed", "Manifest копии изменился до публикации")
+                    raise PackageError("copy_changed", "The copy manifest changed before publication")
             if os.path.lexists(target):
-                raise PackageError("already_exists", "Каталог пробы появился до публикации копии")
+                raise PackageError("already_exists", "The probe directory appeared before publishing the copy")
             stage.rename(target)
             stage = None
             recipe.pop("source_files")
@@ -347,13 +347,13 @@ def prepare_probe(workspace_root: Path, *, modkit_root: Path | None = None,
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Подготовить внешнюю полную Script-базу и пакет с изолированным патчем")
+    parser = argparse.ArgumentParser(description="Prepare a complete external Script base and a package with an isolated patch")
     parser.add_argument("--workspace-root", type=Path, required=True)
     parser.add_argument("--modkit-root", type=Path)
-    parser.add_argument("--binds-cache", type=Path, required=True, help="Binds.Cache из Script текущей установленной игры")
-    parser.add_argument("--expected-binds-sha256", required=True, help="Проверенный SHA-256 Binds.Cache")
+    parser.add_argument("--binds-cache", type=Path, required=True, help="Binds.Cache from Script in the currently installed game")
+    parser.add_argument("--expected-binds-sha256", required=True, help="Verified Binds.Cache SHA-256")
     parser.add_argument("--probe-target", choices=("existing_attack", "own_marker"), default="existing_attack",
-                        help="Патч существующего метода основной базы или собственного маркера")
+                        help="Patch an existing main-base method or the fixture marker")
     args = parser.parse_args()
     try:
         print(json.dumps(prepare_probe(args.workspace_root, modkit_root=args.modkit_root,

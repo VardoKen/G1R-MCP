@@ -1,4 +1,4 @@
-"""Одна адресная пара оконных сообщений; постановка в очередь не доказывает обработку."""
+"""One targeted window message pair; queueing does not prove processing."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ class _User32:
     def __init__(self, api: Any = None):
         if api is None:
             if os.name != "nt":
-                raise OSError("Оконный ввод требует Windows")
+                raise OSError("Window input requires Windows")
             api = ctypes.WinDLL("user32", use_last_error=True)
         self.api = api
         signatures = {
@@ -70,10 +70,10 @@ def queue_key(expected_process: dict, virtual_key: int, *, expected_window: int 
         return WindowInputError(code, message, receipt)
 
     if type(virtual_key) is not int or not 0 <= virtual_key <= 255:
-        raise failure("invalid_virtual_key", "virtual_key должен быть целым числом от 0 до 255")
+        raise failure("invalid_virtual_key", "virtual_key must be an integer between 0 and 255")
     if expected_window is not None and (type(expected_window) is not int or expected_window <= 0
             or expected_window >= 1 << (ctypes.sizeof(ctypes.c_void_p) * 8)):
-        raise failure("invalid_window", "expected_window должен быть положительным HWND")
+        raise failure("invalid_window", "expected_window must be a positive HWND")
 
     lease = None
     error = None
@@ -84,7 +84,7 @@ def queue_key(expected_process: dict, virtual_key: int, *, expected_window: int 
         def running() -> None:
             observed = lease.poll()
             if observed["state"] != "running":
-                raise failure("process_not_running", "Исходный процесс не подтверждён как работающий",
+                raise failure("process_not_running", "The original process has not been confirmed as running",
                               process_observation=observed)
 
         running()
@@ -99,7 +99,7 @@ def queue_key(expected_process: dict, virtual_key: int, *, expected_window: int 
             return True
 
         if not user.api.EnumWindows(collect, 0):
-            raise failure("window_enumeration_failed", "Не удалось перечислить окна",
+            raise failure("window_enumeration_failed", "Could not enumerate windows",
                           win32_error=user.error())
         running()
         available = [window for window, _ in windows]
@@ -107,11 +107,11 @@ def queue_key(expected_process: dict, virtual_key: int, *, expected_window: int 
             selected = next((item for item in windows if item[0] == expected_window), None)
             if selected is None:
                 receipt["available_windows"] = available
-                raise failure("window_not_found", "Выбранное видимое окно не принадлежит исходному процессу")
+                raise failure("window_not_found", "The selected visible window does not belong to the original process")
         elif len(windows) != 1:
             receipt["available_windows"] = available
             raise failure("ambiguous_window" if windows else "window_not_found",
-                          "Для ввода требуется одно выбранное видимое окно исходного процесса")
+                          "Input requires one selected visible window of the original process")
         else:
             selected = windows[0]
         window, thread = selected
@@ -122,14 +122,14 @@ def queue_key(expected_process: dict, virtual_key: int, *, expected_window: int 
                                      (WM_KEYUP, "WM_KEYUP", down | (1 << 30) | (1 << 31))):
             running()
             if not user.api.IsWindow(window) or user.owner(window) != (thread, expected_process["pid"]):
-                raise failure("window_identity_changed", "Идентичность выбранного окна изменилась")
+                raise failure("window_identity_changed", "The selected window identity changed")
             posted = bool(user.api.PostMessageW(window, message, virtual_key, bits))
             item = {"message": label, "message_id": message, "wparam": virtual_key,
                     "lparam": bits, "queued": posted}
             receipt["messages"].append(item)
             if not posted:
                 item["win32_error"] = user.error()
-                raise failure("window_message_failed", "Не удалось поставить оконное сообщение в очередь",
+                raise failure("window_message_failed", "Could not queue the window message",
                               win32_error=item["win32_error"])
             running()
         receipt["status"] = "input_queued"

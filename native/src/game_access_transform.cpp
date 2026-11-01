@@ -16,7 +16,7 @@ transform_layout::Snapshot GameAccess::capture_transform_parameter(std::uintptr_
     const auto before=capture();
     const auto after=capture();
     if(before!=after)
-        throw HandlerError("transform_metadata_changed", "Отражённые метаданные Transform изменились при проверке");
+        throw HandlerError("transform_metadata_changed", "Reflected Transform metadata changed during validation");
     return before;
 }
 

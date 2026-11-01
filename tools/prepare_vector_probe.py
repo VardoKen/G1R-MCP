@@ -1,4 +1,4 @@
-"""Подготовить собственную FVector fixture внутри artifacts без запуска игры."""
+"""Prepare an isolated FVector fixture within artifacts without launching the game."""
 from __future__ import annotations
 
 import argparse
@@ -46,22 +46,22 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
             "value_input_return": "Script/GAS/GASCharacterMixins.as:1364",
             "out_parameter": "Script/AI/States/FightAI/CombatState/CombatMoves.as:1877"}}
     result["limitations"] = [
-        "Подготовка не подтверждает компиляцию, регистрацию или runtime ABI FVector",
-        "Размер структуры, компоненты и CPF-флаги направлений сначала подтверждаются reflection",
-        "FVector inout и const-ref не включены: точный текущий AngelScript-синтаксис не подтверждён",
-        "Вызовы меняют только CallsCount своего CDO; ResetProbe восстанавливает ноль",
-        "StoredVector остаётся неизменным; игровые объекты, мир и сохранения не используются"]
+        "Preparation does not confirm compilation, registration, or the runtime FVector ABI",
+        "The struct size, components, and direction CPF flags must first be confirmed by reflection",
+        "FVector inout and const-ref are not included: the exact current AngelScript syntax is not confirmed",
+        "Calls change only CallsCount on their CDO; ResetProbe restores zero",
+        "StoredVector remains unchanged; game objects, the world, and saved games are not used"]
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
     class RussianArgumentParser(argparse.ArgumentParser):
         def format_help(self):
-            return super().format_help().replace("usage:", "Использование:", 1).replace("options:", "Параметры:", 1)
-    parser = RussianArgumentParser(description="Подготовить собственную FVector fixture внутри artifacts", add_help=False)
-    parser.add_argument("-h", "--help", action="help", help="Показать справку")
+            return super().format_help().replace("usage:", "Usage:", 1).replace("options:", "Options:", 1)
+    parser = RussianArgumentParser(description="Prepare an isolated FVector fixture within artifacts", add_help=False)
+    parser.add_argument("-h", "--help", action="help", help="Show help")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT / "artifacts/vector-probe-dev16",
-                        help="Отдельный каталог внутри artifacts")
+                        help="A separate directory within artifacts")
     args = parser.parse_args(argv)
     try:
         result = prepare_probe(args.workspace_root)

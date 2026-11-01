@@ -13,8 +13,8 @@
 
 namespace g1r_mcp {
 
-// Только cache и явно запрошенный StopMovie. Нативные callback исполняются
-// в Platform pump на потоке живого WaitFrame; чтение cache их не вызывает.
+// Only cached status and explicitly requested StopMovie. Native callbacks execute
+// in the Platform pump on a live WaitFrame thread; reading the cache does not invoke them.
 class MoviePlayerJobs {
 public:
     using Json = nlohmann::json;

@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-Внутренние операции с удерживаемым Win32 HANDLE процесса.
+Internal operations using a retained Win32 process HANDLE.
 .DESCRIPTION
-Подключение файла только определяет функции. Проверка полного пути и точной
-FILETIME выполняется на том же HANDLE, через который процесс ожидается и,
-при явном AllowForce, завершается. WM_CLOSE — ограниченная штатная попытка.
-Обёртки должны отдельно ограничивать разрешённый EXE выбранной игрой.
+Importing this file only defines functions. The full path and exact FILETIME
+are checked using the same HANDLE used to wait for the process and, when
+AllowForce is explicit, terminate it. WM_CLOSE is a bounded graceful attempt.
+Wrappers must separately restrict the allowed EXE to the selected game.
 #>
 
 Set-StrictMode -Version Latest
@@ -103,14 +103,14 @@ namespace G1RMCP.ProcessControl {
             uint pid = Native.GetProcessId(value);
             Native.FileTime created, exited, kernel, user;
             if (pid == 0 || !Native.GetProcessTimes(value, out created, out exited, out kernel, out user))
-                throw Failure("process_identity_unavailable", "Не удалось прочитать идентичность процесса", false);
+                throw Failure("process_identity_unavailable", "Could not read process identity", false);
             ulong ticks = ((ulong)created.High << 32) | created.Low;
             if (ticks > Int64.MaxValue)
-                throw Failure("process_identity_unavailable", "Неверное время создания процесса", false);
+                throw Failure("process_identity_unavailable", "Invalid process creation time", false);
             var name = new StringBuilder(32768);
             uint length = (uint)name.Capacity;
             if (!Native.QueryFullProcessImageName(value, 0, name, ref length) || length == 0)
-                throw Failure("process_identity_unavailable", "Не удалось прочитать полный путь EXE", false);
+                throw Failure("process_identity_unavailable", "Could not read the full EXE path", false);
             return new ProcessIdentity {
                 Pid = pid,
                 CreationTime = DateTime.FromFileTimeUtc((long)ticks).ToString(
@@ -120,10 +120,10 @@ namespace G1RMCP.ProcessControl {
         }
 
         public static ProcessLease Open(uint pid, bool forTermination) {
-            if (pid == 0) throw Failure("invalid_process_identity", "PID должен быть положительным", false);
+            if (pid == 0) throw Failure("invalid_process_identity", "PID must be positive", false);
             IntPtr raw = Native.OpenProcess(Query | Synchronize | (forTermination ? Terminate : 0), false, pid);
             if (raw == IntPtr.Zero)
-                throw Failure("process_unavailable", "Не удалось открыть выбранный процесс", false);
+                throw Failure("process_unavailable", "Could not open the selected process", false);
             var safe = new ProcessHandle(raw);
             try { return new ProcessLease(safe, forTermination); }
             catch { safe.Dispose(); throw; }
@@ -135,29 +135,29 @@ namespace G1RMCP.ProcessControl {
                 "yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'", CultureInfo.InvariantCulture,
                 DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out parsed) ||
                 String.IsNullOrEmpty(executable) || !Path.IsPathRooted(executable))
-                throw Failure("invalid_process_identity", "Нужны точное время UTC и абсолютный путь EXE", false);
+                throw Failure("invalid_process_identity", "Exact UTC time and an absolute EXE path are required", false);
             var lease = Open(pid, forTermination);
             try {
                 if (lease.Identity.Pid != pid || lease.Identity.CreationTime != created ||
                     !String.Equals(lease.Identity.Executable, Path.GetFullPath(executable), StringComparison.OrdinalIgnoreCase))
-                    throw Failure("process_changed", "PID, время создания или полный путь EXE изменились", false);
+                    throw Failure("process_changed", "PID, creation time, or full EXE path changed", false);
                 return lease;
             }
             catch { lease.Dispose(); throw; }
         }
 
         private void AssertOpen() {
-            if (IsDisposed) throw Failure("process_handle_closed", "HANDLE процесса уже освобождён", false);
+            if (IsDisposed) throw Failure("process_handle_closed", "Process HANDLE has already been released", false);
         }
 
         public bool Wait(int milliseconds) {
             AssertOpen();
             if (milliseconds < 0 || milliseconds > 25000)
-                throw Failure("invalid_wait", "Время ожидания вне разрешённого диапазона", false);
+                throw Failure("invalid_wait", "Wait duration is outside the allowed range", false);
             uint result = Native.WaitForSingleObject(handle, (uint)milliseconds);
             if (result == 0) return true;
             if (result == WaitTimeout) return false;
-            throw Failure("process_wait_failed", "Не удалось проверить завершение исходного процесса", true);
+            throw Failure("process_wait_failed", "Could not verify termination of the original process", true);
         }
 
         public bool IsRunning() { return !Wait(0); }
@@ -165,13 +165,13 @@ namespace G1RMCP.ProcessControl {
         public string GetExitTime() {
             AssertOpen();
             if (!Wait(0))
-                throw Failure("process_still_running", "Время завершения ещё работающего процесса недоступно", false);
+                throw Failure("process_still_running", "Exit time is unavailable while the process is still running", false);
             Native.FileTime created, exited, kernel, user;
             if (!Native.GetProcessTimes(handle, out created, out exited, out kernel, out user))
-                throw Failure("process_identity_unavailable", "Не удалось прочитать время завершения исходного процесса", false);
+                throw Failure("process_identity_unavailable", "Could not read the original process exit time", false);
             ulong ticks = ((ulong)exited.High << 32) | exited.Low;
             if (ticks == 0 || ticks > Int64.MaxValue)
-                throw Failure("process_identity_unavailable", "Неверное время завершения исходного процесса", false);
+                throw Failure("process_identity_unavailable", "Invalid original process exit time", false);
             return DateTime.FromFileTimeUtc((long)ticks).ToString(
                 "yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'", CultureInfo.InvariantCulture);
         }
@@ -195,7 +195,7 @@ namespace G1RMCP.ProcessControl {
                 Native.GetWindowThreadProcessId(window, out owner);
                 if (owner != Identity.Pid) continue;
                 UIntPtr ignored;
-                // Штатное сообщение остаётся best effort: HWND не является process HANDLE.
+                // The graceful message remains best effort: HWND is not a process HANDLE.
                 Native.SendMessageTimeout(window, 0x0010, IntPtr.Zero, IntPtr.Zero,
                     0x0002 | 0x0020, (uint)Math.Min(1000L, remaining), out ignored);
                 attempted++;
@@ -207,9 +207,9 @@ namespace G1RMCP.ProcessControl {
             AssertOpen();
             if (graceMilliseconds < 0 || graceMilliseconds > 20000 ||
                 forceWaitMilliseconds < 1 || forceWaitMilliseconds > 5000)
-                throw Failure("invalid_wait", "Недопустимый предел завершения процесса", false);
+                throw Failure("invalid_wait", "Invalid process termination limit", false);
             if (allowForce && !canTerminate)
-                throw Failure("termination_not_enabled", "HANDLE открыт без права принудительного завершения", false);
+                throw Failure("termination_not_enabled", "HANDLE was opened without forced-termination access", false);
             if (!IsRunning())
                 return new StopResult { State = "already_exited", Mode = "none", GraceRequests = 0, Identity = Identity };
             var elapsed = Stopwatch.StartNew();
@@ -218,14 +218,14 @@ namespace G1RMCP.ProcessControl {
             if (Wait(remaining))
                 return new StopResult { State = "stopped", Mode = "graceful", GraceRequests = attempts, Identity = Identity };
             if (!allowForce)
-                throw Failure("process_still_running", "Исходный процесс не завершился штатно", false);
+                throw Failure("process_still_running", "The original process did not exit gracefully", false);
             if (!Native.TerminateProcess(handle, 0)) {
                 if (Wait(forceWaitMilliseconds))
                     return new StopResult { State = "stopped", Mode = "exited_before_force", GraceRequests = attempts, Identity = Identity };
-                throw Failure("termination_failed", "Не удалось завершить исходный процесс через удерживаемый HANDLE", true);
+                throw Failure("termination_failed", "Could not terminate the original process using the retained HANDLE", true);
             }
             if (!Wait(forceWaitMilliseconds))
-                throw Failure("termination_outcome_unknown", "Завершение исходного процесса не подтверждено", true);
+                throw Failure("termination_outcome_unknown", "Termination of the original process was not confirmed", true);
             return new StopResult { State = "stopped", Mode = "forced", GraceRequests = attempts, Identity = Identity };
         }
 

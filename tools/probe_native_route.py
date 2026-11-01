@@ -1,4 +1,4 @@
-"""Разовая проверка нативного маршрута и подтверждённого read-only AngelScript-вызова."""
+"""One-shot native route check and confirmed read-only AngelScript call."""
 
 import argparse
 import json
@@ -11,15 +11,15 @@ from g1r_mcp.native_client import NativeClient, NativeError
 def main():
     class RussianParser(argparse.ArgumentParser):
         def format_help(self):
-            return super().format_help().replace("usage: ", "Вызов: ", 1).replace("options:", "Параметры:")
+            return super().format_help().replace("usage: ", "Usage: ", 1).replace("options:", "options:")
 
         def error(self, message):
-            self.exit(2, "Некорректные параметры; используйте --help\n")
+            self.exit(2, "Invalid arguments; use --help\n")
 
-    parser = RussianParser(description="Проверка внутреннего нативного моста G1R MCP", add_help=False)
-    parser.add_argument("-h", "--help", action="help", help="Показать справку")
-    parser.add_argument("--enable", action="store_true", help="Установить Tick hook после появления главного меню")
-    parser.add_argument("--call-verified-as", action="store_true", help="Один вызов CM_Attack.ShouldInvalidateAttack: исходник возвращает false")
+    parser = RussianParser(description="Check the internal G1R MCP native bridge", add_help=False)
+    parser.add_argument("-h", "--help", action="help", help="Show help")
+    parser.add_argument("--enable", action="store_true", help="Install the Tick hook after the main menu appears")
+    parser.add_argument("--call-verified-as", action="store_true", help="One CM_Attack.ShouldInvalidateAttack call; the source returns false")
     arguments = parser.parse_args()
     client = NativeClient()
     try:
@@ -32,12 +32,12 @@ def main():
             status = client.status()
         print(json.dumps({"status": status}, ensure_ascii=False))
         if not status.get("ready"):
-            print(json.dumps({"code": "game_not_ready", "message": "Очередь игрового Tick ещё не подтверждена"}, ensure_ascii=False))
+            print(json.dumps({"code": "game_not_ready", "message": "Game Tick queue is not yet confirmed"}, ensure_ascii=False))
             return 2
         found = client.request("objects", {"query": "Default__CM_Attack", "class_query": "CM_Attack", "limit": 50})
         target = next((item for item in found.get("items", []) if item["name"] == "Default__CM_Attack"), None)
         if target is None:
-            print(json.dumps({"code": "probe_object_absent", "message": "Проверочный объект не найден"}, ensure_ascii=False))
+            print(json.dumps({"code": "probe_object_absent", "message": "Probe object was not found"}, ensure_ascii=False))
             return 2
         print(json.dumps({"object": target}, ensure_ascii=False))
         if arguments.call_verified_as:

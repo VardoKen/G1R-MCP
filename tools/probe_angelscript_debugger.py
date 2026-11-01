@@ -1,10 +1,10 @@
-"""Разовая диагностическая проба AngelScript-канала без повтора запросов.
+"""One-shot AngelScript channel diagnostic without request retries.
 
-Формат закреплён по Hazelight MIT, Copyright 2019 Hazelight Games AB:
+Protocol pinned to Hazelight MIT, Copyright 2019 Hazelight Games AB:
 https://github.com/Hazelight/vscode-unreal-angelscript/tree/ffc7ab2948589abb04200b7dcedd326eaeaf7a4d
 extension/src/unreal-debugclient.ts, extension/src/debug.ts,
-language-server/src/server.ts (запрос базы через секунду после подключения).
-Это самостоятельная диагностика, не игровой мод и не MCP-сервер.
+language-server/src/server.ts (database request one second after connecting).
+Standalone diagnostics, not a game mod or MCP server.
 """
 
 import argparse
@@ -44,25 +44,25 @@ class ProbeOptions:
 
 def validate_options(options: ProbeOptions) -> None:
     if not 1 <= options.port <= 65535:
-        raise ProbeError("invalid_arguments", "Порт должен быть от 1 до 65535")
+        raise ProbeError("invalid_arguments", "Port must be between 1 and 65535")
     if not 0 < options.timeout <= 300:
-        raise ProbeError("invalid_arguments", "Timeout должен быть больше 0 и не более 300 секунд")
+        raise ProbeError("invalid_arguments", "Timeout must be greater than 0 and at most 300 seconds")
     if not 1 <= options.max_frame_bytes <= 0xFFFFFFFF or options.max_total_bytes < 1 or options.max_messages < 1:
-        raise ProbeError("invalid_arguments", "Диагностические пределы должны быть положительными")
+        raise ProbeError("invalid_arguments", "Diagnostic limits must be positive")
     if options.request_database and options.timeout <= 1:
-        raise ProbeError("invalid_arguments", "Для запроса базы timeout должен превышать секунду")
+        raise ProbeError("invalid_arguments", "Database requests require a timeout longer than one second")
     if options.evaluate is None:
         if options.frame_id is not None:
-            raise ProbeError("invalid_arguments", "--frame-id используется только с --evaluate")
+            raise ProbeError("invalid_arguments", "--frame-id is only used with --evaluate")
         return
     if not options.start_debugging or options.frame_id is None:
-        raise ProbeError("invalid_arguments", "--evaluate требует явных --start-debugging и --frame-id")
+        raise ProbeError("invalid_arguments", "--evaluate requires explicit --start-debugging and --frame-id")
     expression = options.evaluate
-    # Только синтаксические литералы: вызовы, свойства и операторы не выполняются.
+    # Only syntactic literals; calls, properties, and operators are not executed.
     scalar = r"(?:true|false|null|[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)"
     quoted = r'''(?:"(?:[^"\\\r\n]|\\["\\nrt])*"|'(?:[^'\\\r\n]|\\['\\nrt])*')'''
     if not expression.isascii() or not re.fullmatch(f"(?:{scalar}|{quoted})", expression):
-        raise ProbeError("invalid_arguments", "Для первичной пробы допустим только простой ASCII-литерал")
+        raise ProbeError("invalid_arguments", "The initial probe only accepts a simple ASCII literal")
     try:
         encode_evaluate(expression, options.frame_id)
     except ProtocolError as error:
@@ -70,7 +70,7 @@ def validate_options(options: ProbeOptions) -> None:
 
 
 def collect_probe(connection: socket.socket, options: ProbeOptions, result: dict) -> None:
-    """Собрать ограниченный ответ одного подключения без автоматического replay."""
+    """Collect a bounded response from one connection without automatic replay."""
     decoder = ServerFrameDecoder(options.max_frame_bytes)
     started = time.monotonic()
     deadline = started + options.timeout
@@ -95,7 +95,7 @@ def collect_probe(connection: socket.socket, options: ProbeOptions, result: dict
         if remaining <= 0:
             if decoder.pending_bytes:
                 decoder.finish()
-            raise ProbeError("timeout", "Истёк срок ожидания диагностического результата; запросы не повторены")
+            raise ProbeError("timeout", "Diagnostic result deadline expired; requests were not retried")
         wait = min(remaining, max(0.001, database_due - now)) if options.request_database and not database_sent else remaining
         connection.settimeout(wait)
         try:
@@ -104,13 +104,13 @@ def collect_probe(connection: socket.socket, options: ProbeOptions, result: dict
             continue
         if not chunk:
             decoder.finish()
-            raise ProbeError("peer_closed", "Сервер закрыл соединение до полного результата")
+            raise ProbeError("peer_closed", "Server closed the connection before the complete result")
         result["received_bytes"] += len(chunk)
         if result["received_bytes"] > options.max_total_bytes:
-            raise ProbeError("limit_exceeded", "Превышен общий диагностический предел получения")
+            raise ProbeError("limit_exceeded", "Total diagnostic receive limit exceeded")
         for frame in decoder.feed(chunk):
             if len(result["messages"]) >= options.max_messages:
-                raise ProbeError("limit_exceeded", "Превышен предел количества сообщений")
+                raise ProbeError("limit_exceeded", "Message count limit exceeded")
             result["messages"].append({"type": frame.message_type, "payload_bytes": len(frame.payload)})
             if frame.message_type == MessageType.DEBUG_SERVER_VERSION:
                 result["server_version"] = decode_server_version(frame.payload)
@@ -121,7 +121,7 @@ def collect_probe(connection: socket.socket, options: ProbeOptions, result: dict
                 result["database_finished"] = True
             elif frame.message_type == MessageType.EVALUATE and evaluate_sent:
                 if result.get("evaluation") is not None:
-                    raise ProtocolError("Повторный Evaluate не имеет подтверждённой корреляции")
+                    raise ProtocolError("Repeated Evaluate has no confirmed correlation")
                 result["evaluation"] = decode_evaluate(frame.payload)
         complete = (
             "server_version" in result
@@ -134,16 +134,16 @@ def collect_probe(connection: socket.socket, options: ProbeOptions, result: dict
 
 
 def run_probe(options: ProbeOptions, connector=socket.create_connection) -> dict:
-    """Подключиться один раз; по завершении отправить только Disconnect."""
+    """Connect once; send only Disconnect when finished."""
     result = {
         "ok": False, "endpoint": {"host": options.host, "port": options.port},
         "sent_messages": [], "messages": [], "received_bytes": 0,
         "database_chunks": 0, "database_bytes": 0, "database_finished": False,
         "limitations": [
-            "Совместимость G1R определяется этой пробой, а не наличием открытого клиента",
-            "Evaluate сопоставляется FIFO с единственным запросом; request_id в протоколе нет",
-            "Результат литерала не подтверждает вызов функций, игровой поток или обработчик мода",
-            "База возвращается только как количество и размер сообщений, без исходников",
+            "This probe determines G1R compatibility; an open client does not",
+            "Evaluate is matched FIFO to the only request; the protocol has no request_id",
+            "A literal result does not confirm function calls, the game thread, or a mod handler",
+            "Database results contain only message counts and sizes, without source code",
         ],
     }
     connection = None
@@ -174,33 +174,33 @@ def run_probe(options: ProbeOptions, connector=socket.create_connection) -> dict
 
 class JsonArgumentParser(argparse.ArgumentParser):
     def format_help(self):
-        return super().format_help().replace("usage: ", "Вызов: ", 1)
+        return super().format_help().replace("usage: ", "Usage: ", 1)
 
     def error(self, message):
-        translated = message.replace("unrecognized arguments:", "Неизвестные параметры:")
-        translated = translated.replace("argument ", "Параметр ").replace("expected one argument", "ожидается одно значение")
-        translated = re.sub(r"invalid int value: (.*)", r"ожидается целое число: \1", translated)
-        translated = re.sub(r"invalid float value: (.*)", r"ожидается число: \1", translated)
+        translated = message.replace("unrecognized arguments:", "Unknown arguments:")
+        translated = translated.replace("argument ", "Argument ").replace("expected one argument", "expected one value")
+        translated = re.sub(r"invalid int value: (.*)", r"expected an integer: \1", translated)
+        translated = re.sub(r"invalid float value: (.*)", r"expected a number: \1", translated)
         raise ProbeError("invalid_arguments", translated)
 
 
 def main(argv=None) -> int:
     parser = JsonArgumentParser(
-        description="Разовая проба AngelScript: без Pause, Continue и повтора команд",
-        add_help=False, usage="%(prog)s [параметры]",
+        description="One-shot AngelScript probe without Pause, Continue, or command retries",
+        add_help=False, usage="%(prog)s [options]",
     )
-    parser._optionals.title = "Параметры"
-    parser.add_argument("-h", "--help", action="help", help="Показать справку и завершить")
-    parser.add_argument("--host", default="127.0.0.1", help="Адрес сервера; по умолчанию loopback")
-    parser.add_argument("--port", type=int, default=27099, help="Порт; по умолчанию 27099")
-    parser.add_argument("--timeout", type=float, default=5.0, help="Срок подключения и сбора результата в секундах")
-    parser.add_argument("--max-frame-bytes", type=int, default=16 * 1024 * 1024, help="Предел одного серверного payload")
-    parser.add_argument("--max-total-bytes", type=int, default=64 * 1024 * 1024, help="Общий предел полученных байтов")
-    parser.add_argument("--max-messages", type=int, default=256, help="Предел полученных сообщений")
-    parser.add_argument("--request-database", action="store_true", help="Один раз запросить метаданные базы через секунду после подключения")
-    parser.add_argument("--start-debugging", action="store_true", help="Явно отправить StartDebugging с adapter version 2")
-    parser.add_argument("--evaluate", help="Один простой ASCII-литерал; произвольные выражения не допускаются")
-    parser.add_argument("--frame-id", type=int, help="Явный frame_id для Evaluate; доказанного default нет")
+    parser._optionals.title = "Options"
+    parser.add_argument("-h", "--help", action="help", help="Show help and exit")
+    parser.add_argument("--host", default="127.0.0.1", help="Server address; defaults to loopback")
+    parser.add_argument("--port", type=int, default=27099, help="Port; defaults to 27099")
+    parser.add_argument("--timeout", type=float, default=5.0, help="Connection and result collection deadline in seconds")
+    parser.add_argument("--max-frame-bytes", type=int, default=16 * 1024 * 1024, help="Maximum server payload size")
+    parser.add_argument("--max-total-bytes", type=int, default=64 * 1024 * 1024, help="Total received byte limit")
+    parser.add_argument("--max-messages", type=int, default=256, help="Received message limit")
+    parser.add_argument("--request-database", action="store_true", help="Request database metadata once, one second after connecting")
+    parser.add_argument("--start-debugging", action="store_true", help="Explicitly send StartDebugging with adapter version 2")
+    parser.add_argument("--evaluate", help="One simple ASCII literal; arbitrary expressions are not accepted")
+    parser.add_argument("--frame-id", type=int, help="Explicit frame_id for Evaluate; no default is confirmed")
     try:
         options = ProbeOptions(**vars(parser.parse_args(argv)))
         result = run_probe(options)

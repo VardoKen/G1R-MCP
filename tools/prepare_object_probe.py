@@ -1,4 +1,4 @@
-"""Подготовить объектную AngelScript-fixture внутри artifacts без запуска игры."""
+"""Prepare an object AngelScript fixture within artifacts without launching the game."""
 from __future__ import annotations
 
 import argparse
@@ -25,7 +25,7 @@ def _fixture() -> tuple[dict, bytes]:
     source = (FIXTURE_ROOT / SCRIPT_RELATIVE).read_bytes()
     if (not validation["valid_structure"] or validation["script_count"] != 1
             or validation["metadata"].get("name") != PACKAGE_NAME):
-        raise PackageError("fixture_invalid", "Объектная fixture не прошла структурную проверку")
+        raise PackageError("fixture_invalid", "The object fixture failed structural validation")
     return validation["metadata"], source
 
 
@@ -34,8 +34,8 @@ def _workspace_path(path: Path, repository_root: Path) -> Path:
     artifacts = _checked(repository / "artifacts", repository, directory=True)
     absolute = Path(os.path.abspath(path))
     if absolute == artifacts or not absolute.is_relative_to(artifacts):
-        raise PackageError("unsafe_path", "Рабочая база проверки должна находиться внутри artifacts")
-    # Новый каталог создаётся только в существующем проверенном родителе.
+        raise PackageError("unsafe_path", "The probe workspace must be within artifacts")
+    # Create a new directory only within an existing validated parent.
     parent = _checked(absolute.parent, artifacts, directory=True)
     if os.path.lexists(absolute):
         return _checked(absolute, artifacts, directory=True)
@@ -81,11 +81,11 @@ def _assert_owned(created: dict[Path, tuple[int, int, str | None]], path: Path, 
     info = checked.stat()
     content_hash = None if directory else hashlib.sha256(_read_bytes(checked, boundary, 2 * 1024 * 1024)).hexdigest()
     if path not in created or created[path] != (info.st_dev, info.st_ino, content_hash):
-        raise WorkspaceError("unsafe_cleanup", "Созданный путь был заменён; остатки сохранены без удаления")
+        raise WorkspaceError("unsafe_cleanup", "The created path was replaced; remaining files were preserved without deletion")
 
 
 def _cleanup_stage(stage: Path, workspace: Path, created: dict[Path, tuple[int, int, str | None]]) -> None:
-    """Удалять только собственные пути после проверки всей цепи до первого unlink."""
+    """Remove only owned paths after validating the entire chain before the first unlink."""
     _assert_owned(created, stage, workspace, directory=True)
     package = stage / PACKAGE_NAME
     script = package / "Script"
@@ -94,14 +94,14 @@ def _cleanup_stage(stage: Path, workspace: Path, created: dict[Path, tuple[int, 
     with _guard_directories(stage, workspace):
         entries = set(stage.iterdir())
         if entries not in (set(), {package}):
-            raise WorkspaceError("unsafe_cleanup", "Временный каталог содержит чужие пути; остатки сохранены")
+            raise WorkspaceError("unsafe_cleanup", "The temporary directory contains unrelated paths; remaining files were preserved")
         if entries:
             # All parents and identities are checked before any file is deleted.
             for directory in (package, script):
                 _assert_owned(created, directory, stage, directory=True)
             files = [path for path in (descriptor, source) if os.path.lexists(path)]
             if set(package.iterdir()) != {script, descriptor} or set(script.iterdir()) != ({source} if source in files else set()):
-                raise WorkspaceError("unsafe_cleanup", "Временный пакет содержит чужие пути; остатки сохранены")
+                raise WorkspaceError("unsafe_cleanup", "The temporary package contains unrelated paths; remaining files were preserved")
             for path in files:
                 _assert_owned(created, path, stage)
             with _guard_directories(script, stage):
@@ -117,7 +117,7 @@ def _cleanup_stage(stage: Path, workspace: Path, created: dict[Path, tuple[int, 
 
 
 def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_ROOT) -> dict:
-    """Атомарно подготовить новый пакет; существующий пакет не менять."""
+    """Prepare a new package atomically without changing an existing package."""
     metadata, source = _fixture()
     workspace = _workspace_path(Path(workspace_root), Path(repository_root))
     repository = _checked(Path(repository_root), directory=True)
@@ -126,7 +126,7 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
     created: dict[Path, tuple[int, int, str | None]] = {}
     with _destination_lock(target), _guard_directories(workspace, repository):
         if os.path.lexists(target):
-            raise PackageError("already_exists", "Объектная fixture уже существует; выберите новую рабочую базу")
+            raise PackageError("already_exists", "The object fixture already exists; choose a new workspace")
         try:
             stage = Path(tempfile.mkdtemp(prefix=".g1r-object-probe-", dir=workspace))
             _record_owned(created, stage, workspace, directory=True)
@@ -144,9 +144,9 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
                 staged_package = _checked(stage / PACKAGE_NAME, stage, directory=True)
                 validation = validate_package(stage, PACKAGE_NAME)
                 if not validation["valid_structure"] or validation["script_count"] != 1:
-                    raise PackageError("fixture_invalid", "Подготовленная копия fixture не прошла проверку")
+                    raise PackageError("fixture_invalid", "The prepared fixture copy failed validation")
                 if os.path.lexists(target):
-                    raise PackageError("already_exists", "Пакет появился до завершения подготовки")
+                    raise PackageError("already_exists", "The package appeared before preparation completed")
                 staged_package.rename(target)
         finally:
             if stage is not None:
@@ -154,7 +154,7 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
                 try:
                     _cleanup_stage(stage, workspace, created)
                 except (WorkspaceError, OSError) as cleanup_error:
-                    message = "Небезопасная очистка пропущена; временные остатки сохранены: " + str(cleanup_error)
+                    message = "Unsafe cleanup was skipped; temporary files were preserved: " + str(cleanup_error)
                     if failure is None:
                         raise WorkspaceError("unsafe_cleanup", message) from cleanup_error
                     failure.add_note(message)
@@ -174,24 +174,24 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
         "startup_parameters": {"ModsDirectory": str(workspace), "Mods": [PACKAGE_NAME]},
         "expected": _expected(),
         "verification_recipe": [
-            "Включить только этот пакет разовыми development-аргументами и подключить DLL после главного меню",
-            "Найти три CDO и подтвердить class ancestry и реальные UFunction/types через reflection",
-            "Вызвать ReadMarker, затем ReadSelf и проверить актуальный session-owned handle",
-            "Проверить EchoObject с handle и null, IsNullObject с обоими вариантами",
-            "Проверить EchoTypedObject с базовым/производным CDO; посторонний CDO должен отклоняться до выполнения",
-            "Явно записать только StoredObject/StoredTypedObject проверочного CDO и сверить snapshot, затем вернуть null",
-            "После закрытия сессии проверить отказ от старых handles до выполнения метода",
+            "Enable only this package with one-time development arguments and attach the DLL after the main menu",
+            "Find three CDOs and confirm class ancestry and actual UFunction/types through reflection",
+            "Call ReadMarker, then ReadSelf, and verify the current session-owned handle",
+            "Check EchoObject with a handle and null, and IsNullObject with both variants",
+            "Check EchoTypedObject with base/derived CDOs; an unrelated CDO must be rejected before execution",
+            "Explicitly write only StoredObject/StoredTypedObject on the fixture CDO, verify the snapshot, then restore null",
+            "After the session closes, verify that stale handles are rejected before method execution",
         ],
         "limitations": [
-            "Исходные типы и ожидаемые имена не доказывают runtime reflection или компиляцию",
-            "Пакет не содержит callbacks, subsystem, создания игровых объектов или работы с сохранениями",
-            "Поля меняются только явными вызовами на собственных проверочных CDO",
+            "Source types and expected names do not prove runtime reflection or compilation",
+            "The package has no callbacks, subsystem, game object creation, or saved-game operations",
+            "Fields change only through explicit calls on the fixture CDOs",
         ],
     }
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Подготовить объектную fixture только внутри artifacts")
+    parser = argparse.ArgumentParser(description="Prepare an object fixture only within artifacts")
     parser.add_argument("--workspace-root", type=Path,
                         default=REPOSITORY_ROOT / "artifacts" / "object-probe-dev4")
     arguments = parser.parse_args(argv)

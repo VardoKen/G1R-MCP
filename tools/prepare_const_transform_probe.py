@@ -1,4 +1,4 @@
-"""Подготовить собственную const FTransform ref-fixture без запуска игры."""
+"""Prepare an isolated const FTransform reference fixture without launching the game."""
 from __future__ import annotations
 
 import argparse
@@ -55,23 +55,23 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
             "rotator_getter": "Script/IngameTools/IngameTool_SelectedActorProperties.as:293",
             "rotator_components_as_vector": "Script/IngameTools/IngameTool_SelectedActorProperties.as:305"}}
     result["limitations"] = [
-        "Const FTransform&in в UFUNCTION — согласованная композиционная runtime-гипотеза по текущим AS-примерам",
-        "Подготовка не подтверждает компиляцию, CPF Const/Reference/Out-флаги или ABI FTransform/FQuat",
-        "AcceptConstTransform не пишет во вход; независимые AS-getters читают собственную копию",
-        "FTransform return/out и mutable ref не включены",
-        "Меняются только StoredTransform и CallsCount собственного CDO; ResetProbe сбрасывает оба",
-        "Игровые объекты, мир и сохранения не используются"]
+        "Const FTransform&in in UFUNCTION is an approved runtime composition hypothesis based on current AS examples",
+        "Preparation does not confirm compilation, CPF Const/Reference/Out flags, or the FTransform/FQuat ABI",
+        "AcceptConstTransform does not write to its input; independent AS getters read its own copy",
+        "FTransform return/out and mutable references are not included",
+        "Only StoredTransform and CallsCount on the fixture CDO change; ResetProbe resets both",
+        "Game objects, the world, and saved games are not used"]
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
     class RussianArgumentParser(argparse.ArgumentParser):
         def format_help(self):
-            return super().format_help().replace("usage:", "Использование:", 1).replace("options:", "Параметры:", 1)
-    parser = RussianArgumentParser(description="Подготовить собственную const FTransform ref-fixture внутри artifacts", add_help=False)
-    parser.add_argument("-h", "--help", action="help", help="Показать справку")
+            return super().format_help().replace("usage:", "Usage:", 1).replace("options:", "Options:", 1)
+    parser = RussianArgumentParser(description="Prepare an isolated const FTransform reference fixture within artifacts", add_help=False)
+    parser.add_argument("-h", "--help", action="help", help="Show help")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT / "artifacts/const-transform-probe-dev20",
-                        help="Отдельный каталог внутри artifacts")
+                        help="A separate directory within artifacts")
     args = parser.parse_args(argv)
     try:
         result = prepare_probe(args.workspace_root)

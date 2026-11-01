@@ -1,11 +1,11 @@
-"""Контракты зарегистрированных MCP-инструментов без чтения runtime-состояния."""
+"""Registered MCP-tool contracts without reading runtime state."""
 
 from copy import deepcopy
 from typing import Any, Iterable
 
 
-# Поля ниже — неполный перечень известных полей успешного ответа, а не новая
-# обязательная схема. Схемы и аргументы берутся только из MCP-регистрации.
+# The fields below are an incomplete list of known successful-response fields,
+# not a new required schema. Schemas and arguments come only from MCP registration.
 _SOURCE_PAGE = ("items", "truncated", "total_matches", "source", "validation", "offset", "next_offset")
 _WORKSPACE_FILE = ("source", "package_path", "file_path", "sha256", "text", "compiled", "runtime_validation")
 _NATIVE_STATUS = ("version", "ready", "hook_installed", "tick_count", "requests", "pump")
@@ -173,7 +173,7 @@ _CONTRACTS["g1r_watch_resume"] = _entry(
 
 
 def build_tool_contracts(registered_tools: Iterable[Any]) -> list[dict[str, Any]]:
-    """Скопировать MCP-схемы и пояснения; не вызывать обработчики или probes."""
+    """Copy MCP schemas and descriptions without invoking handlers or probes."""
     contracts = []
     for tool in registered_tools:
         details = _CONTRACTS[tool.name]

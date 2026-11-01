@@ -27,7 +27,7 @@ inline void validate_layout(const Layout& layout) {
     if(layout.has_super || layout.properties_size<1 || layout.min_alignment<1
        || (layout.min_alignment&(layout.min_alignment-1)) || layout.properties_size%layout.min_alignment
        || layout.components.empty())
-        throw HandlerError("unsupported_scalar_struct_layout","DTO требует собственные скалярные поля и отражённый размер/выравнивание");
+        throw HandlerError("unsupported_scalar_struct_layout","DTO requires own scalar fields and reflected size/alignment");
     std::set<std::string> names;
     for(std::size_t i=0;i<layout.components.size();++i) {
         const auto& component=layout.components[i];
@@ -35,7 +35,7 @@ inline void validate_layout(const Layout& layout) {
         if(component.name.empty() || !names.insert(component.name).second || component.offset<0
            || component.layout.element_size>layout.properties_size
            || component.offset>layout.properties_size-component.layout.element_size)
-            throw HandlerError("unsupported_scalar_struct_layout","Поля DTO имеют повторные имена или выходят за размер структуры");
+            throw HandlerError("unsupported_scalar_struct_layout","DTO fields have duplicate names or exceed the struct size");
         for(std::size_t j=0;j<i;++j) {
             const auto& other=layout.components[j];
             if(component.offset>=other.offset+other.layout.element_size
@@ -43,14 +43,14 @@ inline void validate_layout(const Layout& layout) {
             if(component.layout.type=="BoolProperty" && other.layout.type=="BoolProperty"
                && component.offset==other.offset
                && !(component.layout.field_mask&other.layout.field_mask))continue;
-            throw HandlerError("unsupported_scalar_struct_layout","Скалярные поля DTO перекрывают одно хранилище");
+            throw HandlerError("unsupported_scalar_struct_layout","Scalar DTO fields overlap the same storage");
         }
     }
 }
 inline nlohmann::json decode(const Layout& layout,std::span<const std::byte> bytes) {
     validate_layout(layout);
     if(bytes.size()!=static_cast<std::size_t>(layout.properties_size))
-        throw HandlerError("invalid_struct_copy","Размер копии DTO не совпадает с отражённым размером");
+        throw HandlerError("invalid_struct_copy","The DTO copy size does not match its reflected size");
     auto result=nlohmann::json::object();
     for(const auto& component:layout.components)
         result[component.name]=scalar_outputs::decode(component.layout,
@@ -73,7 +73,7 @@ struct Snapshot {
     std::vector<ComponentMetadata> components;
     bool operator==(const Snapshot&) const=default;
 };
-// Capture читает отражение; decode работает только с собственной копией результата.
+// Capture reads reflection; decode reads only the owned result copy.
 template<class Reader,class NameDecoder,class ObjectCapture,class ClassValidator,class PathResolver>
 Snapshot capture(std::uintptr_t field,int size,int dim,Reader&& read,NameDecoder&& name,
                  ObjectCapture&& identity,ClassValidator&& validate_class,PathResolver&& path) {
@@ -87,18 +87,18 @@ Snapshot capture(std::uintptr_t field,int size,int dim,Reader&& read,NameDecoder
     result.element_size=integer(field,0x34);result.array_dim=integer(field,0x30);
     if(std::invoke(name,result.type_name)!="StructProperty" || result.element_size!=size || result.array_dim!=dim
        || dim!=1 || size<1)
-        throw HandlerError("unsupported_scalar_struct_layout","DTO требует один StructProperty согласованного размера");
+        throw HandlerError("unsupported_scalar_struct_layout","DTO requires one StructProperty of a matching size");
     result.structure=pointer(field,0x70);result.identity=std::invoke(identity,result.structure);
     std::invoke(validate_class,result.identity.object_class);
     result.path=std::invoke(path,result.structure);result.struct_name=std::invoke(name,result.identity.name);
     result.head=pointer(result.structure,0x50);result.super=pointer(result.structure,0x40);
     result.layout={integer(result.structure,0x58),integer(result.structure,0x5c),result.super!=0,{}};
     if(result.layout.properties_size!=size)
-        throw HandlerError("unsupported_scalar_struct_layout","Размер UScriptStruct DTO не совпадает с параметром");
+        throw HandlerError("unsupported_scalar_struct_layout","The DTO UScriptStruct size does not match the parameter");
     std::set<std::uintptr_t> visited;
     for(auto current=result.head;current;current=pointer(current,0x18)) {
         if(!visited.insert(current).second)
-            throw HandlerError("unsupported_scalar_struct_layout","Цепочка полей DTO циклическая");
+            throw HandlerError("unsupported_scalar_struct_layout","The DTO field chain contains a cycle");
         ComponentMetadata child;
         child.pointer=current;child.next=pointer(current,0x18);child.field_class=pointer(current,8);
         child.owner=raw_name(current,0x10);child.name=raw_name(current,0x20);

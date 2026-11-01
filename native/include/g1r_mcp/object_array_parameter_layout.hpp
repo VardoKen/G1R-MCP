@@ -13,10 +13,10 @@ namespace g1r_mcp::object_array_parameter_layout {
 
 inline std::uintptr_t checked_address(std::uintptr_t base,std::size_t offset,std::size_t bytes) {
     if(!base || offset>std::numeric_limits<std::uintptr_t>::max()-base)
-        throw HandlerError("invalid_memory","Адрес метаданных массива UObject переполняется");
+        throw HandlerError("invalid_memory","The UObject array metadata address overflows");
     const auto address=base+offset;
     if(bytes && bytes-1>std::numeric_limits<std::uintptr_t>::max()-address)
-        throw HandlerError("invalid_memory","Диапазон метаданных массива UObject переполняется");
+        throw HandlerError("invalid_memory","The UObject array metadata range overflows");
     return address;
 }
 
@@ -26,15 +26,15 @@ inline nlohmann::json identity_json(const ObjectSerialIdentity& value) {
         {"class_name",value.class_name},{"class_serial",value.class_serial}};
 }
 
-// Снимок не читает элементы массива и не выделяет игровую память.
-// Параметр допускает только const-ссылку на TArray с точным ObjectProperty.
+// The snapshot neither reads array elements nor allocates engine memory.
+// The parameter permits only a const TArray reference with exact ObjectProperty elements.
 template<class Read,class NameDecoder,class ObjectCapture,class ClassValidator,class PathResolver>
 nlohmann::json capture(std::uintptr_t field,int element_size,int array_dim,std::uint64_t expected_flags,
     Read&& read,NameDecoder&& decode,ObjectCapture&& capture_identity,
     ClassValidator&& validate_class,PathResolver&& object_path) {
     using namespace parameter_direction;
     if(element_size!=16 || array_dim!=1)
-        throw HandlerError("unsupported_object_array_layout","Массив UObject требует размер 16 и ArrayDim=1");
+        throw HandlerError("unsupported_object_array_layout","A UObject array requires size 16 and ArrayDim=1");
     const auto pointer=[&](std::uintptr_t base,std::size_t offset) {
         return read.template operator()<std::uintptr_t>(checked_address(base,offset,sizeof(std::uintptr_t)));
     };
@@ -60,39 +60,39 @@ nlohmann::json capture(std::uintptr_t field,int element_size,int array_dim,std::
     const auto flags=outer.at("flags").template get<std::uint64_t>();
     const auto offset=outer.at("offset").template get<std::int32_t>();
     if(outer.at("type")!="ArrayProperty")
-        throw HandlerError("unsupported_object_array_type","Параметр должен быть точным ArrayProperty");
+        throw HandlerError("unsupported_object_array_type","The parameter must be an exact ArrayProperty");
     if(outer.at("element_size")!=element_size || outer.at("array_dim")!=array_dim
        || offset<0 || offset%8)
-        throw HandlerError("unsupported_object_array_layout","Внешняя раскладка массива UObject не совпадает");
+        throw HandlerError("unsupported_object_array_layout","The outer UObject array layout does not match");
     if(flags!=expected_flags || !(flags&parm) || !(flags&const_parm)
        || !(flags&(reference_parm|out_parm)) || (flags&return_parm))
-        throw HandlerError("unsupported_signature","Массив UObject допускает только const ref/in параметр");
+        throw HandlerError("unsupported_signature","A UObject array supports only a const reference input parameter");
     const auto array_flags=read.template operator()<std::uint8_t>(checked_address(field,0x70,1));
     outer["array_flags"]=array_flags;
     if(array_flags)
-        throw HandlerError("unsupported_object_array_layout","Неизвестные ArrayFlags массива UObject");
+        throw HandlerError("unsupported_object_array_layout","Unknown UObject array ArrayFlags");
     const auto inner_pointer=pointer(field,0x78);
     outer["inner"]=inner_pointer;
     if(!inner_pointer || inner_pointer==field || outer.at("next")==field)
-        throw HandlerError("unsupported_object_array_layout","Inner массива UObject отсутствует или содержит цикл");
+        throw HandlerError("unsupported_object_array_layout","The UObject array Inner property is missing or cyclic");
     auto inner=field_snapshot(inner_pointer);
     if(inner.at("next")==inner_pointer || inner.at("next")==field)
-        throw HandlerError("unsupported_object_array_layout","Inner массива UObject содержит цикл метаданных");
+        throw HandlerError("unsupported_object_array_layout","The UObject array Inner metadata contains a cycle");
     if(inner.at("type")!="ObjectProperty")
-        throw HandlerError("unsupported_object_array_type","Элементы массива требуют точный ObjectProperty");
+        throw HandlerError("unsupported_object_array_type","Array elements require exact ObjectProperty");
     if(inner.at("element_size")!=8 || inner.at("array_dim")!=1 || inner.at("offset")!=0)
-        throw HandlerError("unsupported_object_array_layout","Inner массива UObject требует размер 8, ArrayDim=1 и offset=0");
+        throw HandlerError("unsupported_object_array_layout","The UObject array Inner requires size 8, ArrayDim=1 and offset=0");
     const auto property_class=pointer(inner_pointer,0x70);
     inner["property_class"]=property_class;
     std::invoke(validate_class,property_class);
     const auto identity=std::invoke(capture_identity,property_class);
     if(identity.object!=property_class || !identity.object_class || !same_serial_identity(identity,identity))
-        throw HandlerError("unsupported_object_array_type","Identity класса элементов массива UObject не совпадает");
+        throw HandlerError("unsupported_object_array_type","UObject array element class identity does not match");
     std::invoke(validate_class,identity.object_class);
     const auto path=std::invoke(object_path,property_class);
     const auto class_name=std::invoke(decode,identity.name);
     if(path.empty() || path.front()!='/' || class_name.empty())
-        throw HandlerError("unsupported_object_array_type","Класс элементов массива UObject не имеет подтверждённого пути");
+        throw HandlerError("unsupported_object_array_type","The UObject array element class has no confirmed path");
     return {{"outer",std::move(outer)},{"inner",std::move(inner)},{"property_class",property_class},
         {"property_class_identity",identity_json(identity)},{"property_class_path",path},{"property_class_name",class_name},
         {"public",{{"inner_type","ObjectProperty"},{"inner_element_size",8},{"inner_array_dim",1},{"inner_offset",0},

@@ -1,8 +1,8 @@
-"""Создание и редактирование официальных пакетов в выбранной рабочей базе.
+"""Create and edit official packages in the selected workspace.
 
-Игровые каталоги и официальный Modkit этим модулем не определяются. Доступ
-ограничен GothicMod.json, Script/**/*.as и ScriptPatches/*.patch;
-компиляция, применение патчей и загрузка не выполняются.
+This module does not determine game directories or the official Modkit. Access
+is limited to GothicMod.json, Script/**/*.as, and ScriptPatches/*.patch;
+compilation, patch application, and loading are not performed.
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ _RESERVED = re.compile(r"^(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT
 
 
 class WorkspaceError(Exception):
-    """Предсказуемая ошибка без раскрытия абсолютных пользовательских путей."""
+    """Predictable error without disclosing absolute user paths."""
 
     def __init__(self, code: str, message: str):
         super().__init__(message)
@@ -39,16 +39,16 @@ class WorkspaceError(Exception):
 
 def _parts(value: str, *, root_allowed: bool = False) -> tuple[str, ...]:
     if not isinstance(value, str) or not value or len(value) > 1024:
-        raise WorkspaceError("invalid_path", "Нужен ограниченный относительный путь")
+        raise WorkspaceError("invalid_path", "A bounded relative path is required")
     if root_allowed and value == ".":
         return ()
     if PureWindowsPath(value).anchor or "\\" in value:
-        raise WorkspaceError("unsafe_path", "Нужен относительный путь с прямыми разделителями")
+        raise WorkspaceError("unsafe_path", "A relative path with forward slash separators is required")
     pieces = tuple(value.split("/"))
     for piece in pieces:
         if (piece in ("", ".", "..") or piece[-1:] in (" ", ".")
                 or _RESERVED.fullmatch(piece) or any(ord(c) < 32 or c in '<>:"|?*' for c in piece)):
-            raise WorkspaceError("unsafe_path", "Путь содержит недопустимый компонент")
+            raise WorkspaceError("unsafe_path", "The path contains an invalid component")
     return pieces
 
 
@@ -58,25 +58,25 @@ def _checked(path: Path, boundary: Path | None = None, *, directory: bool = Fals
         for part in (absolute, *absolute.parents):
             info = part.lstat()
             if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
-                raise WorkspaceError("unsafe_path", "Путь содержит ссылку или reparse point")
+                raise WorkspaceError("unsafe_path", "The path contains a link or reparse point")
         resolved = absolute.resolve(strict=True)
         if boundary is not None and not resolved.is_relative_to(boundary):
-            raise WorkspaceError("unsafe_path", "Путь выходит за пределы рабочей базы")
+            raise WorkspaceError("unsafe_path", "The path is outside the workspace")
         info = resolved.stat()
         if directory and not stat.S_ISDIR(info.st_mode):
-            raise WorkspaceError("invalid_path", "Путь должен быть каталогом")
+            raise WorkspaceError("invalid_path", "The path must be a directory")
         if not directory and not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
-            raise WorkspaceError("invalid_path", "Путь имеет неподходящий тип")
+            raise WorkspaceError("invalid_path", "The path has an invalid type")
         return resolved
     except WorkspaceError:
         raise
     except (OSError, ValueError, RuntimeError):
-        raise WorkspaceError("access_error", "Путь отсутствует или недоступен") from None
+        raise WorkspaceError("access_error", "The path is missing or inaccessible") from None
 
 
 @contextmanager
 def _guard_directories(directory: Path, boundary: Path) -> Iterator[None]:
-    """На Windows удерживать каталоги без FILE_SHARE_DELETE при операции."""
+    """On Windows, retain directory handles without FILE_SHARE_DELETE during the operation."""
     handles: list[int] = []
     try:
         _checked(directory, boundary, directory=True)
@@ -92,7 +92,7 @@ def _guard_directories(directory: Path, boundary: Path) -> Iterator[None]:
             for part in reversed((directory, *directory.parents)):
                 handle = create(str(part), 0, 3, None, 3, 0x02200000, None)
                 if handle in (None, ctypes.c_void_p(-1).value):
-                    raise WorkspaceError("access_error", "Не удалось защитить рабочий каталог")
+                    raise WorkspaceError("access_error", "Could not protect the working directory")
                 handles.append(handle)
             _checked(directory, boundary, directory=True)
         yield
@@ -104,7 +104,7 @@ def _guard_directories(directory: Path, boundary: Path) -> Iterator[None]:
 
 @contextmanager
 def _destination_lock(path: Path) -> Iterator[None]:
-    """Сериализовать запись одного назначения между MCP-процессами без файлов."""
+    """Serialize writes to one destination across MCP processes without files."""
     if os.name != "nt":
         yield
         return
@@ -122,13 +122,13 @@ def _destination_lock(path: Path) -> Iterator[None]:
     name = "Local\\G1R-MCP-workspace-" + hashlib.sha256(os.path.normcase(str(path)).encode("utf-8")).hexdigest()
     handle = create(None, False, name)
     if not handle:
-        raise WorkspaceError("access_error", "Не удалось защитить запись назначения")
+        raise WorkspaceError("access_error", "Could not protect the destination write")
     acquired = False
     try:
         outcome = wait(handle, 5000)
         acquired = outcome in (0, 0x80)
         if not acquired:
-            raise WorkspaceError("conflict", "Назначение занято другой записью; повторите запрос")
+            raise WorkspaceError("conflict", "The destination is busy with another write; repeat the request")
         yield
     finally:
         if acquired:
@@ -139,29 +139,29 @@ def _destination_lock(path: Path) -> Iterator[None]:
 def _read_bytes(path: Path, boundary: Path, maximum: int | None) -> bytes:
     checked = _checked(path, boundary)
     if not checked.is_file():
-        raise WorkspaceError("invalid_path", "Исходник должен быть обычным файлом")
+        raise WorkspaceError("invalid_path", "The source must be a regular file")
     try:
         before = checked.stat()
         if maximum is not None and before.st_size > maximum:
-            raise WorkspaceError("limit_exceeded", "Файл превышает разрешённый размер")
+            raise WorkspaceError("limit_exceeded", "The file exceeds the allowed size")
         with checked.open("rb") as stream:
             opened = os.fstat(stream.fileno())
             if (opened.st_ino, opened.st_dev) != (before.st_ino, before.st_dev):
-                raise WorkspaceError("file_changed", "Файл изменился во время чтения")
+                raise WorkspaceError("file_changed", "The file changed during reading")
             raw = stream.read() if maximum is None else stream.read(maximum + 1)
             after_read = os.fstat(stream.fileno())
         _checked(checked, boundary)
         after = checked.stat()
         stamp = lambda info: (info.st_size, info.st_mtime_ns, info.st_ino, info.st_dev)
         if stamp(before) != stamp(after_read) or stamp(before) != stamp(after):
-            raise WorkspaceError("file_changed", "Файл изменился во время чтения")
+            raise WorkspaceError("file_changed", "The file changed during reading")
         if maximum is not None and len(raw) > maximum:
-            raise WorkspaceError("limit_exceeded", "Файл превышает разрешённый размер")
+            raise WorkspaceError("limit_exceeded", "The file exceeds the allowed size")
         return raw
     except WorkspaceError:
         raise
     except OSError:
-        raise WorkspaceError("access_error", "Не удалось прочитать файл") from None
+        raise WorkspaceError("access_error", "Could not read the file") from None
 
 
 def _result(**values) -> dict:
@@ -176,10 +176,10 @@ class PackageWorkspace:
         self._lock = threading.RLock()
 
     def _unprotected(self, path: Path, *, forbid_ancestor: bool = False) -> Path:
-        """Проверить каноническое назначение; общий родитель рабочих баз допустим."""
+        """Validate the canonical destination; a shared parent of workspaces is allowed."""
         for protected in self.protected_roots:
             if path.is_relative_to(protected) or (forbid_ancestor and protected.is_relative_to(path)):
-                raise WorkspaceError("unsafe_path", "Путь относится к защищённому каталогу исходников")
+                raise WorkspaceError("unsafe_path", "The path belongs to a protected source directory")
         return path
 
     def _package(self, relative_path: str) -> tuple[Path, str]:
@@ -196,7 +196,7 @@ class PackageWorkspace:
             return parts
         if len(parts) == 2 and parts[0] == "ScriptPatches" and Path(parts[-1]).suffix.lower() == ".patch":
             return parts
-        raise WorkspaceError("unsupported_file", "Разрешены GothicMod.json, Script/**/*.as и ScriptPatches/*.patch")
+        raise WorkspaceError("unsupported_file", "GothicMod.json, Script/**/*.as, and ScriptPatches/*.patch are allowed")
 
     @contextmanager
     def _write_parent(self, package: Path, parts: tuple[str, ...]) -> Iterator[Path]:
@@ -205,7 +205,7 @@ class PackageWorkspace:
         if parts[0] != "ScriptPatches" or os.path.lexists(parent):
             yield _checked(parent, package, directory=True)
             return
-        # Создание единственного документированного каталога сериализовано отдельно.
+        # Creation of the single documented directory is serialized separately.
         with _destination_lock(parent), _guard_directories(package, self.root):
             created = False
             try:
@@ -215,30 +215,30 @@ class PackageWorkspace:
                 yield self._unprotected(_checked(parent, package, directory=True))
             except BaseException as error:
                 if created:
-                    # Удаляется лишь наша пустая папка; чужие появившиеся файлы сохраняются.
+                    # Remove only our empty directory; preserve any files created by others.
                     checked = _checked(parent, package, directory=True)
                     if not any(checked.iterdir()):
                         checked.rmdir()
                 if isinstance(error, OSError):
-                    raise WorkspaceError("access_error", "Не удалось подготовить каталог патчей") from None
+                    raise WorkspaceError("access_error", "Could not prepare the patch directory") from None
                 raise
 
     def create_package(self, relative_path: str, metadata: dict) -> dict:
         parts = _parts(relative_path)
         if not isinstance(metadata, dict):
-            raise WorkspaceError("invalid_arguments", "Метаданные должны быть JSON-объектом")
+            raise WorkspaceError("invalid_arguments", "Metadata must be a JSON object")
         try:
             raw = (json.dumps(metadata, ensure_ascii=False, allow_nan=False, indent=2) + "\n").encode("utf-8")
         except (ValueError, TypeError, UnicodeEncodeError, RecursionError):
-            raise WorkspaceError("invalid_descriptor", "Метаданные не являются корректным UTF-8 JSON") from None
+            raise WorkspaceError("invalid_descriptor", "Metadata is not valid UTF-8 JSON") from None
         if len(raw) > MAX_DESCRIPTOR_BYTES:
-            raise WorkspaceError("limit_exceeded", "Дескриптор превышает предел 256 КиБ")
+            raise WorkspaceError("limit_exceeded", "The descriptor exceeds the 256 KiB limit")
         with self._lock:
             parent = _checked(self.root.joinpath(*parts[:-1]), self.root, directory=True)
             target = self._unprotected(parent / parts[-1], forbid_ancestor=True)
             with _destination_lock(target), _guard_directories(parent, self.root):
                 if os.path.lexists(target):
-                    raise WorkspaceError("conflict", "Каталог пакета уже существует")
+                    raise WorkspaceError("conflict", "The package directory already exists")
                 stage: Path | None = None
                 try:
                     stage = Path(tempfile.mkdtemp(prefix=".g1r-mcp-", dir=parent))
@@ -246,18 +246,18 @@ class PackageWorkspace:
                     (stage / "GothicMod.json").write_bytes(raw)
                     report = validate_package(parent, stage.name)
                     if not report["valid_structure"]:
-                        raise WorkspaceError("invalid_descriptor", "Дескриптор не прошёл структурную проверку")
+                        raise WorkspaceError("invalid_descriptor", "The descriptor failed structural validation")
                     if os.path.lexists(target):
-                        raise WorkspaceError("conflict", "Каталог пакета появился во время создания")
-                    # На Windows rename атомарно отказывает при существующем назначении.
+                        raise WorkspaceError("conflict", "The package directory appeared during creation")
+                    # On Windows, rename fails atomically when the destination exists.
                     if os.name != "nt":
-                        raise WorkspaceError("unsupported_environment", "Атомарное создание пакета поддержано на Windows")
+                        raise WorkspaceError("unsupported_environment", "Atomic package creation is supported on Windows")
                     stage.rename(target)
                     stage = None
                 except WorkspaceError:
                     raise
                 except OSError:
-                    raise WorkspaceError("access_error", "Не удалось создать пакет") from None
+                    raise WorkspaceError("access_error", "Could not create the package") from None
                 finally:
                     if stage is not None:
                         (stage / "GothicMod.json").unlink(missing_ok=True)
@@ -270,20 +270,20 @@ class PackageWorkspace:
                            sha256=hashlib.sha256(raw).hexdigest(), validation=report)
 
     def create_package_directory(self, relative_path: str, directory_path: str) -> dict:
-        """Создать только каталоги исходников существующего официального пакета."""
+        """Create only source directories of an existing official package."""
         parts = _parts(directory_path)
         if len(parts) > MAX_DIRECTORY_PARTS:
-            raise WorkspaceError("limit_exceeded", "Путь каталога превышает предел 32 компонентов")
+            raise WorkspaceError("limit_exceeded", "The directory path exceeds the 32 component limit")
         if parts[0] != "Script" and parts != ("ScriptPatches",):
-            raise WorkspaceError("unsupported_directory", "Разрешены Script[/подкаталоги] и ScriptPatches")
+            raise WorkspaceError("unsupported_directory", "Script[/subdirectories] and ScriptPatches are allowed")
         with self._lock:
             package, name = self._package(relative_path)
             created: list[tuple[Path, tuple[int, int]]] = []
             with _destination_lock(package), _guard_directories(package, self.root):
                 descriptor = self._unprotected(_checked(package / "GothicMod.json", package))
                 if not descriptor.is_file():
-                    raise WorkspaceError("invalid_descriptor", "Пакет должен содержать обычный GothicMod.json")
-                # Проверить все назначения до первого mkdir, включая будущие отсутствующие.
+                    raise WorkspaceError("invalid_descriptor", "The package must contain a regular GothicMod.json file")
+                # Validate all destinations before the first mkdir, including paths not yet present.
                 current = package
                 targets: list[Path] = []
                 for component in parts:
@@ -291,14 +291,14 @@ class PackageWorkspace:
                     if os.path.lexists(current):
                         checked = self._unprotected(_checked(current, package))
                         if not checked.is_dir():
-                            raise WorkspaceError("conflict", "Компонент пути уже занят файлом")
+                            raise WorkspaceError("conflict", "A path component is already occupied by a file")
                     targets.append(current)
                 try:
                     report = validate_package(self.root, relative_path)
                 except PackageError as error:
                     raise WorkspaceError(error.code, str(error)) from None
                 if not report["valid_structure"]:
-                    raise WorkspaceError("invalid_descriptor", "Структура существующего пакета не прошла проверку")
+                    raise WorkspaceError("invalid_descriptor", "The existing package structure failed validation")
                 try:
                     with ExitStack() as guards:
                         for target in targets:
@@ -308,20 +308,20 @@ class PackageWorkspace:
                             if os.path.lexists(target):
                                 checked = self._unprotected(_checked(target, package))
                                 if not checked.is_dir():
-                                    raise WorkspaceError("conflict", "Компонент пути уже занят файлом")
+                                    raise WorkspaceError("conflict", "A path component is already occupied by a file")
                             else:
                                 try:
                                     target.mkdir()
                                 except FileExistsError:
                                     checked = self._unprotected(_checked(target, package))
                                     if not checked.is_dir():
-                                        raise WorkspaceError("conflict", "Компонент пути появился как файл") from None
+                                        raise WorkspaceError("conflict", "A path component appeared as a file") from None
                                 else:
                                     info = target.lstat()
                                     created.append((target, (info.st_dev, info.st_ino)))
                             guards.enter_context(_guard_directories(target, self.root))
                 except BaseException as error:
-                    # Закрыть no-delete handles перед rmdir; затем проверить путь и владельца.
+                    # Close no-delete handles before rmdir; then verify the path and owner.
                     for target, identity in reversed(created):
                         try:
                             with _guard_directories(target.parent, self.root):
@@ -330,10 +330,10 @@ class PackageWorkspace:
                                 if (info.st_dev, info.st_ino) == identity and not any(checked.iterdir()):
                                     checked.rmdir()
                         except (WorkspaceError, OSError):
-                            # Изменённый каталог или постороннее содержимое сохраняются.
+                            # Preserve a changed directory or unrelated contents.
                             continue
                     if isinstance(error, OSError):
-                        raise WorkspaceError("access_error", "Не удалось создать каталоги исходников") from None
+                        raise WorkspaceError("access_error", "Could not create source directories") from None
                     raise
             paths = [path.relative_to(package).as_posix() for path, _ in created]
             return _result(package_path=name, directory_path="/".join(parts), created=bool(paths),
@@ -341,9 +341,9 @@ class PackageWorkspace:
 
     def list_package_files(self, relative_path: str, limit: int = 100, offset: int = 0) -> dict:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
-            raise WorkspaceError("invalid_arguments", "Предел списка должен быть целым числом от 1 до 200")
+            raise WorkspaceError("invalid_arguments", "The list limit must be an integer between 1 and 200")
         if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset <= MAX_FILES:
-            raise WorkspaceError("invalid_arguments", "Смещение списка должно быть целым числом от 0 до 10000")
+            raise WorkspaceError("invalid_arguments", "The list offset must be an integer between 0 and 10000")
         with self._lock:
             package, name = self._package(relative_path)
             files: list[dict] = []
@@ -351,13 +351,13 @@ class PackageWorkspace:
             if os.path.lexists(descriptor):
                 file = self._unprotected(_checked(descriptor, package))
                 if not file.is_file():
-                    raise WorkspaceError("invalid_path", "Дескриптор должен быть обычным файлом")
+                    raise WorkspaceError("invalid_path", "The descriptor must be a regular file")
                 files.append({"path": "GothicMod.json", "bytes": file.stat().st_size})
             script = package / "Script"
             if os.path.lexists(script):
                 self._unprotected(_checked(script, package, directory=True))
                 def walk_error(error: OSError) -> None:
-                    raise WorkspaceError("access_error", "Не удалось прочитать каталог исходников")
+                    raise WorkspaceError("access_error", "Could not read the source directory")
                 for directory, dirs, names in os.walk(script, followlinks=False, onerror=walk_error):
                     parent = self._unprotected(_checked(Path(directory), package, directory=True))
                     for child in dirs:
@@ -367,10 +367,10 @@ class PackageWorkspace:
                             continue
                         file = self._unprotected(_checked(parent / child, package))
                         if not file.is_file():
-                            raise WorkspaceError("invalid_path", "Исходник должен быть обычным файлом")
+                            raise WorkspaceError("invalid_path", "The source must be a regular file")
                         files.append({"path": file.relative_to(package).as_posix(), "bytes": file.stat().st_size})
                         if len(files) > MAX_FILES:
-                            raise WorkspaceError("limit_exceeded", "Превышен предел количества файлов")
+                            raise WorkspaceError("limit_exceeded", "The file count limit was exceeded")
             patches = package / "ScriptPatches"
             if os.path.lexists(patches):
                 checked = self._unprotected(_checked(patches, package, directory=True))
@@ -380,12 +380,12 @@ class PackageWorkspace:
                         if child.suffix.lower() != ".patch":
                             continue
                         if not child.is_file():
-                            raise WorkspaceError("invalid_path", "Патч должен быть обычным файлом")
+                            raise WorkspaceError("invalid_path", "The patch must be a regular file")
                         files.append({"path": child.relative_to(package).as_posix(), "bytes": child.stat().st_size})
                         if len(files) > MAX_FILES:
-                            raise WorkspaceError("limit_exceeded", "Превышен предел количества файлов")
+                            raise WorkspaceError("limit_exceeded", "The file count limit was exceeded")
                 except OSError:
-                    raise WorkspaceError("access_error", "Не удалось прочитать каталог патчей") from None
+                    raise WorkspaceError("access_error", "Could not read the patch directory") from None
             files.sort(key=lambda item: item["path"])
             items = files[offset:offset + limit]
             has_more = offset + len(items) < len(files)
@@ -398,7 +398,7 @@ class PackageWorkspace:
         parts = self._file_parts(file_path)
         if (isinstance(start_line, bool) or not isinstance(start_line, int) or start_line < 1
             or isinstance(line_count, bool) or not isinstance(line_count, int) or line_count < 1):
-            raise WorkspaceError("invalid_arguments", "Нужны положительные целые номер строки и число строк")
+            raise WorkspaceError("invalid_arguments", "The line number and line count must be positive integers")
         with self._lock:
             package, name = self._package(relative_path)
             path = self._unprotected(_checked(package.joinpath(*parts), package))
@@ -407,7 +407,7 @@ class PackageWorkspace:
             try:
                 lines = raw.decode("utf-8-sig").splitlines()
             except UnicodeDecodeError:
-                raise WorkspaceError("invalid_encoding", "Файл должен быть корректным UTF-8") from None
+                raise WorkspaceError("invalid_encoding", "The file must be valid UTF-8") from None
             selected = lines[start_line - 1:start_line - 1 + line_count]
             text = "\n".join(selected)
             return _result(package_path=name, file_path="/".join(parts), sha256=hashlib.sha256(raw).hexdigest(),
@@ -417,7 +417,7 @@ class PackageWorkspace:
                        has_more=start_line - 1 + len(selected) < len(lines))
 
     def read_package_file_exact(self, relative_path: str, file_path: str) -> dict:
-        """Вернуть полный редактируемый UTF-8 текст без изменения BOM, строк и EOF."""
+        """Return the full editable UTF-8 text without changing the BOM, lines, or EOF."""
         parts = self._file_parts(file_path)
         with self._lock:
             package, name = self._package(relative_path)
@@ -425,12 +425,12 @@ class PackageWorkspace:
             maximum = MAX_DESCRIPTOR_BYTES if len(parts) == 1 else MAX_EXACT_READ_BYTES
             with _guard_directories(path.parent, self.root):
                 if maximum is not None and path.stat().st_size > maximum:
-                    raise WorkspaceError("file_too_large", "Файл превышает предел полного текстового чтения")
+                    raise WorkspaceError("file_too_large", "The file exceeds the full text reading limit")
                 raw = _read_bytes(path, package, maximum)
             try:
                 text = raw.decode("utf-8")
             except UnicodeDecodeError:
-                raise WorkspaceError("invalid_encoding", "Файл должен быть корректным UTF-8") from None
+                raise WorkspaceError("invalid_encoding", "The file must be valid UTF-8") from None
             return _result(package_path=name, file_path="/".join(parts), sha256=hashlib.sha256(raw).hexdigest(),
                            bytes=len(raw), text=text, text_mode="exact", truncated=False,
                            max_read_bytes=maximum, max_text_bytes=maximum)
@@ -439,35 +439,35 @@ class PackageWorkspace:
                            expected_sha256: str | None = None) -> dict:
         parts = self._file_parts(file_path)
         if not isinstance(content, str) or "\0" in content:
-            raise WorkspaceError("invalid_arguments", "Содержимое должно быть текстом без NUL")
+            raise WorkspaceError("invalid_arguments", "Content must be text without NUL")
         if expected_sha256 is not None and (not isinstance(expected_sha256, str)
                 or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_sha256)):
-            raise WorkspaceError("invalid_arguments", "Ожидаемый SHA-256 должен содержать 64 шестнадцатеричных символа")
+            raise WorkspaceError("invalid_arguments", "The expected SHA-256 must contain 64 hexadecimal characters")
         try:
             raw = content.encode("utf-8")
         except UnicodeEncodeError:
-            raise WorkspaceError("invalid_encoding", "Содержимое должно быть корректным UTF-8") from None
+            raise WorkspaceError("invalid_encoding", "Content must be valid UTF-8") from None
         maximum = MAX_DESCRIPTOR_BYTES if len(parts) == 1 else MAX_CONTENT_BYTES
         if maximum is not None and len(raw) > maximum:
-            raise WorkspaceError("limit_exceeded", "Содержимое превышает разрешённый размер")
+            raise WorkspaceError("limit_exceeded", "Content exceeds the allowed size")
         with self._lock:
             package, name = self._package(relative_path)
             parent = package.joinpath(*parts[:-1])
             target = self._unprotected(parent / parts[-1])
             if parts[0] == "ScriptPatches" and not os.path.lexists(parent) and expected_sha256 is not None:
-                raise WorkspaceError("conflict", "Файл для замены отсутствует")
+                raise WorkspaceError("conflict", "The file to replace is missing")
             with _destination_lock(package), self._write_parent(package, parts), _destination_lock(target), _guard_directories(parent, self.root):
                 def verify_destination() -> None:
                     exists = os.path.lexists(target)
                     if expected_sha256 is None:
                         if exists:
-                            raise WorkspaceError("conflict", "Файл уже существует; для замены нужен его SHA-256")
+                            raise WorkspaceError("conflict", "The file already exists; replacing it requires its SHA-256")
                     elif not exists:
-                        raise WorkspaceError("conflict", "Файл для замены отсутствует")
+                        raise WorkspaceError("conflict", "The file to replace is missing")
                     else:
                         old = _read_bytes(target, package, maximum)
                         if hashlib.sha256(old).hexdigest() != expected_sha256.lower():
-                            raise WorkspaceError("conflict", "Файл изменился; прочитайте его повторно")
+                            raise WorkspaceError("conflict", "The file changed; read it again")
                 verify_destination()
                 temporary: Path | None = None
                 validation = None
@@ -479,20 +479,20 @@ class PackageWorkspace:
                         stream.flush()
                         os.fsync(stream.fileno())
                     if len(parts) == 1:
-                        # Проверка кандидата в изолированной временной структуре, без замены оригинала.
+                        # Validate the candidate in an isolated temporary structure without replacing the original.
                         with tempfile.TemporaryDirectory(prefix="g1r-mcp-validation-") as stage_name:
                             stage = Path(stage_name)
                             (stage / "GothicMod.json").write_bytes(raw)
                             validation = validate_package(stage, ".")
                         if not validation["valid_structure"]:
-                            raise WorkspaceError("invalid_descriptor", "Дескриптор не прошёл структурную проверку")
+                            raise WorkspaceError("invalid_descriptor", "The descriptor failed structural validation")
                     verify_destination()
                     _checked(parent, package, directory=True)
                     if expected_sha256 is None:
                         try:
                             os.link(temporary, target, follow_symlinks=False)
                         except FileExistsError:
-                            raise WorkspaceError("conflict", "Файл появился во время создания") from None
+                            raise WorkspaceError("conflict", "The file appeared during creation") from None
                         temporary.unlink()
                     else:
                         os.replace(temporary, target)
@@ -500,7 +500,7 @@ class PackageWorkspace:
                 except WorkspaceError:
                     raise
                 except (PackageError, OSError):
-                    raise WorkspaceError("access_error", "Не удалось записать файл") from None
+                    raise WorkspaceError("access_error", "Could not write the file") from None
                 finally:
                     if temporary is not None:
                         temporary.unlink(missing_ok=True)

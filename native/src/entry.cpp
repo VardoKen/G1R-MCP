@@ -21,7 +21,7 @@ LONG WINAPI exception_log(EXCEPTION_POINTERS* info) {
     return EXCEPTION_CONTINUE_SEARCH;
 }
 DWORD WINAPI initialize(void*) {
-    // Объекты живут до завершения процесса: DLL не выгружается под выполняющимся Tick.
+    // Objects live until process exit; the DLL is not unloaded while Tick runs.
     phase("init_enter");
     AddVectoredExceptionHandler(1,exception_log);
     try {

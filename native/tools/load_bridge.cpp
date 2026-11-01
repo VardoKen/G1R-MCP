@@ -12,7 +12,7 @@
 #include "../include/g1r_mcp/process_identity.hpp"
 
 namespace fs = std::filesystem;
-static_assert(sizeof(void*) == 8, "Загрузчик требует Windows x64");
+static_assert(sizeof(void*) == 8, "The loader requires Windows x64");
 namespace {
 struct Handle {
     HANDLE value{};
@@ -86,45 +86,45 @@ int wmain(int argc, wchar_t** argv) {
         for (int index = 1; index < argc; ++index) {
             std::wstring argument = argv[index];
             if (argument == L"--pid" && index + 1 < argc) {
-                if (has_pid) return error("invalid_arguments", "PID задан повторно");
+                if (has_pid) return error("invalid_arguments", "PID was specified more than once");
                 has_pid = true;
                 std::wstring value = argv[++index]; size_t consumed{}; auto parsed = std::stoull(value, &consumed);
                 if (consumed != value.size() || parsed == 0 || parsed > MAXDWORD) throw std::runtime_error("invalid_pid");
                 pid = static_cast<DWORD>(parsed);
             } else if (argument == L"--dll" && index + 1 < argc) {
-                if (has_dll) return error("invalid_arguments", "DLL задана повторно");
+                if (has_dll) return error("invalid_arguments", "DLL was specified more than once");
                 has_dll = true; dll = argv[++index];
             } else if (argument == L"--expected-exe" && index + 1 < argc) {
-                if (has_expected_exe) return error("invalid_arguments", "EXE задан повторно");
+                if (has_expected_exe) return error("invalid_arguments", "EXE was specified more than once");
                 has_expected_exe = true; expected_exe = argv[++index];
             } else if (argument == L"--expected-creation-filetime" && index + 1 < argc) {
-                if (has_expected_created) return error("invalid_arguments", "Время создания задано повторно");
+                if (has_expected_created) return error("invalid_arguments", "Creation time was specified more than once");
                 has_expected_created = true; expected_created = g1r::loader::parse_creation_filetime(argv[++index]);
-            } else return error("invalid_arguments", "Нужны --pid PID --dll путь; проверка экземпляра: --expected-exe путь --expected-creation-filetime FILETIME");
+            } else return error("invalid_arguments", "Required: --pid PID --dll path; instance validation: --expected-exe path --expected-creation-filetime FILETIME");
         }
         if (has_expected_exe != has_expected_created ||
             (has_expected_exe && (expected_exe.empty() || !expected_exe.is_absolute())))
-            return error("invalid_arguments", "Ожидаемые абсолютный EXE и FILETIME задаются вместе");
+            return error("invalid_arguments", "Expected absolute EXE path and FILETIME must be supplied together");
         if (!pid || dll.empty() || !dll.is_absolute() || !fs::is_regular_file(dll) || _wcsicmp(dll.filename().c_str(), L"G1R_MCP.dll") != 0)
-            return error("invalid_arguments", "Нужны точный PID и абсолютный путь существующей G1R_MCP.dll");
+            return error("invalid_arguments", "An exact PID and absolute path to an existing G1R_MCP.dll are required");
         auto dll_path = normalized(dll); pe_identity(dll);
         Handle process{OpenProcess(PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ, FALSE, pid)};
-        if (!process.value) return error("open_process_failed", "Не удалось открыть игровой процесс");
+        if (!process.value) return error("open_process_failed", "Could not open the game process");
         auto process_path = normalized(g1r::loader::process_image(process));
         if (has_expected_exe && !g1r::loader::identity_matches(process_path, g1r::loader::creation_filetime(process),
                                                            normalized(expected_exe), expected_created))
-            return error("process_identity_mismatch", "EXE или время создания не совпадают с выбранным экземпляром игры");
-        if (!suffix(process_path, L"\\g1r\\binaries\\win64\\g1r-win64-shipping.exe")) return error("wrong_process", "PID не принадлежит внутреннему Win64 EXE Gothic 1 Remake");
+            return error("process_identity_mismatch", "The EXE path or creation time does not match the selected game instance");
+        if (!suffix(process_path, L"\\g1r\\binaries\\win64\\g1r-win64-shipping.exe")) return error("wrong_process", "PID does not belong to the Gothic 1 Remake internal Win64 executable");
         auto identity = pe_identity(process_path); (void)identity;
         USHORT process_machine{}, native_machine{};
         auto wow64 = reinterpret_cast<BOOL(WINAPI*)(HANDLE, USHORT*, USHORT*)>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "IsWow64Process2"));
         if (!wow64 || !wow64(process, &process_machine, &native_machine) || process_machine != IMAGE_FILE_MACHINE_UNKNOWN || native_machine != IMAGE_FILE_MACHINE_AMD64)
-            return error("wrong_architecture", "Нужен нативный процесс Windows x64");
+            return error("wrong_architecture", "A native Windows x64 process is required");
         auto remote_modules = modules(pid);
         if (already_loaded(remote_modules, dll_path)) { std::cout << "{\"ok\":true,\"status\":\"already_loaded\",\"pid\":" << pid << "}\n"; return 0; }
         auto local_loader = GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "LoadLibraryW");
         MEMORY_BASIC_INFORMATION memory{};
-        if (!local_loader || !VirtualQuery(local_loader, &memory, sizeof(memory))) return error("loader_address_failed", "Не удалось определить модуль LoadLibraryW");
+        if (!local_loader || !VirtualQuery(local_loader, &memory, sizeof(memory))) return error("loader_address_failed", "Could not identify the LoadLibraryW module");
         auto local_module = static_cast<HMODULE>(memory.AllocationBase);
         auto local_path = normalized(module_path(local_module)); auto owner_name = fs::path(local_path).filename().wstring();
         auto local_identity = pe_identity(local_path);
@@ -133,30 +133,30 @@ int wmain(int argc, wchar_t** argv) {
             if (_wcsicmp(entry.szModule, owner_name.c_str()) != 0) continue;
             auto remote_path = normalized(entry.szExePath); auto remote_identity = pe_identity(remote_path);
             if (remote_path != local_path || remote_identity.timestamp != local_identity.timestamp || remote_identity.image_size != local_identity.image_size)
-                return error("loader_module_mismatch", "Модуль загрузчика в процессе отличается");
+                return error("loader_module_mismatch", "The loader module in the process differs");
             remote_base = reinterpret_cast<uintptr_t>(entry.modBaseAddr); break;
         }
         auto offset = reinterpret_cast<uintptr_t>(local_loader) - reinterpret_cast<uintptr_t>(local_module);
         if (!remote_base || offset >= local_identity.image_size || !remote_identity_matches(process, remote_base, local_identity))
-            return error("loader_module_missing", "Совместимый системный модуль загрузчика не найден");
+            return error("loader_module_missing", "A compatible system loader module was not found");
         auto remote_loader = reinterpret_cast<LPTHREAD_START_ROUTINE>(remote_base + offset);
         size_t bytes = (dll_path.size() + 1) * sizeof(wchar_t);
         void* remote_buffer = VirtualAllocEx(process, nullptr, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-        if (!remote_buffer) return error("allocation_failed", "Не удалось выделить буфер пути DLL");
+        if (!remote_buffer) return error("allocation_failed", "Could not allocate the DLL path buffer");
         SIZE_T written{};
-        if (!WriteProcessMemory(process, remote_buffer, dll_path.c_str(), bytes, &written) || written != bytes) { VirtualFreeEx(process, remote_buffer, 0, MEM_RELEASE); return error("write_failed", "Не удалось передать путь DLL"); }
+        if (!WriteProcessMemory(process, remote_buffer, dll_path.c_str(), bytes, &written) || written != bytes) { VirtualFreeEx(process, remote_buffer, 0, MEM_RELEASE); return error("write_failed", "Could not write the DLL path"); }
         Handle thread{CreateRemoteThread(process, nullptr, 0, remote_loader, remote_buffer, 0, nullptr)};
-        if (!thread.value) { VirtualFreeEx(process, remote_buffer, 0, MEM_RELEASE); return error("thread_failed", "Не удалось запустить загрузчик DLL"); }
+        if (!thread.value) { VirtualFreeEx(process, remote_buffer, 0, MEM_RELEASE); return error("thread_failed", "Could not start the DLL loader"); }
         auto wait = WaitForSingleObject(thread, 10000);
-        if (wait != WAIT_OBJECT_0) return error("load_outcome_unknown", "Ожидание загрузки закончено; результат неизвестен, повтор не выполняется", true);
+        if (wait != WAIT_OBJECT_0) return error("load_outcome_unknown", "DLL loading wait timed out; the outcome is unknown and no retry will be made", true);
         VirtualFreeEx(process, remote_buffer, 0, MEM_RELEASE);
-        if (!already_loaded(modules(pid), dll_path)) return error("load_failed", "DLL не найдена в модулях после завершения загрузчика");
+        if (!already_loaded(modules(pid), dll_path)) return error("load_failed", "DLL was not found among loaded modules after the loader completed");
         std::cout << "{\"ok\":true,\"status\":\"loaded\",\"pid\":" << pid << "}\n"; return 0;
     } catch (const fs::filesystem_error&) {
-        return error("path_check_failed", "Не удалось проверить путь файла");
+        return error("path_check_failed", "Could not validate the file path");
     } catch (const std::exception& exception) {
         std::string code = exception.what();
         if (code.empty() || !std::all_of(code.begin(), code.end(), [](unsigned char value) { return (value >= 'a' && value <= 'z') || value == '_'; })) code = "validation_failed";
-        return error(code.c_str(), "Проверка или загрузка DLL не завершена");
+        return error(code.c_str(), "DLL validation or loading did not complete");
     }
 }

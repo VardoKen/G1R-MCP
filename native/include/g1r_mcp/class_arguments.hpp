@@ -4,8 +4,8 @@
 
 namespace g1r_mcp {
 
-// UClass участвует в двух разных отношениях: его собственный UObject-класс
-// ограничен PropertyClass, а представляемый им класс ограничен MetaClass.
+// UClass has two relationships: its own UObject class is
+// constrained by PropertyClass, while the represented class is constrained by MetaClass.
 inline bool compatible_class_argument(std::uintptr_t represented_class,
                                       std::uintptr_t object_metaclass,
                                       std::uintptr_t property_class,
@@ -18,7 +18,7 @@ inline bool compatible_class_argument(std::uintptr_t represented_class,
 inline std::string class_argument_handle(const nlohmann::json& value) {
     try { return object_argument_handle(value); }
     catch(const HandlerError&) {
-        throw HandlerError("invalid_class_argument","Классовый аргумент требует null или только {handle}");
+        throw HandlerError("invalid_class_argument","A class argument requires null or only {handle}");
     }
 }
 

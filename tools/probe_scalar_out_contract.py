@@ -1,4 +1,4 @@
-"""Одна серия семи scalar pure-out только собственного загруженного CDO."""
+"""One series of seven scalar pure-out parameters only on the owned loaded CDO."""
 from __future__ import annotations
 
 import argparse
@@ -35,7 +35,7 @@ def check_target(item: dict) -> dict:
     if (not isinstance(item, dict) or item.get("name") != "Default__" + HOST
             or item.get("class") != HOST or item.get("path") != "/Script/Angelscript.Default__" + HOST
             or not isinstance(item.get("handle"), str) or not item["handle"].startswith("obj-")):
-        raise ProbeError("unsafe_probe_target", "Не подтверждён собственный CDO scalar-out-fixture")
+        raise ProbeError("unsafe_probe_target", "The owned scalar-out fixture CDO was not confirmed")
     return item
 
 
@@ -43,7 +43,7 @@ def check_metadata(metadata, kind: str, width: int) -> dict:
     if (not isinstance(metadata, dict) or metadata.get("type") != kind
             or type(metadata.get("element_size")) is not int or metadata["element_size"] != width
             or type(metadata.get("array_dim")) is not int or metadata["array_dim"] != 1):
-        raise ProbeError("probe_scalar_out_metadata", "Не подтверждены точные тип, ширина и ArrayDim scalar out")
+        raise ProbeError("probe_scalar_out_metadata", "The exact scalar out type, width, and ArrayDim were not confirmed")
     if kind == "BoolProperty":
         layout = metadata.get("bool_layout")
         if (not isinstance(layout, dict) or set(layout) != {"field_size", "byte_offset", "byte_mask", "field_mask"}
@@ -53,7 +53,7 @@ def check_metadata(metadata, kind: str, width: int) -> dict:
                 or layout["field_mask"] != 255 and layout["field_mask"] & (layout["field_mask"] - 1)
                 or layout["byte_mask"] != 255 and layout["byte_mask"] & (layout["byte_mask"] - 1)
                 or layout["field_mask"] != 255 and layout["byte_mask"] != layout["field_mask"]):
-            raise ProbeError("probe_scalar_out_metadata", "Bool out не подтвердил один байт и допустимую маску")
+            raise ProbeError("probe_scalar_out_metadata", "Bool out did not confirm one byte and a valid mask")
     return metadata
 
 
@@ -61,16 +61,16 @@ def check_signature(listing: dict, name: str) -> tuple[dict, str]:
     if (name not in METHODS or not isinstance(listing, dict) or listing.get("truncated") is not False
             or listing.get("scan_complete") is not True or listing.get("scan_truncated") is not False
             or not isinstance(listing.get("items"), list)):
-        raise ProbeError("probe_signature_invalid", "Не подтверждён полный каталог собственного scalar-out-CDO")
+        raise ProbeError("probe_signature_invalid", "The full owned scalar-out CDO catalog was not confirmed")
     matches = [item for item in listing["items"] if isinstance(item, dict) and item.get("name") == name]
     if len(matches) != 1:
-        raise ProbeError("probe_signature_absent", "Scalar-out метод не найден однозначно")
+        raise ProbeError("probe_signature_absent", "The scalar-out method was not uniquely found")
     method = matches[0]
     fields, size = method.get("parameters"), method.get("parameter_size")
     if (not isinstance(fields, list) or any(not isinstance(field, dict) for field in fields)
             or method.get("parameters_truncated") is not False or type(size) is not int or not 0 <= size <= 64
             or type(method.get("parameter_count")) is not int or method["parameter_count"] != len(fields)):
-        raise ProbeError("probe_signature_mismatch", "Не подтверждены число полей и ограниченный scalar-out-буфер")
+        raise ProbeError("probe_signature_mismatch", "The field count and bounded scalar-out buffer were not confirmed")
     returned = [field for field in fields if field.get("return") is True]
     outputs = [field for field in fields if field.get("return") is False]
     return_type = {"ReadMarker": ("IntProperty", 4), "ReadCallsCount": ("IntProperty", 4),
@@ -78,12 +78,12 @@ def check_signature(listing: dict, name: str) -> tuple[dict, str]:
     if (len(returned) != (return_type is not None) or len(outputs) != (7 if name == "GetOutputs" else 0)
             or len(fields) != len(returned) + len(outputs)
             or returned and (returned[0].get("type"), returned[0].get("element_size")) != return_type):
-        raise ProbeError("probe_signature_mismatch", "Не совпали семь scalar out и точный возврат метода")
+        raise ProbeError("probe_signature_mismatch", "The seven scalar out parameters and exact method return did not match")
     if any(not isinstance(field.get("name"), str) for field in fields):
-        raise ProbeError("probe_signature_mismatch", "Параметр scalar out не получил строковое имя")
+        raise ProbeError("probe_signature_mismatch", "The scalar out parameter did not receive a string name")
     if outputs and ({field.get("name") for field in outputs} != set(VALUES)
                     or len({field.get("name") for field in outputs}) != len(outputs)):
-        raise ProbeError("probe_signature_mismatch", "Имена scalar out не совпали с собственной fixture")
+        raise ProbeError("probe_signature_mismatch", "Scalar out names did not match the owned fixture")
     spans = []
     for field in fields:
         offset, width = field.get("offset"), field.get("element_size")
@@ -92,38 +92,38 @@ def check_signature(listing: dict, name: str) -> tuple[dict, str]:
                 or type(field.get("out")) is not bool or field.get("reference") is not False
                 or field.get("const") is not False
                 or field["return"] is False and offset + width > size):
-            raise ProbeError("probe_signature_mismatch", "Не подтверждены ArrayDim, const/ref или границы scalar-out-буфера")
+            raise ProbeError("probe_signature_mismatch", "ArrayDim, const/ref, or scalar-out buffer bounds were not confirmed")
         if any(offset < end and start < offset + width for start, end in spans):
-            raise ProbeError("probe_signature_mismatch", "Диапазоны scalar-out-параметров пересекаются")
+            raise ProbeError("probe_signature_mismatch", "Scalar-out parameter ranges overlap")
         spans.append((offset, offset + width))
         if "flags" in field:
             flags = field["flags"]
             if (type(flags) is not int or not 0 <= flags < 2**64 or not flags & 0x80
                     or bool(flags & 0x400) is not field["return"] or bool(flags & 0x100) is not field["out"]
                     or flags & (0x2 | 0x08000000)):
-                raise ProbeError("probe_signature_flags", "Public CPF-флаги не совпали с pure out/return без const/ref")
+                raise ProbeError("probe_signature_flags", "Public CPF flags did not match pure out/return without const/ref")
         if field["return"] is False:
             expected = TYPES.get(field["name"])
             if field["name"] == "OutFloat":
                 expected = (field.get("type"), width)
                 if expected not in (("FloatProperty", 4), ("DoubleProperty", 8)):
-                    raise ProbeError("probe_signature_mismatch", "OutFloat не подтвердил Float4 или Double8")
+                    raise ProbeError("probe_signature_mismatch", "OutFloat did not confirm Float4 or Double8")
             marker = field.get("argument_marker")
             if ((field.get("type"), width) != expected or field.get("out") is not True
                     or field.get("direction") != "output" or not isinstance(marker, dict)
                     or set(marker) != {"out"} or marker["out"] is not True):
-                raise ProbeError("probe_signature_mismatch", "Scalar out не подтвердил точный тип, направление и маркер")
+                raise ProbeError("probe_signature_mismatch", "Scalar out did not confirm the exact type, direction, and marker")
             check_metadata(field.get("out_metadata"), *expected)
     token = method.get("signature_token")
     if not isinstance(token, str) or not TOKEN.fullmatch(token):
-        raise ProbeError("probe_signature_token_absent", "Scalar-out метод не получил корректный токен")
+        raise ProbeError("probe_signature_token_absent", "The scalar-out method did not receive a valid token")
     return method, token
 
 
 def check_scalar(result: dict, kind: str, expected) -> None:
     if (result.get("executed") is not True or result.get("return_type") != kind
             or "result" not in result or type(result["result"]) is not type(expected) or result["result"] != expected):
-        raise ProbeError("probe_scalar_out_result", "Маркер, возврат или счётчик scalar out не подтверждены")
+        raise ProbeError("probe_scalar_out_result", "The scalar out marker, return, or counter were not confirmed")
 
 
 def check_rejection(result: dict, method: str, value, code: str = "invalid_argument") -> None:
@@ -136,7 +136,7 @@ def check_rejection(result: dict, method: str, value, code: str = "invalid_argum
             or "executed" in nested and nested["executed"] is not False
             or "may_have_executed" in nested and nested["may_have_executed"] is not False):
         diagnostic = json.dumps({"method": method, "arguments": value, "expected_code": code, "payload": result}, ensure_ascii=False)
-        raise ProbeError("probe_scalar_out_rejection_unconfirmed", "Не подтверждён отказ scalar out до исполнения: " + diagnostic)
+        raise ProbeError("probe_scalar_out_rejection_unconfirmed", "Scalar out rejection before execution was not confirmed: " + diagnostic)
 
 
 def check_outputs(result: dict, method: dict) -> dict:
@@ -144,16 +144,16 @@ def check_outputs(result: dict, method: dict) -> dict:
     values, metadata = result.get("out_parameters"), result.get("out_parameter_metadata")
     if (not isinstance(values, dict) or set(values) != set(VALUES)
             or not isinstance(metadata, dict) or set(metadata) != set(VALUES)):
-        raise ProbeError("probe_scalar_out_names", "Возврат не сохранил ровно семь именованных scalar out и metadata")
+        raise ProbeError("probe_scalar_out_names", "The return did not preserve exactly seven named scalar out parameters and metadata")
     fields = {field["name"]: field for field in method["parameters"] if field["return"] is False}
     for name, expected in VALUES.items():
         value, field = values[name], fields[name]
         if (type(value) is not type(expected) or value != expected
                 or type(value) is float and not math.isfinite(value)):
-            raise ProbeError("probe_scalar_out_value", "Именованный scalar out не сохранил точное значение и JSON-тип: " + name)
+            raise ProbeError("probe_scalar_out_value", "The named scalar out did not preserve the exact value and JSON type: " + name)
         check_metadata(metadata[name], field["type"], field["element_size"])
         if metadata[name] != field["out_metadata"]:
-            raise ProbeError("probe_scalar_out_metadata", "Metadata результата отличается от проверенной reflection: " + name)
+            raise ProbeError("probe_scalar_out_metadata", "Result metadata differs from the verified reflection: " + name)
     return values
 
 
@@ -165,20 +165,20 @@ async def exercise(call) -> dict:
         status = await call("g1r_native_status", {})
         session_id = status.get("session_id")
         if status.get("ready") is not True or not isinstance(session_id, str) or not session_id:
-            raise ProbeError("game_not_ready", "Не подтверждены Tick и текущая native-сессия")
+            raise ProbeError("game_not_ready", "Tick and the current native session were not confirmed")
         found = await call("g1r_find_objects", {"query": "Default__" + HOST, "class_query": HOST,
                     "exact_path": "/Script/Angelscript.Default__" + HOST, "limit": 2})
         if (found.get("truncated") is not False or not isinstance(found.get("items"), list) or len(found["items"]) != 1):
-            raise ProbeError("probe_object_absent", "Собственный scalar-out-CDO не найден однозначно")
+            raise ProbeError("probe_object_absent", "The owned scalar-out CDO was not uniquely found")
         target = check_target(found["items"][0])
         handle, tokens, methods = target["handle"], {}, {}
         for name in METHODS:
             listing = await call("g1r_object_functions", {"handle": handle, "function_query": name, "limit": 10})
-            # Сохраняются public listing, CPF-флаги и metadata без дополнительной игровой серии.
+            # Preserve the public listing, CPF flags, and metadata without an additional game series.
             report["reflected_functions"][name] = listing
             methods[name], tokens[name] = check_signature(listing, name)
         if len(set(tokens.values())) != len(tokens):
-            raise ProbeError("probe_signature_token_alias", "Разные scalar-out методы получили одинаковый токен")
+            raise ProbeError("probe_signature_token_alias", "Different scalar-out methods received the same token")
 
         async def invoke(name, arguments=None, *, expected_error=None):
             payload = {} if arguments is None else arguments
@@ -214,7 +214,7 @@ async def exercise(call) -> dict:
         return report
     except BaseException as error:
         failure = error
-        # Сигнатуры сохраняются и при отказе, чтобы один запуск оставался диагностическим доказательством.
+        # Preserve signatures on rejection as well so that one run remains diagnostic evidence.
         if hasattr(error, "add_note"):
             error.add_note("Scalar-out report: " + json.dumps(report, ensure_ascii=False, allow_nan=False))
         raise
@@ -222,7 +222,7 @@ async def exercise(call) -> dict:
         if cleanup_required:
             if getattr(failure, "code", None) in UNKNOWN_GAME:
                 report["cleanup"].append("skipped_unusable_or_unknown_game_root_stops")
-                failure.add_note("Очистка scalar out пропущена после неопределённого вызова или недоступного соединения; игру завершает владелец development-сеанса")
+                failure.add_note("Scalar out cleanup was skipped after an uncertain call or unavailable connection; the development session owner terminates the game")
             else:
                 async def finish_cleanup():
                     check_scalar(await invoke("ResetProbe"), "", None)
@@ -234,13 +234,13 @@ async def exercise(call) -> dict:
                 except BaseException as error:
                     if failure is None:
                         raise
-                    failure.add_note("Не подтверждена очистка собственного scalar-out-CDO: " + str(error))
+                    failure.add_note("Owned scalar-out CDO cleanup was not confirmed: " + str(error))
 
 
 async def run(args) -> dict:
     if args.mcp_url:
         if args.mcp_url not in {"http://127.0.0.1:27124/mcp", "http://localhost:27124/mcp"}:
-            raise ProbeError("invalid_mcp_url", "Проверка собственного CDO использует только локальный MCP")
+            raise ProbeError("invalid_mcp_url", "The owned CDO check uses only local MCP")
         async with streamable_http_client(args.mcp_url) as connection:
             async with ClientSession(connection[0], connection[1]) as session:
                 initialized = await session.initialize()
@@ -255,7 +255,7 @@ async def run(args) -> dict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Проверить dev.17 семь scalar pure-out собственной загруженной fixture")
+    parser = argparse.ArgumentParser(description="Check dev.17 seven scalar pure-out parameters of the owned loaded fixture")
     parser.add_argument("--mcp-url")
     parser.add_argument("--modkit-root", type=Path, default=REPOSITORY_ROOT.parent / "G1R-Modkit")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT)

@@ -6,8 +6,8 @@
 
 namespace g1r_mcp {
 
-// Сохраняет первую Cleanup целиком, включая неудачную попытку освобождения.
-// Действие обязано само выразить ошибки в Result и не бросать исключения.
+// Preserve the complete first Cleanup result, including a failed release attempt.
+// The action must report failures in Result without throwing.
 template<class Result> class CleanupOnce {
     static_assert(std::is_nothrow_default_constructible_v<Result>);
     static_assert(std::is_nothrow_copy_constructible_v<Result>);

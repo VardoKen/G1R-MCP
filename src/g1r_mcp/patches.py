@@ -1,7 +1,7 @@
-"""Создать стандартный unified diff официального Script/ без записи исходников.
+"""Create a standard unified diff for official Script/ without writing source files.
 
-Хеши относятся к исходным байтам; переводы строк и UTF-8 BOM не нормализуются.
-Стандартный формат diff не подтверждает применение игровым загрузчиком.
+Hashes refer to original bytes; line endings and UTF-8 BOM are not normalized.
+The standard diff format does not verify application by the game loader.
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from .workspace import WorkspaceError, _checked, _guard_directories, _parts, _re
 
 
 class PatchError(Exception):
-    """Предсказуемая ошибка создания патча без раскрытия абсолютного пути."""
+    """Predictable patch creation error without disclosing an absolute path."""
 
     def __init__(self, code: str, message: str):
         super().__init__(message)
@@ -34,7 +34,7 @@ class ScriptPatchBuilder:
         try:
             parts = _parts(source_path)
             if len(parts) < 2 or parts[0] != "Script" or Path(parts[-1]).suffix.casefold() != ".as":
-                raise PatchError("unsupported_file", "Источником патча должен быть Script/**/*.as официального Modkit")
+                raise PatchError("unsupported_file", "The patch source must be an official Modkit Script/**/*.as file")
             path = _checked(self.root.joinpath(*parts), self.script_root)
             with _guard_directories(path.parent, self.script_root):
                 raw = _read_bytes(path, self.script_root, None)
@@ -48,11 +48,11 @@ class ScriptPatchBuilder:
         try:
             text = raw.decode("utf-8")
         except UnicodeDecodeError:
-            raise PatchError("invalid_encoding", "Исходник и замена должны быть корректным UTF-8") from None
+            raise PatchError("invalid_encoding", "The source and replacement must be valid UTF-8") from None
         if "\0" in text:
-            raise PatchError("invalid_text", "Двоичное содержимое с NUL не поддерживается")
+            raise PatchError("invalid_text", "Binary content containing NUL is not supported")
         if "\r" in text.replace("\r\n", ""):
-            raise PatchError("unsupported_line_endings", "Поддерживаются LF и CRLF; одиночный CR не поддерживается")
+            raise PatchError("unsupported_line_endings", "LF and CRLF are supported; standalone CR is not supported")
         return text
 
     def source_info(self, source_path: str) -> dict:
@@ -65,21 +65,21 @@ class ScriptPatchBuilder:
                            expected_source_sha256: str, context_lines: int = 3) -> dict:
         if (not isinstance(expected_source_sha256, str)
                 or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_source_sha256)):
-            raise PatchError("invalid_arguments", "Нужен SHA-256 исходника из 64 шестнадцатеричных символов")
+            raise PatchError("invalid_arguments", "A source SHA-256 containing 64 hexadecimal characters is required")
         if isinstance(context_lines, bool) or not isinstance(context_lines, int) or context_lines < 0:
-            raise PatchError("invalid_arguments", "Число строк контекста должно быть неотрицательным целым")
+            raise PatchError("invalid_arguments", "The context line count must be a nonnegative integer")
         if not isinstance(replacement_content, str):
-            raise PatchError("invalid_arguments", "Замена должна быть текстом UTF-8")
+            raise PatchError("invalid_arguments", "The replacement must be UTF-8 text")
         try:
             replacement = replacement_content.encode("utf-8")
         except UnicodeEncodeError:
-            raise PatchError("invalid_encoding", "Замена должна быть корректным UTF-8") from None
+            raise PatchError("invalid_encoding", "The replacement must be valid UTF-8") from None
         path, source = self._source(source_path)
         source_sha = hashlib.sha256(source).hexdigest()
         if source_sha != expected_source_sha256.lower():
-            raise PatchError("conflict", "Исходник изменился; прочитайте его и SHA-256 повторно")
+            raise PatchError("conflict", "The source changed; read it and its SHA-256 again")
         before_text, after_text = self._text(source), self._text(replacement)
-        # split('\n') сохраняет CRLF и рассматривает только LF как границу diff-строки.
+        # split('\n') preserves CRLF and treats only LF as a diff line boundary.
         def lines(text: str) -> list[str]:
             pieces = text.split("\n")
             return [piece + "\n" for piece in pieces[:-1]] + ([pieces[-1]] if pieces[-1] else [])

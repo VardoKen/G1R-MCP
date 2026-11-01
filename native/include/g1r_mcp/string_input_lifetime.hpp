@@ -15,10 +15,10 @@ class InputBudget {
 public:
     void add(std::size_t units) {
         if (units > string_arguments::max_utf16_units)
-            throw HandlerError("invalid_argument", "FString с терминатором не помещается в int32");
+            throw HandlerError("invalid_argument", "FString including its terminator does not fit int32");
         const auto bytes = (units + 1) * sizeof(char16_t);
         if (bytes > std::numeric_limits<std::size_t>::max() - bytes_)
-            throw HandlerError("string_size_overflow", "Размер памяти FString не помещается в size_t");
+            throw HandlerError("string_size_overflow", "The FString allocation size does not fit size_t");
         ++count_;
         bytes_ += bytes;
     }
@@ -37,8 +37,8 @@ inline bool same_header(const StringHeader& left, const StringHeader& right) noe
     return left.data == right.data && left.count == right.count && left.capacity == right.capacity;
 }
 
-// Записи появляются только после подтверждённого создания/возврата FString.
-// Деструктор ledger ничего не освобождает: сомнительное владение карантинируется.
+// Records appear only after confirmed FString construction or return.
+// Ledger destruction releases nothing; uncertain ownership is quarantined.
 class Ledger {
 public:
     Ledger() = default;
@@ -47,7 +47,7 @@ public:
     Ledger(Ledger&&) = delete;
     Ledger& operator=(Ledger&&) = delete;
 
-    // Выделение host-памяти выполняется до создания первого игрового FString.
+    // Allocate host memory before constructing the first engine FString.
     void prepare(std::size_t input_count) {
         inputs_.resize(input_count);
         allocations_.resize(input_count+1);
@@ -55,29 +55,29 @@ public:
 
     void add_input(const StringHeader& header, std::size_t source_units) {
         if (uncertain_) throw_unknown();
-        if (release_started_) fail("string_lifetime_unknown", "FString нельзя регистрировать после начала очистки");
+        if (release_started_) fail("string_lifetime_unknown", "FString cannot be registered after cleanup starts");
         if (source_units > string_arguments::max_utf16_units)
-            fail("invalid_argument", "FString с терминатором не помещается в int32");
+            fail("invalid_argument", "FString including its terminator does not fit int32");
         if (input_count_ >= inputs_.size())
-            fail("string_lifetime_unknown", "Учёт FString входов не подготовлен до создания строки");
+            fail("string_lifetime_unknown", "FString input tracking was not prepared before string construction");
         validate_owned_header(header);
         const auto expected_count = source_units ? static_cast<std::int32_t>(source_units + 1) : 0;
         if (header.count != expected_count || (!source_units && (header.data || header.capacity)))
-            fail("string_lifetime_unknown", "Конструктор FString вернул неожиданную длину");
+            fail("string_lifetime_unknown", "The FString constructor returned an unexpected length");
         const auto bytes = allocation_size(header);
         if (bytes > std::numeric_limits<std::size_t>::max() - input_bytes_)
-            fail("string_size_overflow", "Размер памяти FString не помещается в size_t");
+            fail("string_size_overflow", "The FString allocation size does not fit size_t");
         if (header.data) add_allocation(header, false);
         inputs_[input_count_++] = header;
         input_bytes_ += bytes;
     }
 
-    // Точное совпадение диапазона — один owned allocation, включая return alias.
-    // Частичное совпадение или один указатель с разной ёмкостью недопустимы.
+    // An exact range match denotes one owned allocation, including return aliases.
+    // Partial overlaps or equal pointers with different capacities are invalid.
     void add_return(const StringHeader& header) {
         if (uncertain_) throw_unknown();
-        if (release_started_) fail("string_lifetime_unknown", "FString результат нельзя регистрировать после начала очистки");
-        if (return_added_) fail("string_lifetime_unknown", "FString результат зарегистрирован повторно");
+        if (release_started_) fail("string_lifetime_unknown", "A FString result cannot be registered after cleanup starts");
+        if (return_added_) fail("string_lifetime_unknown", "The FString result was registered more than once");
         validate_owned_header(header);
         if (header.data) add_allocation(header, true);
         return_added_ = true;
@@ -85,7 +85,7 @@ public:
 
     void validate_unchanged_input(std::size_t index, const StringHeader& current) {
         if (index >= input_count_ || !same_header(inputs_[index], current))
-            fail("string_lifetime_unknown", "Заголовок const FString входа изменился");
+            fail("string_lifetime_unknown", "The const FString input header changed");
         if (uncertain_) throw_unknown();
     }
 
@@ -130,7 +130,7 @@ private:
     bool uncertain_{},return_added_{},release_started_{};
 
     [[noreturn]] static void throw_unknown() {
-        throw HandlerError("string_lifetime_unknown", "Владение FString не подтверждено; освобождение запрещено");
+        throw HandlerError("string_lifetime_unknown", "FString ownership is unconfirmed; release is prohibited");
     }
     [[noreturn]] void fail(const char* code,const char* message) {
         uncertain_ = true;
@@ -151,11 +151,11 @@ private:
             const auto original_end = original.data + allocation_size(original);
             if (header.data >= original_end || original.data >= end) continue;
             if (allow_alias && header.data == original.data && header.capacity == original.capacity) return;
-            fail("string_lifetime_unknown", "FString allocation имеет неподтверждённый алиас");
+            fail("string_lifetime_unknown", "The FString allocation has an unconfirmed alias");
         }
         if (allocation_count_ >= allocations_.size()
             || bytes > std::numeric_limits<std::size_t>::max() - allocation_bytes_)
-            fail("string_lifetime_unknown", "Учёт владения FString превышает предел");
+            fail("string_lifetime_unknown", "FString ownership tracking exceeds its representable range");
         allocations_[allocation_count_++].header = header;
         allocation_bytes_ += bytes;
     }

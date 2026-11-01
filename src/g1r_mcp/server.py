@@ -1,4 +1,4 @@
-"""MCP-сервер статических инструментов с явной границей игрового канала."""
+"""MCP server for static tools with an explicit game-channel boundary."""
 
 import argparse
 import json
@@ -30,46 +30,46 @@ from .game_environment import InspectionError, verify_source_game
 
 
 LOCAL_TOOLS = (
-    ("g1r_status", "Состояние сервера и граница игрового канала"),
-    ("g1r_capabilities", "Каталог реализованных и недоступных групп"),
-    ("g1r_source_identity", "Текущий Git HEAD Modkit и сравнение с меткой ревизии"),
-    ("g1r_verify_source_game", "Сравнение байтов скриптов Modkit с установленной игрой"),
-    ("g1r_find_source_files", "Поиск файлов официального Modkit"),
-    ("g1r_search_source", "Буквальный поиск строк AngelScript"),
-    ("g1r_read_source", "Ограниченное чтение исходника Modkit"),
-    ("g1r_read_source_exact", "Полный текст исходника с сохранением BOM, переводов строк и SHA-256"),
-    ("g1r_list_source_types", "Лексический поиск объявлений типов и базовых классов с SHA-256 исходника"),
-    ("g1r_list_source_functions", "Лексический индекс исходных функций с прототипами и SHA-256"),
-    ("g1r_validate_package", "Структурная проверка официального пакета"),
-    ("g1r_build_script_patch", "Unified diff из проверенных байтов Modkit без изменения файлов"),
-    ("g1r_compare_snapshots", "Сравнить копии снимков без игровых вызовов"),
+    ("g1r_status", "Server status and game-channel boundary"),
+    ("g1r_capabilities", "Catalog of implemented and unavailable groups"),
+    ("g1r_source_identity", "Current Modkit Git HEAD and comparison with the revision label"),
+    ("g1r_verify_source_game", "Compare Modkit script bytes with the installed game"),
+    ("g1r_find_source_files", "Find official Modkit files"),
+    ("g1r_search_source", "Literal search of AngelScript lines"),
+    ("g1r_read_source", "Bounded reading of Modkit source"),
+    ("g1r_read_source_exact", "Full source text preserving BOM, line endings, and SHA-256"),
+    ("g1r_list_source_types", "Lexical search of type and base-class declarations with source SHA-256"),
+    ("g1r_list_source_functions", "Lexical source-function index with prototypes and SHA-256"),
+    ("g1r_validate_package", "Structural validation of an official package"),
+    ("g1r_build_script_patch", "Unified diff from verified Modkit bytes without changing files"),
+    ("g1r_compare_snapshots", "Compare snapshot copies without game calls"),
 )
 WORKSPACE_TOOLS = (
-    ("g1r_create_package", "Создать официальный пакет в выбранной рабочей базе", "local_write"),
-    ("g1r_create_package_directory", "Создать каталоги Script или ScriptPatches внутри рабочего пакета", "local_write"),
-    ("g1r_list_package_files", "Список дескриптора и исходников рабочего пакета", "read_only"),
-    ("g1r_read_package_file", "Чтение рабочего файла с SHA-256 для проверки изменений", "read_only"),
-    ("g1r_read_package_file_exact", "Точный текст рабочего файла для изменения без нормализации", "read_only"),
-    ("g1r_write_package_file", "Запись исходника или дескриптора с проверкой конфликта", "local_write"),
+    ("g1r_create_package", "Create an official package in the selected workspace", "local_write"),
+    ("g1r_create_package_directory", "Create Script or ScriptPatches directories inside a workspace package", "local_write"),
+    ("g1r_list_package_files", "List a workspace package's descriptor and source files", "read_only"),
+    ("g1r_read_package_file", "Read a workspace file with SHA-256 for change verification", "read_only"),
+    ("g1r_read_package_file_exact", "Exact workspace-file text for editing without normalization", "read_only"),
+    ("g1r_write_package_file", "Write source or descriptor files with conflict detection", "local_write"),
 )
 NATIVE_TOOLS = (
-    ("g1r_native_status", "Живое состояние экспериментального нативного канала"),
-    ("g1r_native_enable", "Включить очередь игрового Tick в уже загруженной DLL"),
-    ("g1r_find_objects", "Поиск объектов текущего процесса игры"),
-    ("g1r_object_properties", "Чтение отражённых скалярных свойств"),
-    ("g1r_read_array", "Копирование страницы массива, включая структуры с собственными скалярными полями"),
-    ("g1r_read_struct", "Копирование собственных отражённых скалярных полей структуры"),
-    ("g1r_object_functions", "Список отражённых функций объекта"),
-    ("g1r_invoke", "Один явный вызов отражённой функции"),
-    ("g1r_snapshot", "Скопировать выбранные свойства объектов на одном Tick"),
-    ("g1r_watch_start", "Начать ограниченное наблюдение за выбранными свойствами"),
-    ("g1r_watch_read", "Прочитать события наблюдения и сведения о потерях"),
-    ("g1r_watch_stop", "Остановить наблюдение и подтвердить прекращение чтений"),
-    ("g1r_watch_forget", "Освободить завершённое наблюдение"),
-    ("g1r_watch_list", "Метаданные наблюдений текущего native-соединения"),
-    ("g1r_watch_resume", "Явная передача существующего наблюдения текущему клиенту"),
-    ("g1r_movieplayer_status", "Согласованная копия состояния ожидания MoviePlayer без игрового Tick"),
-    ("g1r_movieplayer_finish", "Явный запрос завершения точного ожидания MoviePlayer"),
+    ("g1r_native_status", "Live status of the experimental native channel"),
+    ("g1r_native_enable", "Enable the game Tick queue in an already loaded DLL"),
+    ("g1r_find_objects", "Find objects in the current game process"),
+    ("g1r_object_properties", "Read reflected scalar properties"),
+    ("g1r_read_array", "Copy an array page, including structures with owned scalar fields"),
+    ("g1r_read_struct", "Copy a structure's owned reflected scalar fields"),
+    ("g1r_object_functions", "List an object's reflected functions"),
+    ("g1r_invoke", "One explicit reflected-function call"),
+    ("g1r_snapshot", "Copy selected object properties on one Tick"),
+    ("g1r_watch_start", "Start a bounded observation of selected properties"),
+    ("g1r_watch_read", "Read observation events and loss information"),
+    ("g1r_watch_stop", "Stop observation and confirm that reads have ceased"),
+    ("g1r_watch_forget", "Release a completed observation"),
+    ("g1r_watch_list", "Observation metadata for the current native connection"),
+    ("g1r_watch_resume", "Explicitly transfer an existing observation to the current client"),
+    ("g1r_movieplayer_status", "Consistent copy of MoviePlayer wait status without game Tick"),
+    ("g1r_movieplayer_finish", "Explicit request to finish a specific MoviePlayer wait"),
 )
 DEVELOPMENT_TOOLS = (
     "g1r_session_status", "g1r_session_acquire", "g1r_session_release", "g1r_compile_diagnostics",
@@ -84,17 +84,17 @@ def _tool_failure(error: SourceError | PackageError | WorkspaceError | SnapshotE
 
 def create_server(modkit_root: Path, workspace_root: Path, source_revision: str | None = None,
                   native_port: int = 27123, game_root: Path | None = None, *, transport: str = "stdio") -> MCPServer:
-    """Создать сервер с каталогом Modkit и отдельной рабочей базой пакетов."""
+    """Create a server with a Modkit catalog and a separate package workspace."""
     if source_revision is not None and not re.fullmatch(r"[0-9a-fA-F]{40}", source_revision):
-        raise ValueError("Ревизия источников должна быть полным Git SHA либо отсутствовать")
+        raise ValueError("Source revision must be a full Git SHA or omitted")
     if transport not in ("stdio", "streamable-http"):
-        raise ValueError("Транспорт должен быть stdio или streamable-http")
+        raise ValueError("Transport must be stdio or streamable-http")
     workspace_root = workspace_root.absolute()
     if not workspace_root.is_dir():
-        raise ValueError("Рабочий каталог отсутствует")
+        raise ValueError("Workspace directory does not exist")
     for component in (workspace_root, *workspace_root.parents):
         if component.is_symlink() or (hasattr(component, "is_junction") and component.is_junction()):
-            raise ValueError("Рабочий каталог содержит ссылку или junction")
+            raise ValueError("Workspace directory contains a symlink or junction")
     workspace_root = workspace_root.resolve(strict=True)
     sources = SourceCatalog(modkit_root, revision=source_revision)
     patch_builder = ScriptPatchBuilder(modkit_root, revision=source_revision)
@@ -116,7 +116,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                 session_id = request.headers.get("mcp-session-id") if request is not None else None
                 if session_id:
                     return "http:" + session_id
-                raise DevelopmentError("session_identity_unavailable", "HTTP-запрос не содержит идентичность MCP-сессии")
+                raise DevelopmentError("session_identity_unavailable", "HTTP request does not contain an MCP session identity")
             return local_owner
         except ValueError:
             return local_owner
@@ -138,7 +138,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @asynccontextmanager
     async def server_lifespan(_server: MCPServer):
-        """Общие ресурсы закрываются при остановке сервера, а не HTTP-сессии."""
+        """Close shared resources when the server stops, rather than when an HTTP session ends."""
         try:
             yield
         finally:
@@ -155,29 +155,29 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
         "G1R MCP", version=__version__, log_level="WARNING",
         lifespan=server_lifespan,
         instructions=(
-            "Мост разработки официальных AngelScript-пакетов GothicMod.json; это не UE4SS/Lua. "
-            "Начните с g1r_status и g1r_capabilities: они не проверяют живую игру. "
-            "Для нового development-сеанса: g1r_development_recipe → g1r_development_processes → "
-            "явно разрешённый g1r_development_start с manifest SHA-256 → g1r_development_processes → "
-            "g1r_native_load с точными PID/creation_time/executable и SHA-256 DLL → g1r_native_status. "
-            "Если Tick не установлен, явно вызовите g1r_native_enable и проверьте ready через g1r_native_status; "
-            "запрос Steam и загрузка DLL сами по себе не подтверждают компиляцию или готовность Tick. "
-            "В уже работающем мосте начинайте с native_status, затем g1r_find_objects и "
-            "g1r_object_functions перед явным g1r_invoke; завершайте свой сеанс g1r_development_stop. "
-            "Один TCP-клиент владеет ссылками и наблюдениями; после reconnect найдите объекты заново. "
-            "Редактируйте полные байты через g1r_read_source_exact/g1r_read_package_file_exact и SHA-256; "
-            "построчные чтения нормализуют текст. Поиск и valid_structure не являются компиляцией. "
-            "ScriptPatches создаются как diff, но их применение в игре не подтверждено. "
-            "Старт, остановка, загрузка DLL и invoke меняют внешнее состояние: не повторяйте операцию "
-            "автоматически после outcome_unknown, may_have_executed или do_not_retry. "
-            "Не выводите работоспособность игрового API из наличия исходника."
+            "Development bridge for official GothicMod.json AngelScript packages; it is not UE4SS/Lua. "
+            "Start with g1r_status and g1r_capabilities: they do not check the live game. "
+            "For a new development session: g1r_development_recipe → g1r_development_processes → "
+            "explicitly authorized g1r_development_start with manifest SHA-256 → g1r_development_processes → "
+            "g1r_native_load with exact PID/creation_time/executable and DLL SHA-256 → g1r_native_status. "
+            "If Tick is not installed, explicitly call g1r_native_enable and check ready through g1r_native_status; "
+            "a Steam request and DLL loading alone do not confirm compilation or Tick readiness. "
+            "For an already running bridge, start with native_status, then g1r_find_objects and "
+            "g1r_object_functions before an explicit g1r_invoke; end your session with g1r_development_stop. "
+            "One TCP client owns handles and observations; find objects again after reconnecting. "
+            "Edit complete bytes through g1r_read_source_exact/g1r_read_package_file_exact and SHA-256; "
+            "line-based reads normalize text. Search and valid_structure do not constitute compilation. "
+            "ScriptPatches are created as diffs, but their application in the game is not confirmed. "
+            "Starting, stopping, DLL loading, and invoke change external state: do not automatically retry an operation "
+            "after outcome_unknown, may_have_executed, or do_not_retry. "
+            "Do not infer that a game API works merely because its source exists."
         ),
     )
     read_only = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 
     @server.tool(annotations=read_only)
     def g1r_status() -> dict[str, Any]:
-        """Узнать версию сервера и какие результаты не подтверждены в игре."""
+        """Get the server version and identify results that are not confirmed in the game."""
         return {
             "server": {"name": "G1R MCP", "version": __version__, "transport": transport, "ready": True},
             "sources": {"kind": "official_modkit_static", "root": str(sources.root), "revision": source_revision,
@@ -190,7 +190,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                 "backend_implemented": True, "connection_checked": False, "ready": False, "ready_known": False,
                 "configured_root": str(configured_game_root.absolute()),
                 "reason_code": "use_native_status_for_live_state",
-                "reason": "Для текущего состояния DLL вызовите g1r_native_status; локальные инструменты независимы",
+                "reason": "Call g1r_native_status for current DLL status; local tools are independent",
                 "last_research": {
                     "date": "2026-10-30", "buildid": "26295476", "live_status": "not_checked_by_this_tool",
                     "source": "https://github.com/AlkimiaInteractive/G1R-Modkit/issues/1#issuecomment-6520702135",
@@ -200,7 +200,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     async def g1r_capabilities() -> dict[str, Any]:
-        """Получить каталог локальных инструментов и отсутствующих игровых групп."""
+        """Get the catalog of local tools and unavailable game groups."""
         return {
             "catalog_revision": __version__,
             "catalog_revision_kind": "server_tool_contract",
@@ -297,18 +297,18 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                          "hash_executable_default": False},
             "bootstrap": {
                 "game_sequence": [
-                    {"tool": "g1r_development_recipe", "condition": "Проверить выбранный рабочий пакет и получить manifest/DLL SHA-256"},
-                    {"tool": "g1r_development_processes", "condition": "Определить исходные PID/creation_time/executable"},
-                    {"tool": "g1r_development_start", "condition": "Только явно выбранный запуск; restart требует исходную идентичность"},
-                    {"tool": "g1r_development_processes", "condition": "Получить идентичность запущенного внутреннего игрового EXE"},
-                    {"tool": "g1r_native_load", "condition": "Одна загрузка с ожидаемыми процессом и SHA-256 DLL"},
-                    {"tool": "g1r_native_status", "condition": "Проверить установленный Tick и ready"},
-                    {"tool": "g1r_native_enable", "condition": "Только если hook_installed=false и включение явно разрешено"},
-                    {"tool": "g1r_native_status", "condition": "Дождаться ready=true; неизвестный результат не является отказом компиляции"},
-                    {"tool": "g1r_find_objects", "condition": "Найти актуальную сессионную ссылку и проверить точный объект"},
-                    {"tool": "g1r_object_functions", "condition": "Прочитать отражённую сигнатуру, при необходимости function_query"},
-                    {"tool": "g1r_invoke", "condition": "Один явно выбранный вызов подтверждённой сигнатуры"},
-                    {"tool": "g1r_development_stop", "condition": "При явном завершении своей development-сессии с ожидаемой идентичностью"},
+                    {"tool": "g1r_development_recipe", "condition": "Validate the selected workspace package and obtain manifest/DLL SHA-256"},
+                    {"tool": "g1r_development_processes", "condition": "Determine the initial PID/creation_time/executable"},
+                    {"tool": "g1r_development_start", "condition": "Only an explicitly selected launch; restart requires the initial identity"},
+                    {"tool": "g1r_development_processes", "condition": "Get the identity of the launched internal game EXE"},
+                    {"tool": "g1r_native_load", "condition": "One load with the expected process and DLL SHA-256"},
+                    {"tool": "g1r_native_status", "condition": "Check the installed Tick and ready status"},
+                    {"tool": "g1r_native_enable", "condition": "Only if hook_installed=false and enabling is explicitly authorized"},
+                    {"tool": "g1r_native_status", "condition": "Wait for ready=true; an unknown result is not a compilation failure"},
+                    {"tool": "g1r_find_objects", "condition": "Find a current session handle and verify the exact object"},
+                    {"tool": "g1r_object_functions", "condition": "Read the reflected signature, using function_query if needed"},
+                    {"tool": "g1r_invoke", "condition": "One explicitly selected call using a confirmed signature"},
+                    {"tool": "g1r_development_stop", "condition": "When explicitly ending your development session with the expected identity"},
                 ],
                 "existing_session_sequence": ["g1r_native_status", "g1r_session_status", "g1r_find_objects", "g1r_object_functions"],
                 "edit_tools": ["g1r_read_source_exact", "g1r_read_package_file_exact", "g1r_write_package_file"],
@@ -375,7 +375,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                               "input_shape": {"Rotation": {"X": "finite_number", "Y": "finite_number", "Z": "finite_number", "W": "finite_number"},
                                               "Translation": {"X": "finite_number", "Y": "finite_number", "Z": "finite_number"},
                                               "Scale3D": {"X": "finite_number", "Y": "finite_number", "Z": "finite_number"}},
-                              "argument_constraints": {"rotation_normalization": "required", "max_norm_squared_deviation": 1e-6, "normalization": "none"},
+                              "argument_constraints": {"normalization": "none"},
                               "layout_source": "reflected_function_parameter", "requires_signature_validation": True},
                 "scalar_outputs": {"types": ["BoolProperty", "IntProperty", "Int64Property", "UInt32Property",
                                                "UInt64Property", "FloatProperty", "DoubleProperty"],
@@ -448,20 +448,20 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             "snapshot_comparison": {"implemented": True, "effects": "read_only",
                                     "tool": "g1r_compare_snapshots", "validation": "client_supplied_copies"},
             "limitations": [
-                "Исходники не покрывают все нативные bindings и не подтверждают вызовы в текущей игре",
-                "Объявления типов найдены лексически; это не AST компилятора и не runtime-рефлексия",
-                "Проверка пакета не загружает мод и не проверяет алгоритм сравнения версий загрузчика",
+                "Sources do not cover all native bindings and do not confirm calls in the current game",
+                "Type declarations are found lexically; they are not a compiler AST or runtime reflection",
+                "Package validation does not load the mod or check the loader's version-comparison algorithm",
             ],
         }
 
     @server.tool(annotations=read_only)
     def g1r_source_identity() -> dict[str, Any]:
-        """Прочитать Git HEAD и состояние Modkit; совпадение с установленной игрой не проверяется."""
+        """Read Modkit Git HEAD and status; compatibility with the installed game is not checked."""
         return sources.source_identity()
 
     @server.tool(annotations=read_only)
     def g1r_verify_source_game(hash_executable: StrictBool = False) -> dict[str, Any]:
-        """Сравнить скрипты Modkit с файлами игры; совпадение байтов не подтверждает работу API."""
+        """Compare Modkit scripts with game files; matching bytes do not confirm API behavior."""
         try:
             return verify_source_game(sources.root, configured_game_root, hash_executable=hash_executable,
                                       configured_revision=sources.revision)
@@ -470,7 +470,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_find_source_files(query: str, limit: int = 50, offset: int = 0) -> dict[str, Any]:
-        """Найти страницу относительных .as путей; продолжение через next_offset без атомарного снимка."""
+        """Find a page of relative .as paths; continue through next_offset without an atomic snapshot."""
         try:
             return sources.search_files(query, limit, offset)
         except SourceError as error:
@@ -478,7 +478,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_search_source(query: str, limit: int = 50, case_sensitive: bool = False, offset: int = 0) -> dict[str, Any]:
-        """Искать буквальный текст в официальных .as; вернуть ограниченные строки со ссылками."""
+        """Search for literal text in official .as files; return a bounded set of lines with source references."""
         try:
             return sources.search_text(query, limit, case_sensitive=case_sensitive, offset=offset)
         except SourceError as error:
@@ -486,7 +486,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_read_source(relative_path: str, start_line: int = 1, line_count: int = 100) -> dict[str, Any]:
-        """Читать диапазон строк исходника по относительному пути разрешённого каталога."""
+        """Read a source-line range using a relative path within an allowed directory."""
         try:
             return sources.read_file(relative_path, start_line, line_count)
         except SourceError as error:
@@ -495,7 +495,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     @server.tool(annotations=read_only)
     def g1r_list_source_types(query: str = "", limit: int = 50, offset: int = 0,
                               relative_path: str | None = None) -> dict[str, Any]:
-        """Найти объявления class/struct/enum глобально или в выбранном .as/каталоге; данные лексические."""
+        """Find class/struct/enum declarations globally or in a selected .as file or directory; results are lexical."""
         try:
             return sources.list_types(query, limit, offset, relative_path=relative_path)
         except SourceError as error:
@@ -504,7 +504,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     @server.tool(annotations=read_only)
     def g1r_list_source_functions(query: str = "", relative_path: str | None = None,
                                   limit: int = 50, offset: int = 0) -> dict[str, Any]:
-        """Найти исходные прототипы функций лексически; строки и SHA-256 не подтверждают runtime-сигнатуру."""
+        """Find source-function prototypes lexically; lines and SHA-256 do not confirm a runtime signature."""
         try:
             return sources.list_functions(query, relative_path, limit, offset)
         except SourceError as error:
@@ -512,7 +512,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_validate_package(relative_path: str) -> dict[str, Any]:
-        """Проверить GothicMod.json и структуру пакета в рабочем каталоге без загрузки в игру."""
+        """Validate GothicMod.json and workspace-package structure without loading it into the game."""
         try:
             return validate_package(workspace_root, relative_path)
         except PackageError as error:
@@ -521,7 +521,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=False))
     def g1r_create_package(relative_path: str, metadata: dict[str, Any]) -> dict[str, Any]:
-        """Создать GothicMod.json/Script: metadata требует name, title, author, modVersion; не загружает мод."""
+        """Create GothicMod.json/Script: metadata requires name, title, author, and modVersion; does not load the mod."""
         try:
             return workspace.create_package(relative_path, metadata)
         except WorkspaceError as error:
@@ -530,7 +530,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=True, openWorldHint=False))
     def g1r_create_package_directory(relative_path: str, directory_path: str) -> dict[str, Any]:
-        """Создать разрешённые каталоги Script внутри пакета; существующий каталог сохраняется."""
+        """Create allowed Script directories inside a package; preserve an existing directory."""
         try:
             return workspace.create_package_directory(relative_path, directory_path)
         except WorkspaceError as error:
@@ -538,7 +538,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_list_package_files(relative_path: str, limit: int = 100, offset: int = 0) -> dict[str, Any]:
-        """Получить страницу дескриптора, .as и ScriptPatches/*.patch; продолжение через next_offset."""
+        """Get a page of descriptor, .as, and ScriptPatches/*.patch files; continue through next_offset."""
         try:
             return workspace.list_package_files(relative_path, limit, offset)
         except WorkspaceError as error:
@@ -547,7 +547,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     @server.tool(annotations=read_only)
     def g1r_read_package_file(relative_path: str, file_path: str, start_line: int = 1,
                               line_count: int = 100) -> dict[str, Any]:
-        """Прочитать UTF-8 рабочий файл и SHA-256 его полных байтов для последующей записи."""
+        """Read a UTF-8 workspace file and the SHA-256 of its complete bytes for a subsequent write."""
         try:
             return workspace.read_package_file(relative_path, file_path, start_line, line_count)
         except WorkspaceError as error:
@@ -557,7 +557,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                             idempotentHint=False, openWorldHint=False))
     def g1r_write_package_file(relative_path: str, file_path: str, content: str,
                                expected_sha256: str | None = None) -> dict[str, Any]:
-        """Записать рабочий файл: замена требует SHA-256, без хеша создаётся только новый файл."""
+        """Write a workspace file: replacement requires SHA-256; without a hash, only a new file can be created."""
         try:
             return workspace.write_package_file(relative_path, file_path, content, expected_sha256)
         except WorkspaceError as error:
@@ -566,7 +566,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     @server.tool(annotations=read_only)
     def g1r_build_script_patch(source_path: str, replacement_content: str,
                                 expected_source_sha256: str, context_lines: int = 3) -> dict[str, Any]:
-        """Создать unified diff из проверенных исходных байтов Modkit без изменения файлов."""
+        """Create a unified diff from verified Modkit source bytes without changing files."""
         try:
             return patch_builder.build_script_patch(source_path, replacement_content,
                                                     expected_source_sha256, context_lines)
@@ -575,7 +575,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_read_source_exact(relative_path: str) -> dict[str, Any]:
-        """Прочитать полный UTF-8 исходник для редактуры без искусственного предела; сохраняет BOM, CRLF и EOF."""
+        """Read complete UTF-8 source for editing without an artificial limit; preserve BOM, CRLF, and EOF."""
         try:
             return sources.read_file_exact(relative_path)
         except SourceError as error:
@@ -583,7 +583,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_read_package_file_exact(relative_path: str, file_path: str) -> dict[str, Any]:
-        """Прочитать рабочий файл целиком без изменения байтов при decode/encode UTF-8."""
+        """Read a complete workspace file without changing bytes during UTF-8 decode/encode."""
         try:
             return workspace.read_package_file_exact(relative_path, file_path)
         except WorkspaceError as error:
@@ -599,7 +599,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                        "may_have_executed": error.may_have_executed,
                                        "request_id": error.request_id, "effect": error.details}, ensure_ascii=False)) from None
 
-    def development_request(operation: str, *, ctx: Context | None = None, session_reason: str = "Проверка рабочего пакета", **params: Any) -> dict[str, Any]:
+    def development_request(operation: str, *, ctx: Context | None = None, session_reason: str = "Workspace package verification", **params: Any) -> dict[str, Any]:
         nonlocal native
         try:
             if transport == "streamable-http" and operation in ("start", "stop", "queue_key", "load_native"):
@@ -653,13 +653,13 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_session_status() -> dict[str, Any]:
-        """Прочитать владельца управления общей игрой; не вызывает игровой Tick."""
+        """Read the shared-game control owner; does not invoke game Tick."""
         return ownership.status()
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     def g1r_session_acquire(reason: str, expected_process: dict[str, Any] | None = None,
                             expected_claim_id: str | None = None, ctx: Context = None) -> dict[str, Any]:
-        """Заявить управление игрой; после обрыва вернуть существующую заявку через expected_claim_id и точный expected_process. Игру не запускает."""
+        """Claim game control; after disconnection, reclaim an existing claim using expected_claim_id and exact expected_process. Does not start the game."""
         try:
             owner = request_owner(ctx)
             with ownership.lock:
@@ -674,7 +674,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
     def g1r_session_release(expected_claim_id: str | None = None, ctx: Context = None) -> dict[str, Any]:
-        """Освободить свою заявку без остановки; чужую — только по claim_id при отсутствии игровых процессов."""
+        """Release your claim without stopping the game; another client's claim requires claim_id and no game processes."""
         try:
             if expected_claim_id is not None:
                 with ownership.lock:
@@ -687,7 +687,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     def g1r_compile_diagnostics(relative_package: str, expected_manifest_sha256: str, report_path: str | None = None,
                                 enable_ingame_tools: StrictBool = False,
                                 show_script_errors: StrictBool = False) -> dict[str, Any]:
-        """Получить диагностику native-компилятора; report_path выбирает предоставленный UTF-8 отчёт."""
+        """Get native-compiler diagnostics; report_path selects a supplied UTF-8 report."""
         try:
             if report_path is None:
                 return read_runtime_report(development_service(), relative_package, expected_manifest_sha256,
@@ -703,14 +703,14 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     def g1r_development_recipe(relative_package: str, enable_ingame_tools: StrictBool = False,
                                companion_packages: list[str] | None = None,
                                show_script_errors: StrictBool = False) -> dict[str, Any]:
-        """Проверить полный манифест рабочего пакета, процессы и SHA-256 DLL без запуска игры."""
+        """Check the complete workspace-package manifest, processes, and DLL SHA-256 without starting the game."""
         return development_request("recipe", relative_package=relative_package,
                                    enable_ingame_tools=enable_ingame_tools, companion_packages=companion_packages,
                                    show_script_errors=show_script_errors)
 
     @server.tool(annotations=read_only)
     def g1r_development_processes() -> dict[str, Any]:
-        """Прочитать точные PID, времена создания и пути процессов выбранной игры."""
+        """Read exact PIDs, creation times, and process paths for the selected game."""
         return development_request("process_state")
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False,
@@ -718,7 +718,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     def g1r_development_key(expected_process: dict[str, Any], virtual_key: StrictInt,
                            expected_window: StrictInt | None = None,
                            ctx: Context = None) -> dict[str, Any]:
-        """Поставить одну клавишу в очередь точного окна игры без Tick; обработка клавиши игрой проверяется отдельно."""
+        """Queue one key for an exact game window without Tick; game handling of the key must be verified separately."""
         return development_request("queue_key", expected_process=expected_process,
                                    virtual_key=virtual_key, expected_window=expected_window,
                                    ctx=ctx)
@@ -728,10 +728,10 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     def g1r_development_start(relative_package: str, expected_manifest_sha256: str,
                                restart: bool = False,
                              expected_process: dict[str, Any] | None = None,
-                             enable_ingame_tools: StrictBool = False, session_reason: str = "Проверка рабочего пакета",
+                             enable_ingame_tools: StrictBool = False, session_reason: str = "Workspace package verification",
                              companion_packages: list[str] | None = None, ctx: Context = None,
                              show_script_errors: StrictBool = False) -> dict[str, Any]:
-        """Запросить development-запуск проверенного пакета; restart требует точную идентичность процесса."""
+        """Request a development launch of a verified package; restart requires the exact process identity."""
         return development_request("start", relative_package=relative_package,
                                    expected_manifest_sha256=expected_manifest_sha256,
                                    restart=restart, expected_process=expected_process,
@@ -741,10 +741,10 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True,
                                             idempotentHint=False, openWorldHint=True))
-    def g1r_development_stop(expected_process: dict[str, Any], reason: str = "Проверки завершены", ctx: Context = None) -> dict[str, Any]:
-        """Закрыть только подтверждённый экземпляр игры через удерживаемые HANDLE."""
+    def g1r_development_stop(expected_process: dict[str, Any], reason: str = "Verification complete", ctx: Context = None) -> dict[str, Any]:
+        """Close only the confirmed game instance using retained HANDLEs."""
         if not 1 <= len(reason) <= 256 or any(ord(c) < 32 for c in reason):
-            raise ToolError(json.dumps({"code":"invalid_stop_reason","message":"Нужна причина остановки (1–256 символов)","outcome_unknown":False}, ensure_ascii=False))
+            raise ToolError(json.dumps({"code":"invalid_stop_reason","message":"A stop reason is required (1–256 characters)","outcome_unknown":False}, ensure_ascii=False))
         result = development_request("stop", expected_process=expected_process, ctx=ctx)
         result["stop_reason"] = reason
         return result
@@ -752,24 +752,24 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=True))
     def g1r_native_load(expected_process: dict[str, Any], expected_dll_sha256: str, ctx: Context = None) -> dict[str, Any]:
-        """Загрузить DLL в проверенный процесс с проверкой хеша; неопределённый результат не повторяется."""
+        """Load a DLL into a verified process with hash validation; do not retry an unknown outcome."""
         return development_request("load_native", expected_process=expected_process,
                                    expected_dll_sha256=expected_dll_sha256, ctx=ctx)
 
     @server.tool(annotations=read_only)
     def g1r_native_status() -> dict[str, Any]:
-        """Проверить DLL в текущей игре; не запускает игру или загрузчик."""
+        """Check the DLL in the current game; does not start the game or loader."""
         return native_request("status", {})
 
     @server.tool(annotations=read_only)
     def g1r_movieplayer_status() -> dict[str, Any]:
-        """Прочитать согласованную копию состояния MoviePlayer; обычный игровой Tick не требуется."""
+        """Read a consistent copy of MoviePlayer status; ordinary game Tick is not required."""
         return native_request("movieplayer_status", {})
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=False))
     def g1r_movieplayer_finish(expected_wait_id: StrictStr, ctx: Context = None) -> dict[str, Any]:
-        """Явно запросить завершение точного ожидания; вызов finish, возврат Wait и игровой Tick различаются."""
+        """Explicitly request completion of an exact wait; the finish call, Wait return, and game Tick are distinct."""
         try:
             if transport == "streamable-http":
                 with ownership.lock:
@@ -783,13 +783,13 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     def g1r_native_enable() -> dict[str, Any]:
-        """Установить перехват Tick в уже загруженной DLL; выполнять после появления главного меню."""
+        """Install a Tick hook in an already loaded DLL; run after the main menu appears."""
         return native_request("enable_game", {})
 
     @server.tool(annotations=read_only)
     def g1r_find_objects(query: str = "", class_query: str = "", limit: int = 50,
                          exact_path: str = "") -> dict[str, Any]:
-        """Найти UObject по части имени/класса на игровом Tick; вернуть непрозрачные ссылки."""
+        """Find UObject by partial name/class on game Tick; return opaque handles."""
         params = {"query": query, "class_query": class_query, "limit": limit}
         if exact_path:
             params["exact_path"] = exact_path
@@ -798,7 +798,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     @server.tool(annotations=read_only)
     def g1r_object_properties(handle: str, limit: int = 50,
                               property_names: list[StrictStr] | None = None) -> dict[str, Any]:
-        """Читать свойства ссылки; property_names выбирает точные уникальные имена в заданном порядке."""
+        """Read handle properties; property_names selects exact unique names in the specified order."""
         params = {"handle": handle, "limit": limit}
         if property_names is not None:
             params["property_names"] = property_names
@@ -806,17 +806,17 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_read_array(handle: str, property_name: str, offset: int = 0, limit: int = 64) -> dict[str, Any]:
-        """Скопировать страницу массива, включая скалярные DTO-структуры; между страницами нет атомарного снимка."""
+        """Copy an array page, including scalar DTO structures; pages do not share an atomic snapshot."""
         return native_request("read_array", {"handle": handle, "property_name": property_name, "offset": offset, "limit": limit})
 
     @server.tool(annotations=read_only)
     def g1r_read_struct(handle: str, property_name: str) -> dict[str, Any]:
-        """Скопировать собственные скалярные поля структуры по отражённому размеру и layout без игровых записей."""
+        """Copy a structure's owned scalar fields using reflected size and layout without game writes."""
         return native_request("read_struct", {"handle": handle, "property_name": property_name})
 
     @server.tool(annotations=read_only)
     def g1r_object_functions(handle: str, limit: int = 50, function_query: str = "") -> dict[str, Any]:
-        """Получить UFunction, параметры, объявленные классы и enum с допустимыми значениями."""
+        """Get UFunction, parameters, declared classes, and enums with allowed values."""
         params = {"handle": handle, "limit": limit}
         if function_query:
             params["function_query"] = function_query
@@ -824,13 +824,13 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_snapshot(targets: list[dict[str, Any]]) -> dict[str, Any]:
-        """Скопировать targets={handle, properties:[имена]} на одном Tick; это последовательные чтения."""
+        """Copy targets={handle, properties:[names]} on one Tick; reads are sequential."""
         return native_request("snapshot", {"targets": targets})
 
     @server.tool(annotations=read_only)
     def g1r_compare_snapshots(before: dict[str, Any], after: dict[str, Any],
                               limit: int = 100) -> dict[str, Any]:
-        """Сравнить копии с выбранным limit; исходный runtime и происхождение клиентских данных не проверяет."""
+        """Compare copies with the selected limit; does not verify the original runtime or provenance of client data."""
         try:
             return compare_snapshots(before, after, limit)
         except SnapshotError as error:
@@ -840,7 +840,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                             idempotentHint=False, openWorldHint=False))
     def g1r_watch_start(handle: str, properties: list[str], duration_ms: int,
                          interval_ms: int, capacity: int = 32, ctx: Context = None) -> dict[str, Any]:
-        """Наблюдать выбранные свойства на Tick с явными сроком, интервалом и ёмкостью буфера."""
+        """Observe selected properties on Tick with explicit duration, interval, and buffer capacity."""
         return native_request("watch_start", {"handle": handle, "properties": properties,
                               "duration_ms": duration_ms, "interval_ms": interval_ms,
                               "capacity": capacity, "client_owner": watch_owner(ctx)})
@@ -848,32 +848,32 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     @server.tool(annotations=read_only)
     def g1r_watch_read(watch_id: str, after_seq: int = 0, limit: int = 100,
                        ctx: Context = None) -> dict[str, Any]:
-        """Прочитать события после seq без удаления; пропуски и переполнение обозначены явно."""
+        """Read events after seq without deleting them; gaps and overflow are explicitly reported."""
         return native_request("watch_read", {"watch_id": watch_id, "after_seq": after_seq,
                               "limit": limit, "client_owner": watch_owner(ctx)})
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=True, openWorldHint=False))
     def g1r_watch_stop(watch_id: str, ctx: Context = None) -> dict[str, Any]:
-        """Прекратить последующие чтения на игровом потоке; финальные события сохраняются."""
+        """Stop subsequent reads on the game thread; retain final events."""
         return native_request("watch_stop", {"watch_id": watch_id, "client_owner": watch_owner(ctx)})
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=False))
     def g1r_watch_forget(watch_id: str, ctx: Context = None) -> dict[str, Any]:
-        """Освободить уже завершённое наблюдение текущей сессии."""
+        """Release an already completed observation in the current session."""
         return native_request("watch_forget", {"watch_id": watch_id, "client_owner": watch_owner(ctx)})
 
     @server.tool(annotations=read_only)
     def g1r_watch_list(ctx: Context = None) -> dict[str, Any]:
-        """Список метаданных наблюдений текущего native-соединения без событий и значений."""
+        """List observation metadata for the current native connection without events or values."""
         return native_request("watch_list", {"client_owner": watch_owner(ctx)})
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=False))
     def g1r_watch_resume(watch_id: str, expected_session_id: str,
                          expected_client_owner: str, ctx: Context = None) -> dict[str, Any]:
-        """Явно передать существующее наблюдение текущему клиенту, сохранив состояние и события."""
+        """Explicitly transfer an existing observation to the current client while preserving its state and events."""
         return native_request("watch_resume", {"watch_id": watch_id,
                               "expected_session_id": expected_session_id,
                               "expected_client_owner": expected_client_owner,
@@ -882,7 +882,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def g1r_invoke(handle: str, function: str, arguments: dict[str, Any] | None = None,
                     expected_signature_token: StrictStr | None = None) -> dict[str, Any]:
-        """Вызвать UFunction по сигнатуре; зарегистрированная runtime-ошибка AS возвращается как angelscript_exception. Неизвестный эффект не повторять."""
+        """Invoke UFunction by signature; a recorded AS runtime error is returned as angelscript_exception. Do not retry an unknown effect."""
         params = {"handle": handle, "function": function, "arguments": arguments or {}}
         if expected_signature_token is not None:
             params["expected_signature_token"] = expected_signature_token
@@ -894,31 +894,31 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 def main(argv: list[str] | None = None) -> int:
     class RussianArgumentParser(argparse.ArgumentParser):
         def format_help(self):
-            return super().format_help().replace("usage: ", "Вызов: ", 1).replace("options:", "Параметры:")
+            return super().format_help().replace("usage: ", "Usage: ", 1).replace("options:", "Options:")
 
         def error(self, message):
-            self.exit(2, "Некорректные параметры G1R MCP; используйте --help\n")
+            self.exit(2, "Invalid G1R MCP arguments; use --help\n")
 
-    parser = RussianArgumentParser(description="G1R MCP: локальный сервер разработки модов", add_help=False)
-    parser.add_argument("-h", "--help", action="help", help="Показать справку")
-    parser.add_argument("--modkit-root", type=Path, required=True, help="Корень официального Modkit")
-    parser.add_argument("--workspace-root", type=Path, required=True, help="Корень разрабатываемых пакетов")
-    parser.add_argument("--source-revision", help="Полный Git SHA Modkit; при отсутствии ревизия неизвестна")
-    parser.add_argument("--native-port", type=int, default=27123, help="Порт localhost экспериментальной DLL")
-    parser.add_argument("--game-root", type=Path, help="Корень выбранной игры для команд development-запуска")
+    parser = RussianArgumentParser(description="G1R MCP: local mod-development server", add_help=False)
+    parser.add_argument("-h", "--help", action="help", help="Show help")
+    parser.add_argument("--modkit-root", type=Path, required=True, help="Official Modkit root")
+    parser.add_argument("--workspace-root", type=Path, required=True, help="Root of packages under development")
+    parser.add_argument("--source-revision", help="Full Modkit Git SHA; revision is unknown when omitted")
+    parser.add_argument("--native-port", type=int, default=27123, help="Localhost port of the experimental DLL")
+    parser.add_argument("--game-root", type=Path, help="Selected game root for development-launch commands")
     parser.add_argument("--transport", choices=("stdio", "streamable-http"), default="stdio",
-                        help="Транспорт MCP; по умолчанию stdio")
+                        help="MCP transport; default: stdio")
     parser.add_argument("--host", choices=("127.0.0.1",), default="127.0.0.1",
-                        help="Адрес HTTP-сервера; разрешён только 127.0.0.1")
-    parser.add_argument("--port", type=int, default=27124, help="Порт Streamable HTTP; по умолчанию 27124")
+                        help="HTTP server address; only 127.0.0.1 is allowed")
+    parser.add_argument("--port", type=int, default=27124, help="Streamable HTTP port; default: 27124")
     args = parser.parse_args(argv)
     if not 1024 <= args.port <= 65535:
-        parser.error("Порт HTTP должен находиться в диапазоне 1024–65535")
+        parser.error("HTTP port must be in the range 1024–65535")
     try:
         server = create_server(args.modkit_root, args.workspace_root, args.source_revision, args.native_port, args.game_root,
                                transport=args.transport)
     except (ValueError, OSError, SourceError, NativeError) as error:
-        print(f"Не удалось создать G1R MCP: {error}", file=sys.stderr)
+        print(f"Could not create G1R MCP: {error}", file=sys.stderr)
         return 2
     if args.transport == "streamable-http":
         server.run(transport="streamable-http", host=args.host, port=args.port,

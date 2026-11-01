@@ -10,8 +10,8 @@
 
 namespace g1r_mcp {
 
-// Чистая модель копий и ограниченных наблюдений. Вызывается только из игрового
-// pump; reader принадлежит GameAccess и не вызывается после terminal состояния.
+// Pure model of copies and caller-bounded observations. Called only by the game
+// pump; GameAccess owns the reader, which is never invoked after a terminal state.
 class Observations {
 public:
     using Json = nlohmann::json;

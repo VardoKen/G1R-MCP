@@ -1,4 +1,4 @@
-"""Подготовить собственную FLinearColor value-fixture без запуска игры."""
+"""Prepare an isolated FLinearColor value fixture without launching the game."""
 from __future__ import annotations
 
 import argparse
@@ -47,24 +47,24 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
             "color_component_r": "Script/Camera/ConversationCameraConfig.as:403",
             "ufunction_value_struct_return": "Script/GAS/GASCharacterMixins.as:1363-1364"}}
     result["limitations"] = [
-        "FLinearColor UFUNCTION-возврат — согласованная композиционная runtime-гипотеза по текущим AS-примерам",
-        "Подготовка не подтверждает компиляцию, CPF-флаги, FLinearColor layout или числовой ABI",
-        "AS float для ReadColorR записан как исходный тип; фактический DoubleProperty требует runtime-проверки",
-        "Ожидаемые компоненты включают отрицательное и HDR-значение; фикстура не ограничивает цвет диапазоном 0..1",
-        "Const/ref/out и массивы цвета не включены",
-        "Меняется только CallsCount собственного CDO; ResetProbe сбрасывает счётчик",
-        "Игровые объекты мира, spawn и сохранения не используются"]
+        "An FLinearColor UFUNCTION return is an approved runtime composition hypothesis based on current AS examples",
+        "Preparation does not confirm compilation, CPF flags, the FLinearColor layout, or its numeric ABI",
+        "AS float is the source type for ReadColorR; the actual DoubleProperty requires runtime verification",
+        "Expected components include a negative value and an HDR value; the fixture does not clamp color to 0..1",
+        "Const/ref/out and color arrays are not included",
+        "Only CallsCount on the fixture CDO changes; ResetProbe resets the counter",
+        "World game objects, spawning, and saved games are not used"]
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
     class RussianArgumentParser(argparse.ArgumentParser):
         def format_help(self):
-            return super().format_help().replace("usage:", "Использование:", 1).replace("options:", "Параметры:", 1)
-    parser = RussianArgumentParser(description="Подготовить собственную FLinearColor value-fixture внутри artifacts", add_help=False)
-    parser.add_argument("-h", "--help", action="help", help="Показать справку")
+            return super().format_help().replace("usage:", "Usage:", 1).replace("options:", "Options:", 1)
+    parser = RussianArgumentParser(description="Prepare an isolated FLinearColor value fixture within artifacts", add_help=False)
+    parser.add_argument("-h", "--help", action="help", help="Show help")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT / "artifacts/linear-color-probe-dev23",
-                        help="Отдельный каталог внутри artifacts")
+                        help="A separate directory within artifacts")
     args = parser.parse_args(argv)
     try:
         result = prepare_probe(args.workspace_root)

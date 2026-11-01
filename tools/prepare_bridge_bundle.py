@@ -1,8 +1,8 @@
-"""Собрать проверяемый внутренний комплект моста с сохранённым layout.
+"""Prepare a verifiable internal bridge bundle with its layout preserved.
 
-Это рабочая папка для другого Windows-ПК, не публичный выпуск или installer.
-Официальный Modkit, Python-окружение и игра не включаются; запуск/установка
-игры не выполняются. .venv, журналы, кеши и локальные настройки исключены.
+This is a working folder for another Windows PC, not a public release or installer.
+The official Modkit, Python environment, and game are not included; game launch
+and installation are not performed. .venv, logs, caches, and local settings are excluded.
 """
 
 from __future__ import annotations
@@ -77,10 +77,10 @@ def _version(repository: Path) -> str:
                 and isinstance(node.targets[0], ast.Name) and node.targets[0].id == "__version__"
                 and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)]
     if len(versions) != 1 or not re.fullmatch(r"\d+\.\d+\.\d+-dev\.\d+", versions[0]):
-        raise BundleError("invalid_version", "Комплект требует одну текущую техническую версию __version__")
+        raise BundleError("invalid_version", "The bundle requires exactly one current development __version__")
     metadata = tomllib.loads(_read(repository / "pyproject.toml", repository).decode("utf-8-sig"))
     if metadata.get("project", {}).get("version") != versions[0]:
-        raise BundleError("version_mismatch", "Версии Python-кода и pyproject.toml различаются")
+        raise BundleError("version_mismatch", "The Python source and pyproject.toml versions differ")
     lock = tomllib.loads(_read(repository / "uv.lock", repository).decode("utf-8-sig"))
     packages = lock.get("package", [])
     local = [item for item in packages if isinstance(item, dict) and item.get("name") == "g1r-mcp"]
@@ -88,7 +88,7 @@ def _version(repository: Path) -> str:
     if (len(local) != 1 or local[0].get("version") != versions[0].replace("-dev.", ".dev")
             or local[0].get("source") != {"editable": "."} or len(sdk) != 1 or sdk[0].get("version") != "2.3.0"
             or metadata.get("project", {}).get("dependencies") != ["mcp==2.3.0"]):
-        raise BundleError("lock_mismatch", "uv.lock не соответствует версии, editable-корню или фиксированному MCP SDK")
+        raise BundleError("lock_mismatch", "uv.lock does not match the version, editable root, or pinned MCP SDK")
     return versions[0]
 
 
@@ -96,13 +96,13 @@ def _compatibility(repository: Path, version: str, dll: bytes, loader: bytes) ->
     source = _read(repository / "native/src/game_access.cpp", repository).decode("utf-8-sig")
     hashes = re.findall(r'constexpr\s+const\s+char\s*\*\s*kHash\s*=\s*"([0-9a-f]{64})"', source)
     if len(hashes) != 1 or version.encode("ascii") not in dll or hashes[0].encode("ascii") not in dll:
-        raise BundleError("native_version_mismatch", "Собранная DLL не соответствует текущей версии или контракту EXE")
+        raise BundleError("native_version_mismatch", "The built DLL does not match the current version or EXE contract")
     for label, raw in (("DLL", dll), ("loader", loader)):
         if len(raw) < 64 or raw[:2] != b"MZ":
-            raise BundleError("invalid_binary", f"{label} не является PE x64")
+            raise BundleError("invalid_binary", f"{label} is not a PE x64 binary")
         offset = struct.unpack_from("<I", raw, 60)[0]
         if offset < 64 or offset + 6 > len(raw) or raw[offset:offset + 4] != b"PE\0\0" or struct.unpack_from("<H", raw, offset + 4)[0] != 0x8664:
-            raise BundleError("invalid_binary", f"{label} не является PE x64")
+            raise BundleError("invalid_binary", f"{label} is not a PE x64 binary")
     return {"platform": "Windows x64", "supported_game_exe_sha256": hashes[0],
             "supported_game_exe_name": "G1R/Binaries/Win64/G1R-Win64-Shipping.exe",
             "source": "native/src/game_access.cpp:kHash", "native_version_marker": version,
@@ -113,7 +113,7 @@ def _enumerate(repository: Path) -> list[str]:
     paths = list(DOCUMENTS) + ["tools/" + name for name in TOOLS] + list(BINARIES) + list(HELPER_FILES)
 
     def failure(error):
-        raise BundleError("access_error", "Не удалось перечислить все разрешённые исходники комплекта")
+        raise BundleError("access_error", "Failed to enumerate all allowed bundle sources")
 
     for root, allowed_suffix in ((repository / "src/g1r_mcp", {".py"}),
                                  *[(repository / "tests/fixtures" / name, {".json", ".as", ".patch"}) for name in FIXTURE_DIRS]):
@@ -122,21 +122,21 @@ def _enumerate(repository: Path) -> list[str]:
         for directory, directories, files in os.walk(root, followlinks=False, onerror=failure):
             directory_count += 1
             if directory_count > MAX_FILES:
-                raise BundleError("bundle_limit", "Область исходников содержит слишком много каталогов")
+                raise BundleError("bundle_limit", "The source area contains too many directories")
             parent = _checked(Path(directory), repository, directory=True)
             directories[:] = [name for name in directories if name != "__pycache__"]
             for name in directories:
                 _checked(parent / name, repository, directory=True)
             for name in files:
                 if len(paths) >= MAX_FILES:
-                    raise BundleError("bundle_limit", "Исходники превышают предел числа файлов")
+                    raise BundleError("bundle_limit", "Sources exceed the file count limit")
                 path = _checked(parent / name, repository)
                 if not path.is_file():
-                    raise BundleError("unsafe_file", "В разрешённой области есть не обычный файл")
+                    raise BundleError("unsafe_file", "The allowed area contains a non-regular file")
                 if path.suffix.lower() in allowed_suffix:
                     paths.append(path.relative_to(repository).as_posix())
     if len(paths) > MAX_FILES or len(set(paths)) != len(paths):
-        raise BundleError("bundle_limit", "Комплект превышает предел или содержит повторные пути")
+        raise BundleError("bundle_limit", "The bundle exceeds a limit or contains duplicate paths")
     return sorted(paths)
 
 
@@ -144,10 +144,10 @@ def _target(destination: Path, repository: Path) -> Path:
     artifacts = _checked(repository / "artifacts", repository, directory=True)
     target = Path(os.path.abspath(destination))
     if target == artifacts or not target.is_relative_to(artifacts):
-        raise BundleError("unsafe_path", "Для комплекта нужен новый отдельный каталог внутри artifacts")
+        raise BundleError("unsafe_path", "The bundle requires a new separate directory within artifacts")
     _checked(target.parent, artifacts, directory=True)
     if os.path.lexists(target):
-        raise BundleError("already_exists", "Каталог назначения уже существует")
+        raise BundleError("already_exists", "The destination directory already exists")
     return target
 
 
@@ -179,22 +179,22 @@ def _file_set(root: Path) -> set[str]:
     paths = set()
 
     def failure(error):
-        raise BundleError("copy_changed", "Не удалось проверить полный состав комплекта")
+        raise BundleError("copy_changed", "Failed to verify the complete bundle contents")
 
     directory_count = 0
     for directory, directories, files in os.walk(root, followlinks=False, onerror=failure):
         directory_count += 1
         if directory_count > MAX_FILES or len(paths) > MAX_FILES + 2:
-            raise BundleError("bundle_limit", "Подготовленный комплект неожиданно увеличился")
+            raise BundleError("bundle_limit", "The prepared bundle grew unexpectedly")
         parent = _checked(Path(directory), root, directory=True)
         for name in directories:
             _checked(parent / name, root, directory=True)
         for name in files:
             if len(paths) >= MAX_FILES + 2:
-                raise BundleError("bundle_limit", "Комплект превышает предел числа файлов")
+                raise BundleError("bundle_limit", "The bundle exceeds the file count limit")
             path = _checked(parent / name, root)
             if not path.is_file():
-                raise BundleError("unsafe_file", "Комплект содержит не обычный файл")
+                raise BundleError("unsafe_file", "The bundle contains a non-regular file")
             paths.add(path.relative_to(root).as_posix())
     return paths
 
@@ -202,92 +202,92 @@ def _file_set(root: Path) -> set[str]:
 def _directory_set(root: Path) -> set[str]:
     directories = {"."}
     for directory, children, _ in os.walk(root, followlinks=False,
-                                          onerror=lambda _: (_ for _ in ()).throw(BundleError("copy_changed", "Каталог комплекта недоступен"))):
+                                          onerror=lambda _: (_ for _ in ()).throw(BundleError("copy_changed", "The bundle directory is inaccessible"))):
         parent = _checked(Path(directory), root, directory=True)
         for name in children:
             path = _checked(parent / name, root, directory=True)
             directories.add(path.relative_to(root).as_posix())
             if len(directories) > MAX_FILES:
-                raise BundleError("bundle_limit", "Комплект содержит слишком много каталогов")
+                raise BundleError("bundle_limit", "The bundle contains too many directories")
     return directories
 
 
 def _instructions(version: str) -> bytes:
-    text = f"""# Внутренний комплект G1R MCP {version}
+    text = f"""# G1R MCP Internal Bundle {version}
 
-Комплект сохраняет структуру рабочей базы; это не установщик и не публичный выпуск.
-Проверка не запускает игру и не загружает DLL.
+The bundle preserves the workspace layout; it is not an installer or a public release.
+Verification does not launch the game or load the DLL.
 
-1. Поместить всю папку в выбранный рабочий каталог Windows x64; игру и официальный
-   G1R-Modkit оставить отдельно. Не переносить старую `.venv`.
-2. Из корня выполнить `python -B tools/prepare_bridge_bundle.py --verify-root .`.
-   `-B` запрещает создание __pycache__ внутри проверяемой папки.
-3. Установить Python 3.11+ и uv. Разместить окружение рядом с комплектом:
-   `$env:UV_PROJECT_ENVIRONMENT = "<отдельный абсолютный путь к окружению>"`,
-   `$env:PYTHONDONTWRITEBYTECODE = "1"`, затем выполнить `uv sync --locked`.
-   Окружение не создавать внутри комплекта: строгая проверка отвергает новые файлы.
-4. Для всех чатов Codex запустить один общий сервер отдельным процессом:
-   `<окружение>\\Scripts\\python.exe -B -m g1r_mcp.server --transport streamable-http
-   --host 127.0.0.1 --port 27124 --modkit-root <официальный Modkit>
-   --workspace-root <рабочие пакеты> --game-root <установленная игра>`.
-   В config.toml Codex задать `[mcp_servers.g1r_mcp]` и
-   `url = "http://127.0.0.1:27124/mcp"`; не задавать command/args для каждого чата.
-   Сервер не запускает игру, все чаты разделяют один native TCP-владелец.
-   Для отдельного stdio-клиента остаётся транспорт по умолчанию без HTTP-параметров.
-   Пути задать абсолютными; не использовать значения из другого ПК.
-   Скрипты start_shared_mcp.ps1/stop_shared_mcp.ps1 рассчитаны на рабочую копию
-   с локальной `.venv` и соседним G1R-Modkit, не на неизменяемый комплект
-   с вынесенным окружением. В последнем случае использовать прямую команду выше.
-5. Проверить EXE игры
-   SHA-256 против manifest.json до использования DLL. Загрузка выполняется только
-   явным инструментом development/native_load; комплект сам ничего не устанавливает.
+1. Place the entire folder in a selected Windows x64 workspace; keep the game and official
+   G1R-Modkit separate. Do not copy an old `.venv`.
+2. From the root, run `python -B tools/prepare_bridge_bundle.py --verify-root .`.
+   `-B` prevents __pycache__ creation inside the folder being verified.
+3. Install Python 3.11+ and uv. Place the environment beside the bundle:
+   `$env:UV_PROJECT_ENVIRONMENT = "<separate absolute environment path>"`,
+   `$env:PYTHONDONTWRITEBYTECODE = "1"`, then run `uv sync --locked`.
+   Do not create the environment inside the bundle: strict verification rejects new files.
+4. For all Codex chats, start one shared server as a separate process:
+   `<environment>\\Scripts\\python.exe -B -m g1r_mcp.server --transport streamable-http
+   --host 127.0.0.1 --port 27124 --modkit-root <official Modkit>
+   --workspace-root <working packages> --game-root <installed game>`.
+   In Codex config.toml, set `[mcp_servers.g1r_mcp]` and
+   `url = "http://127.0.0.1:27124/mcp"`; do not set command/args for each chat.
+   The server does not launch the game; all chats share one native TCP owner.
+   A separate stdio client uses the default transport without HTTP parameters.
+   Use absolute paths; do not reuse values from another PC.
+   The start_shared_mcp.ps1/stop_shared_mcp.ps1 scripts are intended for a working copy
+   with a local `.venv` and adjacent G1R-Modkit, not an immutable bundle
+   with an external environment. For the latter, use the direct command above.
+5. Verify the game EXE
+   SHA-256 against manifest.json before using the DLL. Loading is performed only
+   through an explicit development/native_load tool; the bundle installs nothing itself.
 
-Для рабочего цикла доступны MCP-команды g1r_development_recipe/processes/start/stop,
-g1r_native_load/status/enable, поиск и типизированные вызовы, редактура пакетов,
-снимки и наблюдения. Запуск, остановка и загрузка DLL выполняются явными запросами.
+The development workflow provides MCP commands g1r_development_recipe/processes/start/stop,
+g1r_native_load/status/enable, object search and typed calls, package editing,
+snapshots, and watches. Launch, stop, and DLL loading require explicit requests.
 
-Python-зависимости загружаются `uv sync` по uv.lock. Требуется установленный
-Microsoft Visual C++ Redistributable x64. DLL и loader уже собраны;
-компилятор C++ для запуска готового комплекта не нужен. Сборочные исходники native
-не входят в этот минимальный комплект; повторная сборка выполняется в Git-базе.
+Python dependencies are downloaded by `uv sync` using uv.lock. An installed
+Microsoft Visual C++ Redistributable x64 is required. The DLL and loader are prebuilt;
+a C++ compiler is not required to run the prepared bundle. Native build sources
+are not included in this minimal bundle; rebuilds are performed in the Git workspace.
 
-Компиляция .as происходит в игре; hot reload подтверждён только для тел функций.
-Неподтверждённые compiler API и применение ScriptPatches не считаются готовыми.
-Собственные проверочные пакеты готовятся отдельно из tests/fixtures в artifacts;
-рабочие моды пользователя и результаты прошлых экспериментов не включены.
+The game compiles .as; hot reload is confirmed only for function bodies.
+Unverified compiler APIs and ScriptPatches application are not considered ready.
+Isolated probe packages are prepared separately from tests/fixtures into artifacts;
+user mods and results from past experiments are not included.
 
-Для проверки полного цикла компиляции создать отдельную полную рабочую копию
-комплекта. Исходную папку сохранить для проверки manifest; рабочая копия получает
-собственный artifacts и после этого не проходит проверку исходного manifest.
-В PowerShell указать абсолютные пути: существующий комплект, новый соседний
-каталог рабочей копии, установленное окружение, официальный Modkit и игру.
+To verify the complete compilation workflow, create a separate complete working copy
+of the bundle. Keep the original folder for manifest verification; the working copy receives
+its own artifacts and will no longer pass verification against the original manifest.
+In PowerShell, specify absolute paths: the existing bundle, a new adjacent
+working-copy directory, the installed environment, official Modkit, and game.
 
 ```powershell
-$bundlePath = "<абсолютный путь к исходному комплекту>"
-$workingPath = "<абсолютный путь к новой соседней рабочей копии>"
-$pythonPath = "<абсолютный путь к окружению>\\Scripts\\python.exe"
-$modkitPath = "<абсолютный путь к официальному G1R-Modkit>"
-$gamePath = "<абсолютный путь к установленной игре>"
+$bundlePath = "<absolute path to the original bundle>"
+$workingPath = "<absolute path to a new adjacent working copy>"
+$pythonPath = "<absolute environment path>\\Scripts\\python.exe"
+$modkitPath = "<absolute path to the official G1R-Modkit>"
+$gamePath = "<absolute path to the installed game>"
 $env:PYTHONDONTWRITEBYTECODE = "1"
 $bundlePath = (Resolve-Path -LiteralPath $bundlePath).ProviderPath
 $workingPath = [IO.Path]::GetFullPath($workingPath)
-if (Test-Path -LiteralPath $workingPath) {{ throw "Рабочая копия уже существует" }}
-if ([IO.Path]::GetDirectoryName($workingPath) -ne [IO.Path]::GetDirectoryName($bundlePath)) {{ throw "Выберите соседний каталог" }}
+if (Test-Path -LiteralPath $workingPath) {{ throw "The working copy already exists" }}
+if ([IO.Path]::GetDirectoryName($workingPath) -ne [IO.Path]::GetDirectoryName($bundlePath)) {{ throw "Choose an adjacent directory" }}
 & $pythonPath -B "$bundlePath\\tools\\prepare_bridge_bundle.py" --verify-root $bundlePath
-if ($LASTEXITCODE -ne 0) {{ throw "Исходный комплект не прошёл проверку" }}
+if ($LASTEXITCODE -ne 0) {{ throw "The original bundle failed verification" }}
 Copy-Item -LiteralPath $bundlePath -Destination $workingPath -Recurse
 $env:UV_PROJECT_ENVIRONMENT = [IO.Path]::GetDirectoryName([IO.Path]::GetDirectoryName($pythonPath))
 uv sync --locked --project $workingPath
-if ($LASTEXITCODE -ne 0) {{ throw "Окружение рабочей копии не подготовлено" }}
+if ($LASTEXITCODE -ne 0) {{ throw "The working-copy environment was not prepared" }}
 & $pythonPath -B "$workingPath\\tools\\prepare_compile_probe.py" --workspace-root "$workingPath\\artifacts\\compile-probe-baseline" --phase baseline
-if ($LASTEXITCODE -ne 0) {{ throw "Подготовка baseline не выполнена" }}
+if ($LASTEXITCODE -ne 0) {{ throw "Baseline preparation failed" }}
 & $pythonPath -B "$workingPath\\tools\\probe_development_mcp.py" --modkit-root $modkitPath --workspace-root $workingPath --game-root $gamePath --relative-package "artifacts/compile-probe-baseline/G1RMCPProbe" --expected-value 1
 ```
 
-Последняя команда явно запускает собственную игровую сессию, загружает DLL,
-проверяет baseline-метод ReadProbeValue и закрывает эту сессию. Выполнять её
-только при разрешённом запуске игры. Ожидается значение 1; локальная reload-проба
-рабочей базы с ожидаемым значением 2 в комплект не включена.
+The final command explicitly launches its own game session, loads the DLL,
+checks the baseline ReadProbeValue method, and closes that session. Run it
+only when game launch is authorized. The expected value is 1; the local reload probe
+from the workspace with expected value 2 is not included in the bundle.
 """
     return text.encode("utf-8")
 
@@ -303,17 +303,17 @@ def prepare_bundle(destination: Path, *, repository_root: Path = ROOT) -> dict:
         raw = _read(repository / relative, repository)
         total += len(raw)
         if total > MAX_TOTAL_BYTES:
-            raise BundleError("bundle_limit", "Комплект превышает предел 64 МиБ")
+            raise BundleError("bundle_limit", "The bundle exceeds the 64 MiB limit")
         raw_files[relative] = raw
     compatibility = _compatibility(repository, version, raw_files[BINARIES[0]], raw_files[BINARIES[1]])
     compatibility_source = _sha(_read(repository / "native/src/game_access.cpp", repository))
     raw_files["README.md"] = _instructions(version)
-    raw_files["НАЧАТЬ.md"] = raw_files["README.md"]
-    # Источник проверяется повторно до записи; поздние изменения отказывают.
+    raw_files["START.md"] = raw_files["README.md"]
+    # Revalidate the source before writing; reject subsequent changes.
     if selected != _enumerate(repository) or any(_sha(_read(repository / path, repository)) != _sha(raw_files[path]) for path in selected if path != "README.md"):
-        raise BundleError("source_changed", "Исходники или бинарники изменились во время подготовки")
+        raise BundleError("source_changed", "Sources or binaries changed during preparation")
     if _sha(_read(repository / "native/src/game_access.cpp", repository)) != compatibility_source:
-        raise BundleError("source_changed", "Контракт нативной совместимости изменился во время подготовки")
+        raise BundleError("source_changed", "The native compatibility contract changed during preparation")
     files = [{"path": relative, "bytes": len(raw), "sha256": _sha(raw)} for relative, raw in sorted(raw_files.items())]
     manifest = {"schema_version": 1, "kind": "internal_bridge_folder", "version": version,
                 "compatibility": compatibility, "files": files,
@@ -329,7 +329,7 @@ def prepare_bundle(destination: Path, *, repository_root: Path = ROOT) -> dict:
     with _destination_lock(target), _guard_directories(target.parent, repository / "artifacts"):
         try:
             if os.path.lexists(target):
-                raise BundleError("already_exists", "Каталог комплекта появился до записи")
+                raise BundleError("already_exists", "The bundle directory appeared before writing")
             stage = Path(tempfile.mkdtemp(prefix=".g1r-bridge-bundle-", dir=target.parent))
             own_directories["."] = _identity(stage)
             with _guard_directories(stage, target.parent), contextlib.ExitStack() as guards:
@@ -360,14 +360,14 @@ def prepare_bundle(destination: Path, *, repository_root: Path = ROOT) -> dict:
                                     checked.unlink()
                             raise
                 if _file_set(stage) != set(raw_files) or _directory_set(stage) != set(own_directories):
-                    raise BundleError("copy_changed", "Комплект содержит посторонние файлы")
+                    raise BundleError("copy_changed", "The bundle contains unrelated files")
                 for relative, (identity, digest) in own_files.items():
                     checked = _checked(stage / relative, stage)
                     if _identity(checked) != identity or _sha(_read(checked, stage)) != digest:
-                        raise BundleError("copy_changed", "Подготовленный файл комплекта изменился")
+                        raise BundleError("copy_changed", "A prepared bundle file changed")
                 verified = verify_bundle(stage)
             if os.path.lexists(target):
-                raise BundleError("already_exists", "Каталог комплекта появился до публикации")
+                raise BundleError("already_exists", "The bundle directory appeared before publication")
             stage.rename(target)
             stage = None
             return {"destination": str(target), "version": version, "file_count": verified["file_count"],
@@ -386,23 +386,23 @@ def verify_bundle(bundle_root: Path) -> dict:
     try:
         manifest = json.loads(raw.decode("utf-8-sig"))
     except (ValueError, UnicodeError):
-        raise BundleError("invalid_manifest", "Manifest комплекта не является корректным JSON") from None
+        raise BundleError("invalid_manifest", "The bundle manifest is not valid JSON") from None
     if not isinstance(manifest, dict) or manifest.get("schema_version") != 1 or manifest.get("kind") != "internal_bridge_folder":
-        raise BundleError("invalid_manifest", "Неподдержанный manifest комплекта")
+        raise BundleError("invalid_manifest", "Unsupported bundle manifest")
     files = manifest.get("files")
     if not isinstance(files, list) or not 1 <= len(files) <= MAX_FILES:
-        raise BundleError("invalid_manifest", "Неверный список файлов комплекта")
+        raise BundleError("invalid_manifest", "Invalid bundle file list")
     expected = {"manifest.json"}
     expected_directories = {"."}
     total = 0
     for entry in files:
         if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
-            raise BundleError("invalid_manifest", "Неверная запись файла")
+            raise BundleError("invalid_manifest", "Invalid file entry")
         path = entry["path"]
         if path.startswith(("/", "\\")) or "\\" in path or any(part in {"", ".", ".."} for part in path.split("/")) or ":" in path:
-            raise BundleError("invalid_manifest", "Путь manifest выходит за пределы комплекта")
+            raise BundleError("invalid_manifest", "A manifest path is outside the bundle")
         if path in expected:
-            raise BundleError("invalid_manifest", "Manifest содержит повторный путь")
+            raise BundleError("invalid_manifest", "The manifest contains a duplicate path")
         expected.add(path)
         parent = Path(path).parent
         while parent.as_posix() != ".":
@@ -410,21 +410,21 @@ def verify_bundle(bundle_root: Path) -> dict:
             parent = parent.parent
         content = _read(root / path, root)
         if type(entry.get("bytes")) is not int or entry["bytes"] != len(content) or entry.get("sha256") != _sha(content):
-            raise BundleError("integrity_mismatch", "Хеш или размер файла комплекта не совпадает")
+            raise BundleError("integrity_mismatch", "A bundle file hash or size does not match")
         total += len(content)
         if total > MAX_TOTAL_BYTES:
-            raise BundleError("bundle_limit", "Комплект превышает предел объёма")
+            raise BundleError("bundle_limit", "The bundle exceeds the size limit")
     if (_file_set(root) != expected or _directory_set(root) != expected_directories
             or manifest.get("file_count") != len(files) or manifest.get("total_bytes") != total):
-        raise BundleError("integrity_mismatch", "Полный состав комплекта отличается от manifest")
-    required = set(DOCUMENTS) | {"tools/" + name for name in TOOLS} | set(BINARIES) | {"НАЧАТЬ.md"}
+        raise BundleError("integrity_mismatch", "The complete bundle contents differ from the manifest")
+    required = set(DOCUMENTS) | {"tools/" + name for name in TOOLS} | set(BINARIES) | {"START.md"}
     required |= {"src/g1r_mcp/" + name for name in SOURCE_FILES}
     required |= set(HELPER_FILES)
     required |= {f"tests/fixtures/{name}/GothicMod.json" for name in FIXTURE_DIRS}
     required |= {f"tests/fixtures/{name}/Script/{script}" for name, script in FIXTURE_SCRIPTS.items()}
     required.add("tests/fixtures/patch_probe/ScriptPatches/Marker.patch")
     if not required.issubset(expected):
-        raise BundleError("incomplete_bundle", "В комплекте отсутствует обязательный runtime-файл")
+        raise BundleError("incomplete_bundle", "The bundle is missing a required runtime file")
     version = _version(root)
     compatibility = manifest.get("compatibility")
     if (manifest.get("version") != version or not isinstance(compatibility, dict)
@@ -432,27 +432,27 @@ def verify_bundle(bundle_root: Path) -> dict:
             or compatibility.get("platform") != "Windows x64"
             or not isinstance(compatibility.get("supported_game_exe_sha256"), str)
             or not re.fullmatch(r"[0-9a-f]{64}", compatibility["supported_game_exe_sha256"])):
-        raise BundleError("invalid_manifest", "Версия или контракт совместимости комплекта некорректны")
+        raise BundleError("invalid_manifest", "The bundle version or compatibility contract is invalid")
     dll = _read(root / BINARIES[0], root)
     loader = _read(root / BINARIES[1], root)
     game_hash = compatibility["supported_game_exe_sha256"]
     if version.encode("ascii") not in dll or game_hash.encode("ascii") not in dll:
-        raise BundleError("native_version_mismatch", "DLL не соответствует версии или хешу игры из manifest")
+        raise BundleError("native_version_mismatch", "The DLL does not match the version or game hash in the manifest")
     for content in (dll, loader):
         if len(content) < 64 or content[:2] != b"MZ":
-            raise BundleError("invalid_binary", "Бинарник комплекта не является PE x64")
+            raise BundleError("invalid_binary", "The bundle binary is not a PE x64 binary")
         offset = struct.unpack_from("<I", content, 60)[0]
         if offset < 64 or offset + 6 > len(content) or content[offset:offset + 4] != b"PE\0\0" or struct.unpack_from("<H", content, offset + 4)[0] != 0x8664:
-            raise BundleError("invalid_binary", "Бинарник комплекта не является PE x64")
+            raise BundleError("invalid_binary", "The bundle binary is not a PE x64 binary")
     return {"version": manifest.get("version"), "file_count": len(files), "total_bytes": total,
             "verified_files": True, "runtime_validation": "not_performed_by_packager"}
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Подготовить или проверить внутренний переносимый комплект G1R MCP")
+    parser = argparse.ArgumentParser(description="Prepare or verify a portable internal G1R MCP bundle")
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--destination", type=Path, help="Новый каталог внутри artifacts текущей Git-базы")
-    group.add_argument("--verify-root", type=Path, help="Проверить полные хеши распакованного комплекта без запуска игры")
+    group.add_argument("--destination", type=Path, help="A new directory within artifacts in the current Git workspace")
+    group.add_argument("--verify-root", type=Path, help="Verify all unpacked bundle hashes without launching the game")
     args = parser.parse_args()
     try:
         result = prepare_bundle(args.destination) if args.destination else verify_bundle(args.verify_root)

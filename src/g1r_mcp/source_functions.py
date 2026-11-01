@@ -1,4 +1,4 @@
-"""Лексические объявления AS-функций с дословными прототипами исходника."""
+"""Lexical AS function declarations with verbatim source prototypes."""
 
 from bisect import bisect_right
 import re
@@ -13,10 +13,10 @@ _ANNOTATIONS = {"UFUNCTION", "UCLASS", "USTRUCT", "UPROPERTY", "UENUM"}
 
 
 def declarations(text: str, masked: str) -> Iterator[dict]:
-    """Найти объявления в глобальном, namespace и непосредственном class/struct scope.
+    """Find declarations in global, namespace, and direct class/struct scope.
 
-    Это не AST: тела функций пропускаются, а параметры и квалификаторы остаются
-    частью исходного прототипа, без утверждений о связывании или компиляции.
+    This is not an AST: skip function bodies and keep parameters and qualifiers
+    in the source prototype without claiming binding or compilation.
     """
     masked = re.sub(r"(?m)^[ \t]*#[^\n]*", lambda match: " " * len(match.group()), masked)
     tokens = list(_TOKEN.finditer(masked))
@@ -51,7 +51,7 @@ def declarations(text: str, masked: str) -> Iterator[dict]:
             return None
         if destructor or not re.fullmatch(r"[A-Za-z_]\w*", type_tokens[0]):
             return None
-        # Префикс типа допускает qualified/template/ref/handle формы, но не вызовы.
+        # The type prefix permits qualified/template/ref/handle forms, but not calls.
         depth = 0
         previous = ""
         for value in type_tokens:

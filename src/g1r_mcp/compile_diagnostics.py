@@ -1,4 +1,4 @@
-"""Полное чтение предоставленного диагностического отчёта; не compiler API."""
+"""Read a supplied diagnostic report in full; this is not a compiler API."""
 from __future__ import annotations
 import hashlib
 import re
@@ -24,7 +24,7 @@ def parse_report(text: str, package_name: str, files: list[dict]) -> dict:
         if location and location[0] in ('"', "'") and location[-1] == location[0]:
             location = location[1:-1]
         location = location.replace("\\", "/") if location else None
-        # Абсолютный путь не публикуется. Связь определяется полным суффиксом, не basename.
+        # Do not expose absolute paths. Match the full suffix rather than the basename.
         options = [path for path in known if location == path
                    or (location is not None and location.endswith("/" + package_name + "/" + path))]
         bound = options[0] if len(options) == 1 else None
@@ -76,7 +76,7 @@ def parse_report(text: str, package_name: str, files: list[dict]) -> dict:
                 continue
         match = _ANGEL.fullmatch(raw.strip()) or _COLON.fullmatch(raw.strip())
         if not match:
-            if re.search(r"\b(error|warning|fatal)\b|ошибк", raw, re.I):
+            if re.search(r"\b(error|warning|fatal)\b|\u043e\u0448\u0438\u0431\u043a", raw, re.I):
                 unparsed.append(raw)
             continue
         try:
@@ -107,25 +107,25 @@ def read_report(service, relative_package: str, expected_manifest_sha256: str,
     before = service._manifest(relative_package, enable_ingame_tools=enable_ingame_tools,
                                show_script_errors=show_script_errors)
     if not isinstance(expected_manifest_sha256, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_manifest_sha256):
-        raise DevelopmentError("invalid_manifest_hash", "Нужен SHA-256 полного пакета development recipe")
+        raise DevelopmentError("invalid_manifest_hash", "The SHA-256 of the full development recipe package is required")
     if before["manifest_sha256"] != expected_manifest_sha256.lower():
-        raise DevelopmentError("package_changed", "Пакет изменился после подготовки рецепта")
+        raise DevelopmentError("package_changed", "The package changed after the recipe was prepared")
     try:
         target = service.workspace._unprotected(_checked(service.workspace.root.joinpath(*_parts(report_path)), service.workspace.root))
         if target.suffix.lower() not in (".txt", ".log"):
-            raise DevelopmentError("invalid_report_path", "Нужен .txt или .log внутри рабочей базы")
+            raise DevelopmentError("invalid_report_path", "A .txt or .log file inside the workspace is required")
         raw = _read_bytes(target, service.workspace.root, target.stat().st_size)
         text = raw.decode("utf-8-sig", errors="strict")
     except WorkspaceError as error:
         raise DevelopmentError(error.code, str(error)) from None
     except OSError:
-        raise DevelopmentError("access_error", "Не удалось прочитать диагностический отчёт") from None
+        raise DevelopmentError("access_error", "Could not read the diagnostic report") from None
     except UnicodeError:
-        raise DevelopmentError("invalid_report_encoding", "Диагностический отчёт должен быть UTF-8") from None
+        raise DevelopmentError("invalid_report_encoding", "The diagnostic report must be UTF-8") from None
     after = service._manifest(relative_package, enable_ingame_tools=enable_ingame_tools,
                               show_script_errors=show_script_errors)
     if after["manifest_sha256"] != before["manifest_sha256"]:
-        raise DevelopmentError("package_changed", "Пакет изменился во время чтения диагностики")
+        raise DevelopmentError("package_changed", "The package changed while diagnostics were being read")
     return {"package_name": before["package_name"], "manifest_sha256": before["manifest_sha256"],
             "report_sha256": hashlib.sha256(raw).hexdigest(), **parse_report(text, before["package_name"], before["files"])}
 
@@ -135,15 +135,15 @@ def read_runtime_report(service, relative_package: str, expected_manifest_sha256
     before = service._manifest(relative_package, enable_ingame_tools=enable_ingame_tools,
                                show_script_errors=show_script_errors)
     if not isinstance(expected_manifest_sha256, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_manifest_sha256):
-        raise DevelopmentError("invalid_manifest_hash", "Нужен SHA-256 полного пакета development recipe")
+        raise DevelopmentError("invalid_manifest_hash", "The SHA-256 of the full development recipe package is required")
     if before["manifest_sha256"] != expected_manifest_sha256.lower():
-        raise DevelopmentError("package_changed", "Пакет изменился после подготовки рецепта")
+        raise DevelopmentError("package_changed", "The package changed after the recipe was prepared")
     native_report = native_call()
     text = native_report["text"]
     after = service._manifest(relative_package, enable_ingame_tools=enable_ingame_tools,
                               show_script_errors=show_script_errors)
     if after["manifest_sha256"] != before["manifest_sha256"]:
-        raise DevelopmentError("package_changed", "Пакет изменился во время чтения диагностики")
+        raise DevelopmentError("package_changed", "The package changed while diagnostics were being read")
     return {"package_name": before["package_name"], "manifest_sha256": before["manifest_sha256"],
             "report_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
             **parse_report(text, before["package_name"], before["files"]),

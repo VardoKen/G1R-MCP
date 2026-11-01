@@ -1,4 +1,4 @@
-"""Одна серия FVector input/out/return только собственного загруженного CDO."""
+"""One FVector input/out/return series on an owned loaded CDO."""
 from __future__ import annotations
 
 import argparse
@@ -34,7 +34,7 @@ def _finite(value) -> bool:
 def check_vector(value, expected: dict) -> dict:
     if (not isinstance(value, dict) or set(value) != {"X", "Y", "Z"}
             or any(not _finite(value[axis]) or value[axis] != expected[axis] for axis in expected)):
-        raise ProbeError("probe_vector_value", "FVector не сохранил ровно три конечных числовых компонента XYZ")
+        raise ProbeError("probe_vector_value", "FVector did not preserve exactly three finite numeric XYZ components")
     return {axis: value[axis] for axis in ("X", "Y", "Z")}
 
 
@@ -42,7 +42,7 @@ def check_target(item: dict) -> dict:
     if (not isinstance(item, dict) or item.get("name") != "Default__" + HOST
             or item.get("class") != HOST or item.get("path") != "/Script/Angelscript.Default__" + HOST
             or not isinstance(item.get("handle"), str) or not item["handle"].startswith("obj-")):
-        raise ProbeError("unsafe_probe_target", "Не подтверждён собственный CDO FVector-fixture")
+        raise ProbeError("unsafe_probe_target", "Owned FVector fixture CDO is not confirmed")
     return item
 
 
@@ -52,17 +52,17 @@ def check_layout(result: dict, target: dict, session_id: str) -> dict:
             or result.get("struct_path") != "/Script/CoreUObject.Vector"
             or result.get("consistency") != "copied_bytes_then_metadata_revalidated"
             or result.get("partial") is not False or result.get("truncated") is not False or "error" in result):
-        raise ProbeError("probe_vector_layout_owner", "Не подтверждены FVector-контракт, источник и полнота layout")
+        raise ProbeError("probe_vector_layout_owner", "FVector contract, source, and complete layout are not confirmed")
     size, alignment, components = result.get("properties_size"), result.get("min_alignment"), result.get("components")
     if (type(size) is not int or size not in (12, 24) or type(alignment) is not int
             or alignment not in (1, 2, 4, 8) or alignment > size // 3
             or not isinstance(components, list) or len(components) != 3
             or any(not isinstance(component, dict) for component in components)):
-        raise ProbeError("probe_vector_layout", "Не подтверждён FVector размером 12/24 с тремя компонентами")
+        raise ProbeError("probe_vector_layout", "FVector size 12/24 with three components is not confirmed")
     width = size // 3
     by_name = {component.get("name"): component for component in components}
     if set(by_name) != set(STORED):
-        raise ProbeError("probe_vector_layout", "Компоненты FVector не совпали с XYZ")
+        raise ProbeError("probe_vector_layout", "FVector components do not match XYZ")
     offsets = []
     values = {}
     for name, component in by_name.items():
@@ -70,11 +70,11 @@ def check_layout(result: dict, target: dict, session_id: str) -> dict:
         if (component.get("type") != ("FloatProperty" if width == 4 else "DoubleProperty")
                 or type(component.get("element_size")) is not int or component["element_size"] != width
                 or type(offset) is not int or offset not in (0, width, width * 2)):
-            raise ProbeError("probe_vector_layout", "Не совпали точные размеры, типы или смещения компонентов")
+            raise ProbeError("probe_vector_layout", "Exact component sizes, types, or offsets do not match")
         offsets.append(offset)
         values[name] = component.get("value")
     if sorted(offsets) != [0, width, width * 2]:
-        raise ProbeError("probe_vector_layout", "Компоненты не покрывают FVector ровно один раз")
+        raise ProbeError("probe_vector_layout", "Components do not cover FVector exactly once")
     check_vector(values, STORED)
     return {"struct_path": result["struct_path"], "size": size, "component_width": width,
             "component_type": "FloatProperty" if width == 4 else "DoubleProperty", "min_alignment": alignment}
@@ -88,14 +88,14 @@ def check_parameter_vector_metadata(field: dict, vector_size: int, direction: st
             or metadata["properties_size"] != vector_size or type(metadata.get("min_alignment")) is not int
             or metadata["min_alignment"] not in (1, 2, 4, 8) or metadata["min_alignment"] > width
             or field.get("direction") != direction):
-        raise ProbeError("probe_signature_vector_metadata", "Параметр не подтверждён как CoreUObject.Vector с точным layout/direction")
+        raise ProbeError("probe_signature_vector_metadata", "Parameter is not confirmed as CoreUObject.Vector with exact layout and direction")
     components = metadata.get("components")
     if (not isinstance(components, list) or len(components) != 3
             or any(not isinstance(component, dict) for component in components)):
-        raise ProbeError("probe_signature_vector_metadata", "Не подтверждены три компонента FVector-параметра")
+        raise ProbeError("probe_signature_vector_metadata", "Three FVector parameter components are not confirmed")
     by_name = {component.get("name"): component for component in components}
     if set(by_name) != {"X", "Y", "Z"}:
-        raise ProbeError("probe_signature_vector_metadata", "Компоненты параметра не совпадают с XYZ")
+        raise ProbeError("probe_signature_vector_metadata", "Parameter components do not match XYZ")
     offsets = []
     for component in components:
         offset = component.get("offset")
@@ -103,28 +103,28 @@ def check_parameter_vector_metadata(field: dict, vector_size: int, direction: st
                 or type(component.get("element_size")) is not int or component["element_size"] != width
                 or type(offset) is not int or offset not in (0, width, width * 2)
                 or type(component.get("array_dim")) is not int or component["array_dim"] != 1):
-            raise ProbeError("probe_signature_vector_metadata", "Тип, ширина, смещение или ArrayDim компонента не подтверждены")
+            raise ProbeError("probe_signature_vector_metadata", "Component type, width, offset, or ArrayDim is not confirmed")
         offsets.append(offset)
     if sorted(offsets) != [0, width, width * 2]:
-        raise ProbeError("probe_signature_vector_metadata", "Компоненты не покрывают байты FVector-параметра")
+        raise ProbeError("probe_signature_vector_metadata", "Components do not cover the FVector parameter bytes")
     if direction == "output" and field.get("argument_marker") != {"out": True}:
-        raise ProbeError("probe_signature_vector_metadata", "Не подтверждён обязательный out-marker Output")
+        raise ProbeError("probe_signature_vector_metadata", "Required Output out marker is not confirmed")
 
 
 def check_signature(functions: dict, method_name: str, vector_size: int) -> tuple[dict, str]:
     if (method_name not in METHODS or not isinstance(functions, dict)
             or functions.get("truncated") is not False or functions.get("scan_complete") is not True
             or functions.get("scan_truncated") is not False or not isinstance(functions.get("items"), list)):
-        raise ProbeError("probe_signature_invalid", "Не подтверждён полный каталог собственного FVector-CDO")
+        raise ProbeError("probe_signature_invalid", "Complete owned FVector CDO catalog is not confirmed")
     methods = [item for item in functions["items"] if isinstance(item, dict) and item.get("name") == method_name]
     if len(methods) != 1:
-        raise ProbeError("probe_signature_absent", "Метод проверки не найден однозначно")
+        raise ProbeError("probe_signature_absent", "Probe method was not found uniquely")
     method = methods[0]
     fields, size = method.get("parameters"), method.get("parameter_size")
     if (not isinstance(fields, list) or any(not isinstance(field, dict) for field in fields)
             or method.get("parameters_truncated") is not False or type(size) is not int or not 0 <= size <= 64
             or type(method.get("parameter_count")) is not int or method["parameter_count"] != len(fields)):
-        raise ProbeError("probe_signature_mismatch", "Не подтверждены число полей и ограниченный буфер FVector-метода")
+        raise ProbeError("probe_signature_mismatch", "Field count and bounded FVector method buffer are not confirmed")
     returned = [field for field in fields if field.get("return") is True]
     arguments = [field for field in fields if field.get("return") is False]
     expected_return = {"ReadMarker": ("IntProperty", 4), "ReadCallsCount": ("IntProperty", 4),
@@ -132,18 +132,18 @@ def check_signature(functions: dict, method_name: str, vector_size: int) -> tupl
                        "WriteVector": ("BoolProperty", 1)}.get(method_name)
     if (len(returned) != (expected_return is not None) or len(arguments) != (method_name in {"EchoVector", "WriteVector"})
             or len(fields) != len(returned) + len(arguments)):
-        raise ProbeError("probe_signature_mismatch", "Не совпали вход, out и возврат FVector-метода")
+        raise ProbeError("probe_signature_mismatch", "FVector method input, out, and return do not match")
     if expected_return is not None and (returned[0].get("type"), returned[0].get("element_size")) != expected_return:
-        raise ProbeError("probe_signature_mismatch", "Не совпал точный тип или размер возврата")
+        raise ProbeError("probe_signature_mismatch", "Exact return type or size does not match")
     if arguments:
         argument = arguments[0]
         if ((argument.get("name"), argument.get("type"), argument.get("element_size")) !=
                 ("Input" if method_name == "EchoVector" else "Output", "StructProperty", vector_size)):
-            raise ProbeError("probe_signature_mismatch", "Не совпал точный Input/Output FVector")
+            raise ProbeError("probe_signature_mismatch", "Exact Input/Output FVector does not match")
         if method_name == "EchoVector" and (argument.get("out") is not False or argument.get("reference") is not False):
-            raise ProbeError("probe_signature_mismatch", "EchoVector должен принимать FVector по значению")
+            raise ProbeError("probe_signature_mismatch", "EchoVector must take FVector by value")
         if method_name == "WriteVector" and argument.get("out") is not True:
-            raise ProbeError("probe_signature_mismatch", "WriteVector должен иметь подтверждённый out Output")
+            raise ProbeError("probe_signature_mismatch", "WriteVector must have a confirmed Output out parameter")
     spans = []
     for field in fields:
         offset, element_size = field.get("offset"), field.get("element_size")
@@ -152,23 +152,23 @@ def check_signature(functions: dict, method_name: str, vector_size: int) -> tupl
                 or type(field.get("out")) is not bool or type(field.get("reference")) is not bool
                 or field["return"] is True and field["reference"] is not False
                 or field["return"] is False and offset + element_size > size):
-            raise ProbeError("probe_signature_mismatch", "Не подтверждены ArrayDim, out/ref или границы FVector-буфера")
+            raise ProbeError("probe_signature_mismatch", "ArrayDim, out/ref flags, or FVector buffer bounds are not confirmed")
         if any(offset < previous_end and previous_start < offset + element_size for previous_start, previous_end in spans):
-            raise ProbeError("probe_signature_mismatch", "Диапазоны параметров FVector-метода пересекаются")
+            raise ProbeError("probe_signature_mismatch", "FVector method parameter ranges overlap")
         spans.append((offset, offset + element_size))
         if field["type"] == "StructProperty":
             direction = "return" if field["return"] is True else "output" if method_name == "WriteVector" else "input"
             check_parameter_vector_metadata(field, vector_size, direction)
     token = method.get("signature_token")
     if not isinstance(token, str) or not TOKEN.fullmatch(token):
-        raise ProbeError("probe_signature_token_absent", "Собственный FVector-метод не получил корректный токен")
+        raise ProbeError("probe_signature_token_absent", "Owned FVector method did not receive a valid token")
     return method, token
 
 
 def check_scalar(result: dict, return_type: str, expected) -> None:
     if (result.get("executed") is not True or result.get("return_type") != return_type or "result" not in result
             or type(result["result"]) is not type(expected) or result["result"] != expected):
-        raise ProbeError("probe_vector_scalar_result", "Маркер, bool или счётчик вызова не подтверждены")
+        raise ProbeError("probe_vector_scalar_result", "Marker, bool, or call counter is not confirmed")
 
 
 def check_rejection(result: dict, method: str, value) -> None:
@@ -181,7 +181,7 @@ def check_rejection(result: dict, method: str, value) -> None:
             or "executed" in nested and nested["executed"] is not False
             or "may_have_executed" in nested and nested["may_have_executed"] is not False):
         diagnostic = json.dumps({"method": method, "argument": value, "payload": result}, ensure_ascii=False)
-        raise ProbeError("probe_vector_rejection_unconfirmed", "Не подтверждён отказ FVector до исполнения: " + diagnostic)
+        raise ProbeError("probe_vector_rejection_unconfirmed", "FVector rejection before execution is not confirmed: " + diagnostic)
 
 
 async def exercise(call) -> dict:
@@ -193,11 +193,11 @@ async def exercise(call) -> dict:
         status = await call("g1r_native_status", {})
         session_id = status.get("session_id")
         if status.get("ready") is not True or not isinstance(session_id, str) or not session_id:
-            raise ProbeError("game_not_ready", "Не подтверждены Tick и текущая native-сессия")
+            raise ProbeError("game_not_ready", "Tick and current native session are not confirmed")
         found = await call("g1r_find_objects", {"query": "Default__" + HOST, "class_query": HOST,
                                                 "exact_path": "/Script/Angelscript.Default__" + HOST, "limit": 2})
         if (found.get("truncated") is not False or not isinstance(found.get("items"), list) or len(found["items"]) != 1):
-            raise ProbeError("probe_object_absent", "Собственный FVector-CDO не найден однозначно")
+            raise ProbeError("probe_object_absent", "Owned FVector CDO was not found uniquely")
         target = check_target(found["items"][0])
         handle = target["handle"]
         layout = check_layout(await call("g1r_read_struct", {"handle": handle, "property_name": "StoredVector"}), target, session_id)
@@ -205,11 +205,11 @@ async def exercise(call) -> dict:
         for method in METHODS:
             _, tokens[method] = check_signature(await call("g1r_object_functions", {"handle": handle, "function_query": method, "limit": 10}), method, layout["size"])
         if len(set(tokens.values())) != len(tokens):
-            raise ProbeError("probe_signature_token_alias", "Разные FVector-методы получили одинаковый токен")
+            raise ProbeError("probe_signature_token_alias", "Different FVector methods received the same token")
 
         async def invoke(method, arguments=None, *, expected_error=None):
             arguments = arguments or {}
-            # JSON NaN/Infinity нельзя отправлять на транспорт и выдавать за native-отказ.
+            # JSON NaN/Infinity must not be sent to transport and reported as a native rejection.
             json.dumps(arguments, allow_nan=False)
             return await call("g1r_invoke", {"handle": handle, "function": method, "arguments": arguments,
                               "expected_signature_token": tokens[method]}, expected_error=expected_error)
@@ -219,7 +219,7 @@ async def exercise(call) -> dict:
         check_scalar(await invoke("ReadCallsCount"), "IntProperty", 0)
         get = await invoke("GetVector")
         if get.get("executed") is not True or get.get("return_type") != "StructProperty":
-            raise ProbeError("probe_vector_return", "GetVector не подтвердил StructProperty возврат")
+            raise ProbeError("probe_vector_return", "GetVector did not confirm a StructProperty return")
         check_vector(get.get("result"), STORED)
         check_parameter_vector_metadata({"struct": get.get("result_metadata"), "direction": "return"}, layout["size"], "return")
         report.update(session_id=session_id, handle=handle, signature_tokens=tokens, layout=layout)
@@ -231,7 +231,7 @@ async def exercise(call) -> dict:
             cleanup_required = True
             result = await invoke("EchoVector", {"Input": value})
             if result.get("executed") is not True or result.get("return_type") != "StructProperty":
-                raise ProbeError("probe_vector_return", "EchoVector не подтвердил StructProperty возврат")
+                raise ProbeError("probe_vector_return", "EchoVector did not confirm a StructProperty return")
             check_vector(result.get("result"), value)
             check_parameter_vector_metadata({"struct": result.get("result_metadata"), "direction": "return"}, layout["size"], "return")
             count += 1
@@ -243,11 +243,11 @@ async def exercise(call) -> dict:
         check_scalar(written, "BoolProperty", True)
         out = written.get("out_parameters")
         if not isinstance(out, dict) or set(out) != {"Output"}:
-            raise ProbeError("probe_vector_out", "WriteVector не вернул ровно один Output")
+            raise ProbeError("probe_vector_out", "WriteVector did not return exactly one Output")
         check_vector(out["Output"], STORED)
         output_metadata = written.get("out_parameter_metadata")
         if not isinstance(output_metadata, dict) or set(output_metadata) != {"Output"}:
-            raise ProbeError("probe_vector_out", "WriteVector не вернул metadata одного Output")
+            raise ProbeError("probe_vector_out", "WriteVector did not return metadata for one Output")
         check_parameter_vector_metadata({"struct": output_metadata["Output"], "direction": "output", "argument_marker": {"out": True}}, layout["size"], "output")
         count += 1
         check_scalar(await invoke("ReadCallsCount"), "IntProperty", count)
@@ -269,7 +269,7 @@ async def exercise(call) -> dict:
             except ValueError:
                 local_nonfinite += 1
             else:
-                raise ProbeError("probe_nonfinite_transport", "JSON nonfinite был отправлен на MCP вместо локального отказа")
+                raise ProbeError("probe_nonfinite_transport", "Nonfinite JSON was sent to MCP instead of being rejected locally")
         report["local_nonfinite_json_rejections"] = local_nonfinite
         report["checks"].append("malformed_vector_and_out_marker_refused_without_counter_change")
         check_layout(await call("g1r_read_struct", {"handle": handle, "property_name": "StoredVector"}), target, session_id)
@@ -284,7 +284,7 @@ async def exercise(call) -> dict:
             if getattr(failure, "code", None) in {"game_timeout", "game_call_fault", "native_timeout",
                                                   "native_disconnected", "session_closed", "native_unavailable"}:
                 report["cleanup"].append("skipped_unusable_or_unknown_game_root_stops")
-                failure.add_note("Очистка FVector пропущена после неопределённого вызова или недоступного соединения; игру завершает владелец development-сеанса")
+                failure.add_note("FVector cleanup skipped after an uncertain call or unavailable connection; the development session owner stops the game")
                 return_cleanup = False
             else:
                 return_cleanup = True
@@ -300,13 +300,13 @@ async def exercise(call) -> dict:
             except BaseException as error:
                 if failure is None:
                     raise
-                failure.add_note("Не подтверждена очистка собственного FVector-CDO: " + str(error))
+                failure.add_note("Owned FVector CDO cleanup is not confirmed: " + str(error))
 
 
 async def run(args) -> dict:
     if args.mcp_url:
         if args.mcp_url not in {"http://127.0.0.1:27124/mcp", "http://localhost:27124/mcp"}:
-            raise ProbeError("invalid_mcp_url", "Проверка собственного CDO использует только локальный MCP")
+            raise ProbeError("invalid_mcp_url", "Owned CDO probe uses only local MCP")
         async with streamable_http_client(args.mcp_url) as connection:
             async with ClientSession(connection[0], connection[1]) as session:
                 initialized = await session.initialize()
@@ -321,7 +321,7 @@ async def run(args) -> dict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Проверить dev.16 FVector input/out/return собственной загруженной fixture")
+    parser = argparse.ArgumentParser(description="Check dev.16 FVector input/out/return on an owned loaded fixture")
     parser.add_argument("--mcp-url")
     parser.add_argument("--modkit-root", type=Path, default=REPOSITORY_ROOT.parent / "G1R-Modkit")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT)

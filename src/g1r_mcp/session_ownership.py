@@ -1,4 +1,4 @@
-"""Владение управлением общей игрой привязано к MCP-сессии, а не к PID чата."""
+"""Shared game control ownership is bound to the MCP session rather than the chat PID."""
 from __future__ import annotations
 from datetime import datetime, timezone
 import threading
@@ -26,16 +26,16 @@ class SessionOwnership:
                 package: str | None = None, expected_claim_id: str | None = None) -> dict:
         with self.lock:
             if not isinstance(reason, str) or not 1 <= len(reason) <= 256 or any(ord(c) < 32 for c in reason):
-                raise DevelopmentError("invalid_session_reason", "Укажите причину управления общей игрой (1–256 символов)")
+                raise DevelopmentError("invalid_session_reason", "Provide a reason for controlling the shared game (1–256 characters)")
             if expected_claim_id is not None:
                 if self._record is None or self._record["claim_id"] != expected_claim_id:
-                    raise DevelopmentError("session_claim_changed", "Заявка изменилась после чтения состояния")
+                    raise DevelopmentError("session_claim_changed", "The claim changed after the state was read")
                 if self._record["process"] != process:
-                    raise DevelopmentError("session_process_mismatch", "Для восстановления нужны точные PID, время создания и путь заявленного процесса")
+                    raise DevelopmentError("session_process_mismatch", "Recovery requires the exact PID, creation time, and path of the claimed process")
                 self._owner = owner
                 return {**self.status(), "resumed": True}
             if self._owner is not None and self._owner != owner:
-                raise DevelopmentError("game_session_owned", "Общей игрой управляет другая MCP-сессия; сначала завершите её работу")
+                raise DevelopmentError("game_session_owned", "Another MCP session controls the shared game; finish its work first")
             if self._record is None:
                 self._owner = owner
                 self._record = {"claim_id": str(uuid.uuid4()), "reason": reason,
@@ -44,7 +44,7 @@ class SessionOwnership:
             elif process is not None:
                 known = self._record["process"]
                 if known is not None and known != process:
-                    raise DevelopmentError("session_process_mismatch", "Заявленная игровая сессия относится к другому процессу")
+                    raise DevelopmentError("session_process_mismatch", "The claimed game session belongs to another process")
                 self._record["process"] = process
             return self.status()
 
@@ -52,10 +52,10 @@ class SessionOwnership:
         with self.lock:
             if self._owner != owner or self._record is None:
                 raise DevelopmentError("game_session_owned" if self._record else "game_session_unclaimed",
-                                       "Нужно владение общей игровой сессией; используйте g1r_session_acquire")
+                                       "Shared game session ownership is required; use g1r_session_acquire")
             known = self._record["process"]
             if process is not None and known is not None and process != known:
-                raise DevelopmentError("session_process_mismatch", "PID, время создания или путь не совпадают с владельцем")
+                raise DevelopmentError("session_process_mismatch", "The PID, creation time, or path does not match the owner")
 
     def bind(self, owner: Any, process: dict, state: str) -> None:
         with self.lock:
@@ -78,9 +78,9 @@ class SessionOwnership:
     def release_abandoned(self, expected_claim_id: str, *, game_running: bool) -> dict:
         with self.lock:
             if game_running:
-                raise DevelopmentError("game_running", "Чужая заявка снимается только после подтверждённого завершения игры")
+                raise DevelopmentError("game_running", "Another session's claim can only be released after confirmed game termination")
             if self._record is None or self._record["claim_id"] != expected_claim_id:
-                raise DevelopmentError("session_claim_changed", "Заявка изменилась после чтения состояния")
+                raise DevelopmentError("session_claim_changed", "The claim changed after the state was read")
             previous = self.status()["claim"]
             self._owner = None
             self._record = None

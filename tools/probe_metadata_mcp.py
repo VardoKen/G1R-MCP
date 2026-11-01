@@ -1,4 +1,4 @@
-"""Прочитать подтверждённые FName/enum через MCP без запуска игры и DLL."""
+"""Read confirmed FName/enum through MCP without starting the game or DLL."""
 
 import argparse
 import asyncio
@@ -55,36 +55,36 @@ def check_target(result: dict, expected: dict) -> dict:
             result["scanned_slots"] == result["total_slots"] and
             result["total_slots"] >= len(result["items"]) and
             result["skipped"] <= result["scanned_slots"]):
-        raise ProbeError("probe_discovery_incomplete", "Поиск объекта не подтвердил полное сканирование реестра", diagnostics)
+        raise ProbeError("probe_discovery_incomplete", "Object search did not confirm a complete registry scan", diagnostics)
     items = result["items"]
     _require(len(items) == 1 and isinstance(items[0], dict), "probe_object_ambiguous",
-             "Точный проверочный CDO должен быть единственным результатом")
+             "The exact probe CDO must be the only result")
     target = items[0]
     _require(all(target.get(key) == value for key, value in expected.items()) and
              isinstance(target.get("handle"), str) and bool(target["handle"]),
-             "probe_object_mismatch", "Имя, класс или путь проверочного CDO не совпали")
+             "probe_object_mismatch", "The probe CDO name, class, or path did not match")
     return target
 
 
 def check_enum(prop: dict, expected: dict) -> dict:
     _require(prop.get("type") in {"EnumProperty", "ByteProperty"} and prop.get("supported") is True and
              type(prop.get("value")) is int and prop["value"] == expected["value"] and "error" not in prop,
-             "probe_enum_value_mismatch", "Отражённый тип или числовое значение enum не совпало")
+             "probe_enum_value_mismatch", "The reflected enum type or numeric value did not match")
     metadata = prop.get("enum")
     keys = {"path", "underlying_type", "name_status", "value_name", "matched_count", "ambiguous", "reason"}
     _require(isinstance(metadata, dict) and set(metadata) == keys,
-             "probe_enum_metadata_invalid", "Enum должен содержать полный подтверждённый набор метаданных")
+             "probe_enum_metadata_invalid", "The enum must contain a complete confirmed metadata set")
     underlying = metadata["underlying_type"]
     _require(isinstance(underlying, str) and underlying in INTEGER_RANGES,
-             "probe_enum_underlying_invalid", "Тип числового представления enum не поддержан")
+             "probe_enum_underlying_invalid", "The enum numeric representation type is not supported")
     low, high = INTEGER_RANGES[underlying]
     _require(low <= prop["value"] <= high and
              (prop["type"] != "ByteProperty" or underlying == "ByteProperty"),
-             "probe_enum_underlying_invalid", "Число не соответствует отражённому underlying type")
+             "probe_enum_underlying_invalid", "The number does not match the reflected underlying type")
     _require(metadata["path"] == expected["path"] and metadata["name_status"] == "matched" and
              metadata["value_name"] == expected["value_name"] and type(metadata["matched_count"]) is int and
              metadata["matched_count"] == 1 and metadata["ambiguous"] is False and metadata["reason"] is None,
-             "probe_enum_label_mismatch", "Имя значения enum не найдено однозначно по числовому значению")
+             "probe_enum_label_mismatch", "The enum value name was not uniquely found by its numeric value")
     return {"type": prop["type"], "value": prop["value"], "underlying_type": underlying,
             "enum_path": metadata["path"], "value_name": metadata["value_name"]}
 
@@ -98,32 +98,32 @@ def check_snapshot(snapshot: dict, targets: dict[str, dict]) -> dict:
              type(snapshot.get("tick_count")) is int and snapshot["tick_count"] > 0 and
              snapshot.get("consistency") == "single_tick_sequential" and snapshot.get("partial") is False and
              snapshot.get("truncated") is False and isinstance(snapshot.get("objects"), list),
-             "probe_snapshot_incomplete", "Снимок должен быть полным подтверждённым чтением на игровом Tick")
+             "probe_snapshot_incomplete", "The snapshot must be a complete confirmed read on game Tick")
     objects = snapshot["objects"]
     _require(len(objects) == len(targets) and all(isinstance(item, dict) and
                                                isinstance(item.get("handle"), str) for item in objects),
-             "probe_snapshot_object_mismatch", "Снимок не содержит полный набор проверочных объектов")
+             "probe_snapshot_object_mismatch", "The snapshot does not contain the complete probe object set")
     by_handle = {item.get("handle"): item for item in objects}
     _require(len(by_handle) == len(objects) and set(by_handle) == {item["handle"] for item in targets.values()},
-             "probe_snapshot_object_mismatch", "Ссылки объектов снимка неоднозначны или неполны")
+             "probe_snapshot_object_mismatch", "Snapshot object references are ambiguous or incomplete")
     values = {}
     for label, target in targets.items():
         obj = by_handle[target["handle"]]
         _require(obj.get("path") == target["path"] and obj.get("class") == target["class"] and
                  obj.get("partial") is False and obj.get("truncated") is False and "error" not in obj and
                  isinstance(obj.get("properties"), list), "probe_snapshot_object_mismatch",
-                 "Идентичность объекта или полнота его свойств не подтверждена")
+                 "Object identity or property completeness was not confirmed")
         properties = obj["properties"]
         _require(all(isinstance(item, dict) and isinstance(item.get("name"), str) for item in properties),
-                 "probe_property_invalid", "Свойство снимка должно содержать имя")
+                 "probe_property_invalid", "A snapshot property must contain a name")
         by_name = {item["name"]: item for item in properties}
         _require(len(by_name) == len(properties) and set(by_name) == set(PROPERTY_NAMES[label]),
-                 "probe_property_absent", "Набор проверочных свойств неполон или содержит дубликаты")
+                 "probe_property_absent", "The probe property set is incomplete or contains duplicates")
         for name, prop in by_name.items():
             if label == "light":
                 _require(prop.get("type") == "NameProperty" and prop.get("supported") is True and
                          prop.get("value") == "spine_03" and "error" not in prop and "enum" not in prop,
-                         "probe_name_mismatch", "FName m_SocketName должен быть отражённым значением spine_03")
+                         "probe_name_mismatch", "FName m_SocketName must be the reflected spine_03 value")
                 values[name] = {"type": "NameProperty", "value": prop["value"]}
             else:
                 values[name] = check_enum(prop, ENUM_EXPECTATIONS[name])
@@ -141,7 +141,7 @@ def check_comparison(result: dict, before: dict, after: dict) -> None:
                                                            "coverage_changes", "metadata_annotation_count")) and
              result.get("truncated") is False and isinstance(result.get("coverage"), dict) and
              result["coverage"].get("complete") is True and result.get("metadata_annotations") == [],
-             "probe_comparison_mismatch", "Сравнение полных снимков не подтвердило неизменные значения и метаданные")
+             "probe_comparison_mismatch", "Comparison of full snapshots did not confirm unchanged values and metadata")
 
 
 def _single_error(error: BaseException) -> BaseException:
@@ -165,19 +165,19 @@ async def run_probe(args: argparse.Namespace) -> dict:
             required = {"g1r_native_status", "g1r_find_objects", "g1r_snapshot", "g1r_compare_snapshots"}
             _require(required <= names and all(tool.annotations and tool.annotations.read_only_hint is True
                                                for tool in tools if tool.name in required),
-                     "probe_tools_unavailable", "Мост не предоставляет необходимые read-only инструменты")
+                     "probe_tools_unavailable", "The bridge does not provide the required read-only tools")
 
             async def call(name: str, arguments: dict) -> dict:
                 response = await client.call_tool(name, arguments)
                 if response.is_error:
-                    message = next((item.text for item in response.content if item.type == "text"), "Ошибка MCP")
+                    message = next((item.text for item in response.content if item.type == "text"), "MCP error")
                     raise ProbeError("mcp_call_failed", message)
                 _require(isinstance(response.structured_content, dict), "probe_response_invalid",
-                         "Ответ MCP не содержит структурированный JSON")
+                         "The MCP response does not contain structured JSON")
                 return response.structured_content
 
             status = await call("g1r_native_status", {})
-            _require(status.get("ready") is True, "game_not_ready", "Игра и Tick должны быть готовы до этой read-only проверки")
+            _require(status.get("ready") is True, "game_not_ready", "The game and Tick must be ready before this read-only check")
             targets = {}
             discoveries = {}
             for label, expected in PROBE_OBJECTS.items():
@@ -191,13 +191,13 @@ async def run_probe(args: argparse.Namespace) -> dict:
             before_values = check_snapshot(before, targets)
             after = await call("g1r_snapshot", request)
             after_values = check_snapshot(after, targets)
-            _require(before_values == after_values, "probe_values_changed", "Проверочные значения изменились между чтениями")
+            _require(before_values == after_values, "probe_values_changed", "Probe values changed between reads")
             comparison = await call("g1r_compare_snapshots", {"before": before, "after": after})
             check_comparison(comparison, before, after)
             _require(before["session_id"] == after["session_id"] == status.get("session_id") and
                      before["process_id"] == after["process_id"] == status.get("process_id") and
                      before["thread_id"] == after["thread_id"] == status.get("game_thread_id"),
-                     "probe_runtime_changed", "Поток, процесс или сессия изменились во время проверки")
+                     "probe_runtime_changed", "The thread, process, or session changed during the check")
             return {"server_version": initialized.server_info.version, "tool_count": len(tools),
                     "properties": after_values, "equal_selected_values": True, "unknown_count": 0,
                     "discovery": discoveries,
@@ -209,9 +209,9 @@ async def run_probe(args: argparse.Namespace) -> dict:
 def main(argv: list[str] | None = None) -> int:
     class RussianArgumentParser(argparse.ArgumentParser):
         def format_help(self) -> str:
-            return super().format_help().replace("usage:", "Использование:", 1).replace("options:", "Параметры:", 1)
-    parser = RussianArgumentParser(description="Прочитать FName и enum в уже готовой игре через настоящий MCP", add_help=False)
-    parser.add_argument("-h", "--help", action="help", help="Показать справку")
+            return super().format_help().replace("usage:", "usage:", 1).replace("options:", "options:", 1)
+    parser = RussianArgumentParser(description="Read FName and enum in an already ready game through a real MCP", add_help=False)
+    parser.add_argument("-h", "--help", action="help", help="Show help")
     parser.add_argument("--modkit-root", type=Path, default=REPOSITORY_ROOT.parent / "G1R-Modkit")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT)
     parser.add_argument("--native-port", type=int, default=27123)

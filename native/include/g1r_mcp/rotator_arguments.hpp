@@ -17,34 +17,34 @@ using Snapshot=scalar_struct_values::Snapshot;
 inline void validate_layout(const Layout& layout) {
     try {scalar_struct_values::validate_layout(layout);}
     catch(const HandlerError&) {
-        throw HandlerError("unsupported_rotator_layout","FRotator требует три собственных DoubleProperty размером 24");
+        throw HandlerError("unsupported_rotator_layout","FRotator requires three own DoubleProperty fields and size 24");
     }
     if(layout.properties_size!=24 || layout.min_alignment!=8 || layout.has_super || layout.components.size()!=3)
-        throw HandlerError("unsupported_rotator_layout","FRotator требует размер 24 и выравнивание 8");
+        throw HandlerError("unsupported_rotator_layout","FRotator requires size 24 and alignment 8");
     std::set<std::string> names;
     std::set<int> offsets;
     for(const auto& component:layout.components) {
         if(component.layout.type!="DoubleProperty" || component.layout.element_size!=8
            || component.layout.array_dim!=1 || component.offset%8)
-            throw HandlerError("unsupported_rotator_layout","FRotator требует отдельные DoubleProperty");
+            throw HandlerError("unsupported_rotator_layout","FRotator requires separate DoubleProperty fields");
         names.insert(component.name);offsets.insert(component.offset);
     }
     if(names!=std::set<std::string>{"Pitch","Yaw","Roll"} || offsets!=std::set<int>{0,8,16})
-        throw HandlerError("unsupported_rotator_layout","FRotator требует точные компоненты Pitch, Yaw, Roll");
+        throw HandlerError("unsupported_rotator_layout","FRotator requires exact Pitch, Yaw and Roll components");
 }
 
 inline void validate(const Snapshot& value) {
     if(value.path!="/Script/CoreUObject.Rotator" || value.struct_name!="Rotator")
-        throw HandlerError("unsupported_rotator_type","Разрешён только подтверждённый CoreUObject.Rotator");
+        throw HandlerError("unsupported_rotator_type","Only confirmed CoreUObject.Rotator is supported");
     if(value.element_size!=24 || value.array_dim!=1)
-        throw HandlerError("unsupported_rotator_layout","Параметр FRotator требует размер 24 и ArrayDim=1");
+        throw HandlerError("unsupported_rotator_layout","A FRotator parameter requires size 24 and ArrayDim=1");
     rotator_arguments::validate_layout(value.layout);
 }
 
 inline std::array<std::byte,24> encode(const Layout& layout,const nlohmann::json& value) {
     rotator_arguments::validate_layout(layout);
     if(!value.is_object() || value.size()!=3 || !value.contains("Pitch") || !value.contains("Yaw") || !value.contains("Roll"))
-        throw HandlerError("invalid_argument","FRotator требует только {Pitch:number,Yaw:number,Roll:number}");
+        throw HandlerError("invalid_argument","FRotator requires only {Pitch:number,Yaw:number,Roll:number}");
     std::array<std::byte,24> result{};
     for(const auto& component:layout.components) {
         const auto number=double_argument(value.at(component.name));

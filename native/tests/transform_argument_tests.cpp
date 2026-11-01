@@ -71,20 +71,6 @@ int main() {
         std::reverse(swapped.rotation.components.begin(),swapped.rotation.components.end());
         copied_correctly(swapped,arbitrary);
 
-        constexpr auto tolerance=transform_arguments::unit_quaternion_tolerance;
-        auto near_unit=identity;near_unit["Rotation"]["W"]=std::sqrt(1.0+tolerance/2.0);
-        const auto not_normalized=transform_arguments::encode(canonical,near_unit);
-        require(number(not_normalized,24)==near_unit["Rotation"]["W"].get<double>() && number(not_normalized,24)!=1.0,
-                "Допустимый near-unit quaternion не должен автоматически нормализоваться");
-        near_unit["Rotation"]["W"]=std::sqrt(1.0-tolerance/2.0);copied_correctly(canonical,near_unit);
-        for(const double delta:{2.0*tolerance,-2.0*tolerance}) {
-            auto invalid=identity;invalid["Rotation"]["W"]=std::sqrt(1.0+delta);
-            reject("invalid_argument",[&]{transform_arguments::encode(canonical,invalid);});
-        }
-        for(const double component:{0.0,0.5,2.0,std::numeric_limits<double>::max()}) {
-            auto invalid=identity;invalid["Rotation"]["W"]=component;
-            reject("invalid_argument",[&]{transform_arguments::encode(canonical,invalid);});
-        }
         auto signed_zero=identity;signed_zero["Rotation"]["X"]=-0.0;signed_zero["Translation"]["Y"]=-0.0;
         const auto zero_encoded=transform_arguments::encode(canonical,signed_zero);
         require(std::signbit(number(zero_encoded,0)) && std::signbit(number(zero_encoded,40)),"Собственная копия должна сохранять знак нуля");

@@ -1,4 +1,4 @@
-"""Const FTransform input на собственном AS-CDO и native Kismet TransformLocation."""
+"""Const FTransform input on an owned AS CDO and native Kismet TransformLocation."""
 from __future__ import annotations
 
 import argparse
@@ -35,15 +35,15 @@ def check_signature(listing: dict, name: str):
 def check_native_signature(listing: dict) -> tuple[dict, str, str, str]:
     if (not isinstance(listing, dict) or listing.get("truncated") is not False or listing.get("scan_complete") is not True
             or listing.get("scan_truncated") is not False or not isinstance(listing.get("items"), list)):
-        raise ProbeError("probe_signature_invalid", "Не подтверждён полный native TransformLocation каталог")
+        raise ProbeError("probe_signature_invalid", "Complete native TransformLocation catalog is not confirmed")
     matches = [item for item in listing["items"] if isinstance(item, dict) and item.get("name") == NATIVE_METHOD]
-    if len(matches) != 1: raise ProbeError("probe_signature_absent", "Native TransformLocation не найден однозначно")
+    if len(matches) != 1: raise ProbeError("probe_signature_absent", "Native TransformLocation was not found uniquely")
     method = matches[0]
     fields, size = method.get("parameters"), method.get("parameter_size")
     if (not isinstance(fields, list) or len(fields) != 3 or any(not isinstance(field, dict) for field in fields)
             or method.get("parameters_truncated") is not False or type(size) is not int or not 0 <= size <= 160
             or type(method.get("parameter_count")) is not int or method["parameter_count"] != 3):
-        raise ProbeError("probe_signature_mismatch", "TransformLocation требует exact два входа и один Vector возврат")
+        raise ProbeError("probe_signature_mismatch", "TransformLocation requires exactly two inputs and one Vector return")
     spans, transform_name, vector_name, return_count = [], None, None, 0
     for field in fields:
         flags, offset, width, name = field.get("flags"), field.get("offset"), field.get("element_size"), field.get("name")
@@ -54,38 +54,38 @@ def check_native_signature(listing: dict) -> tuple[dict, str, str, str]:
                 or type(width) is not int or width <= 0 or offset + width > 160 or field.get("type") != "StructProperty"
                 or type(field.get("array_dim")) is not int or field["array_dim"] != 1
                 or field["return"] is False and offset + width > size):
-            raise ProbeError("probe_signature_flags", "Native TransformLocation CPF, типы или границы не подтверждены")
+            raise ProbeError("probe_signature_flags", "Native TransformLocation CPF flags, types, or bounds are not confirmed")
         if any(offset < end and start < offset + width for start, end in spans):
-            raise ProbeError("probe_signature_mismatch", "Native TransformLocation параметры пересекаются")
+            raise ProbeError("probe_signature_mismatch", "Native TransformLocation parameters overlap")
         spans.append((offset, offset + width))
         if field["return"]:
             if width != 24 or flags & (0x2 | 0x08000000):
-                raise ProbeError("probe_signature_mismatch", "TransformLocation должен возвращать Vector24 по значению")
+                raise ProbeError("probe_signature_mismatch", "TransformLocation must return Vector24 by value")
             check_parameter_vector_metadata(field, 24, "return")
             return_count += 1
         elif width == 96:
             if (transform_name is not None or not flags & 0x2 or not flags & (0x100 | 0x08000000)
                     or field.get("direction") != "input" or field.get("passing") != "const_reference" or "argument_marker" in field):
-                raise ProbeError("probe_transform_policy", "Native TransformLocation T не подтвердил единственный const-reference Transform")
+                raise ProbeError("probe_transform_policy", "Native TransformLocation T did not confirm a single const-reference Transform")
             metadata = check_transform_metadata(field.get("struct"))
             if offset % metadata["min_alignment"]:
-                raise ProbeError("probe_transform_layout", "Native Transform offset не соответствует public alignment")
+                raise ProbeError("probe_transform_layout", "Native Transform offset does not match public alignment")
             transform_name = name
         elif width == 24:
             const_input = bool(flags & 0x2)
             if (vector_name is not None or field.get("direction") != "input" or "argument_marker" in field
                     or const_input and (not flags & (0x100 | 0x08000000) or field.get("passing") != "const_reference")
                     or not const_input and (flags & (0x100 | 0x08000000) or field.get("passing") != "value")):
-                raise ProbeError("probe_transform_policy", "Native TransformLocation point не подтвердил value/const-reference Vector")
+                raise ProbeError("probe_transform_policy", "Native TransformLocation point did not confirm a value or const-reference Vector")
             check_parameter_vector_metadata(field, 24, "input")
             vector_name = name
         else:
-            raise ProbeError("probe_signature_mismatch", "Native TransformLocation содержит лишний или неподдержанный вход")
+            raise ProbeError("probe_signature_mismatch", "Native TransformLocation contains an extra or unsupported input")
     if transform_name is None or vector_name is None or return_count != 1 or transform_name == vector_name:
-        raise ProbeError("probe_signature_mismatch", "Native TransformLocation входы/возврат не определены однозначно")
+        raise ProbeError("probe_signature_mismatch", "Native TransformLocation inputs and return are not identified uniquely")
     token = method.get("signature_token")
     if not isinstance(token, str) or not TOKEN.fullmatch(token):
-        raise ProbeError("probe_signature_token_absent", "Native TransformLocation не получил signature token")
+        raise ProbeError("probe_signature_token_absent", "Native TransformLocation did not receive a signature token")
     return method, token, transform_name, vector_name
 
 
@@ -94,11 +94,11 @@ async def native_proof(call, report):
     found = await call("g1r_find_objects", {"query": "Default__" + NATIVE_CLASS, "class_query": NATIVE_CLASS,
                                           "exact_path": NATIVE_PATH, "limit": 2})
     if (found.get("truncated") is not False or not isinstance(found.get("items"), list) or len(found["items"]) != 1):
-        raise ProbeError("probe_object_absent", "Exact native KismetMathLibrary CDO не найден однозначно")
+        raise ProbeError("probe_object_absent", "Exact native KismetMathLibrary CDO was not found uniquely")
     target = found["items"][0]
     if (not isinstance(target, dict) or target.get("name") != "Default__" + NATIVE_CLASS or target.get("class") != NATIVE_CLASS
             or target.get("path") != NATIVE_PATH or not isinstance(target.get("handle"), str) or not target["handle"].startswith("obj-")):
-        raise ProbeError("unsafe_probe_target", "Не подтверждён exact native Kismet math CDO")
+        raise ProbeError("unsafe_probe_target", "Exact native Kismet math CDO is not confirmed")
     listing = await call("g1r_object_functions", {"handle": target["handle"], "function_query": NATIVE_METHOD, "limit": 10})
     report["native_math"].update(target=target, reflected_functions=listing)
     _, token, transform_name, vector_name = check_native_signature(listing)
@@ -108,7 +108,7 @@ async def native_proof(call, report):
     result = await call("g1r_invoke", {"handle": target["handle"], "function": NATIVE_METHOD,
         "arguments": {transform_name: transform, vector_name: point}, "expected_signature_token": token})
     if result.get("executed") is not True or result.get("return_type") != "StructProperty":
-        raise ProbeError("probe_transform_native_result", "Native TransformLocation не подтвердил Vector возврат")
+        raise ProbeError("probe_transform_native_result", "Native TransformLocation did not confirm a Vector return")
     check_vector(result.get("result"), expected)
     check_parameter_vector_metadata({"struct": result.get("result_metadata"), "direction": "return"}, 24, "return")
     report["native_math"].update(tested=True, signature_token=token, transform_parameter=transform_name,
@@ -123,7 +123,7 @@ async def exercise(call):
 async def run(args):
     if args.mcp_url:
         if args.mcp_url not in {"http://127.0.0.1:27124/mcp", "http://localhost:27124/mcp"}:
-            raise ProbeError("invalid_mcp_url", "Проверка const Transform использует только локальный MCP")
+            raise ProbeError("invalid_mcp_url", "Const Transform probe uses only local MCP")
         async with streamable_http_client(args.mcp_url) as connection:
             async with ClientSession(connection[0], connection[1]) as session:
                 initialized = await session.initialize()
@@ -138,7 +138,7 @@ async def run(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Проверить dev.20 const Transform input своей fixture и native math")
+    parser = argparse.ArgumentParser(description="Check dev.20 const Transform input on an owned fixture and native math")
     parser.add_argument("--mcp-url")
     parser.add_argument("--modkit-root", type=Path, default=REPOSITORY_ROOT.parent / "G1R-Modkit")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT)

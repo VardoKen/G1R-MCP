@@ -1,4 +1,4 @@
-"""Подготовить собственную const TArray<UObject> input-fixture без запуска игры."""
+"""Prepare an isolated const TArray<UObject> input fixture without launching the game."""
 from __future__ import annotations
 
 import argparse
@@ -50,24 +50,24 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
             "self_object_comparison": "Script/AI/States/FightAI/CombatState/AIState_Combat.as:582",
             "indexed_object_null_comparison": "Script/Gameplay/Magic/Components/Creatures/Demon/DemonAreaRegisterComponent.as:21"}}
     result["limitations"] = [
-        "Const TArray<UObject>&in в UFUNCTION — согласованная композиционная runtime-гипотеза по текущим AS-примерам",
-        "Подготовка не подтверждает компиляцию, CPF-флаги, ArrayProperty/ObjectProperty ABI или владение памятью массива",
-        "self в ожидаемых примерах означает только CDO этой собственной фикстуры; runtime-дескриптор нужен отдельно",
-        "Входной массив и объекты не изменяются, не разыменовываются и не сохраняются",
-        "Array return/out, by-value входы и mutable ref не включены",
-        "Меняется только CallsCount собственного CDO; ResetProbe сбрасывает счётчик",
-        "Игровые объекты мира, spawn и сохранения не используются"]
+        "Const TArray<UObject>&in in UFUNCTION is an approved runtime composition hypothesis based on current AS examples",
+        "Preparation does not confirm compilation, CPF flags, the ArrayProperty/ObjectProperty ABI, or array memory ownership",
+        "self in the expected examples denotes only this fixture's CDO; a runtime descriptor is required separately",
+        "The input array and objects are not changed, dereferenced, or retained",
+        "Array return/out, by-value inputs, and mutable references are not included",
+        "Only CallsCount on the fixture CDO changes; ResetProbe resets the counter",
+        "World game objects, spawning, and saved games are not used"]
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
     class RussianArgumentParser(argparse.ArgumentParser):
         def format_help(self):
-            return super().format_help().replace("usage:", "Использование:", 1).replace("options:", "Параметры:", 1)
-    parser = RussianArgumentParser(description="Подготовить собственную const TArray<UObject> input-fixture внутри artifacts", add_help=False)
-    parser.add_argument("-h", "--help", action="help", help="Показать справку")
+            return super().format_help().replace("usage:", "Usage:", 1).replace("options:", "Options:", 1)
+    parser = RussianArgumentParser(description="Prepare an isolated const TArray<UObject> input fixture within artifacts", add_help=False)
+    parser.add_argument("-h", "--help", action="help", help="Show help")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT / "artifacts/object-array-input-probe-dev22",
-                        help="Отдельный каталог внутри artifacts")
+                        help="A separate directory within artifacts")
     args = parser.parse_args(argv)
     try:
         result = prepare_probe(args.workspace_root)

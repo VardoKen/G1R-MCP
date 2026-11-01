@@ -1,4 +1,4 @@
-"""Одна серия FVector const-reference на собственной AS-fixture и native math CDO."""
+"""One FVector const-reference series on an owned AS fixture and native math CDO."""
 from __future__ import annotations
 
 import argparse
@@ -32,7 +32,7 @@ def check_target(item, *, native=False) -> dict:
     path = NATIVE_PATH if native else "/Script/Angelscript.Default__" + HOST
     if (not isinstance(item, dict) or item.get("name") != "Default__" + host or item.get("class") != host
             or item.get("path") != path or not isinstance(item.get("handle"), str) or not item["handle"].startswith("obj-")):
-        raise ProbeError("unsafe_probe_target", "Не подтверждён exact CDO собственной const-vector fixture или native math")
+        raise ProbeError("unsafe_probe_target", "Exact owned const-vector fixture or native math CDO is not confirmed")
     return item
 
 
@@ -40,16 +40,16 @@ def check_signature(listing: dict, name: str, vector_size: int, *, native=False)
     if (name not in ((NATIVE_METHOD,) if native else METHODS) or not isinstance(listing, dict)
             or listing.get("truncated") is not False or listing.get("scan_complete") is not True
             or listing.get("scan_truncated") is not False or not isinstance(listing.get("items"), list)):
-        raise ProbeError("probe_signature_invalid", "Не подтверждён полный каталог const-vector методов")
+        raise ProbeError("probe_signature_invalid", "Complete const-vector method catalog is not confirmed")
     matches = [item for item in listing["items"] if isinstance(item, dict) and item.get("name") == name]
     if len(matches) != 1:
-        raise ProbeError("probe_signature_absent", "Const-vector метод не найден однозначно")
+        raise ProbeError("probe_signature_absent", "Const-vector method was not found uniquely")
     method = matches[0]
     fields, size = method.get("parameters"), method.get("parameter_size")
     if (not isinstance(fields, list) or any(not isinstance(field, dict) for field in fields)
             or method.get("parameters_truncated") is not False or type(size) is not int or not 0 <= size <= 64
             or type(method.get("parameter_count")) is not int or method["parameter_count"] != len(fields)):
-        raise ProbeError("probe_signature_mismatch", "Не подтверждены NumParms и ограниченный const-vector буфер")
+        raise ProbeError("probe_signature_mismatch", "NumParms and bounded const-vector buffer are not confirmed")
     returned = [field for field in fields if field.get("return") is True]
     arguments = [field for field in fields if field.get("return") is False]
     expected_return = (("BoolProperty", 1) if native else
@@ -59,10 +59,10 @@ def check_signature(listing: dict, name: str, vector_size: int, *, native=False)
     if (len(returned) != (expected_return is not None) or len(arguments) != has_input
             or len(fields) != len(returned) + len(arguments)
             or returned and (returned[0].get("type"), returned[0].get("element_size")) != expected_return):
-        raise ProbeError("probe_signature_mismatch", "Не совпали exact const FVector вход и возврат по значению")
+        raise ProbeError("probe_signature_mismatch", "Exact const FVector input and by-value return do not match")
     if arguments and (not isinstance(arguments[0].get("name"), str) or not arguments[0]["name"]
                       or not native and arguments[0]["name"] != "Input"):
-        raise ProbeError("probe_signature_mismatch", "Не подтверждено имя единственного FVector входа")
+        raise ProbeError("probe_signature_mismatch", "Single FVector input name is not confirmed")
     spans = []
     for field in fields:
         flags, offset, width = field.get("flags"), field.get("offset"), field.get("element_size")
@@ -74,24 +74,24 @@ def check_signature(listing: dict, name: str, vector_size: int, *, native=False)
                 or bool(flags & 0x08000000) is not field.get("reference")
                 or bool(flags & 0x2) is not field.get("const")
                 or field["return"] is False and offset + width > size):
-            raise ProbeError("probe_signature_flags", "CPF-флаги, ArrayDim или границы const-vector буфера не подтверждены")
+            raise ProbeError("probe_signature_flags", "CPF flags, ArrayDim, or const-vector buffer bounds are not confirmed")
         if any(offset < end and start < offset + width for start, end in spans):
-            raise ProbeError("probe_signature_mismatch", "Диапазоны const-vector-параметров пересекаются")
+            raise ProbeError("probe_signature_mismatch", "Const-vector parameter ranges overlap")
         spans.append((offset, offset + width))
         if field["return"]:
             if flags & (0x2 | 0x08000000):
-                raise ProbeError("probe_signature_mismatch", "Возврат должен быть по значению без const/ref")
+                raise ProbeError("probe_signature_mismatch", "Return must be by value without const/ref")
             if field["type"] == "StructProperty":
                 check_parameter_vector_metadata(field, vector_size, "return")
         else:
             if (field.get("type") != "StructProperty" or width != vector_size or not flags & 0x2
                     or not flags & (0x100 | 0x08000000) or field.get("passing") != "const_reference"
                     or "argument_marker" in field):
-                raise ProbeError("probe_const_vector_policy", "Вход не подтвердил Const+(Ref|Out), passing=const_reference без out-маркера")
+                raise ProbeError("probe_const_vector_policy", "Input did not confirm Const+(Ref|Out), passing=const_reference, without an out marker")
             check_parameter_vector_metadata(field, vector_size, "input")
     token = method.get("signature_token")
     if not isinstance(token, str) or not TOKEN.fullmatch(token):
-        raise ProbeError("probe_signature_token_absent", "Const-vector метод не получил корректный токен")
+        raise ProbeError("probe_signature_token_absent", "Const-vector method did not receive a valid token")
     return method, token
 
 
@@ -103,14 +103,14 @@ async def exercise(call) -> dict:
         status = await call("g1r_native_status", {})
         session_id = status.get("session_id")
         if status.get("ready") is not True or not isinstance(session_id, str) or not session_id:
-            raise ProbeError("game_not_ready", "Не подтверждены Tick и текущая native-сессия")
+            raise ProbeError("game_not_ready", "Tick and current native session are not confirmed")
 
         async def find(native=False):
             host = NATIVE_CLASS if native else HOST
             found = await call("g1r_find_objects", {"query": "Default__" + host, "class_query": host,
                 "exact_path": NATIVE_PATH if native else "/Script/Angelscript.Default__" + HOST, "limit": 2})
             if (found.get("truncated") is not False or not isinstance(found.get("items"), list) or len(found["items"]) != 1):
-                raise ProbeError("probe_object_absent", "Exact const-vector/native-math CDO не найден однозначно")
+                raise ProbeError("probe_object_absent", "Exact const-vector/native-math CDO was not found uniquely")
             return check_target(found["items"][0], native=native)
 
         target = await find()
@@ -122,7 +122,7 @@ async def exercise(call) -> dict:
             report["reflected_functions"][name] = listing
             methods[name], tokens[name] = check_signature(listing, name, layout["size"])
         if len(set(tokens.values())) != len(tokens):
-            raise ProbeError("probe_signature_token_alias", "Разные const-vector методы получили один токен")
+            raise ProbeError("probe_signature_token_alias", "Different const-vector methods received the same token")
 
         async def invoke(name, arguments=None, *, expected_error=None):
             payload = {} if arguments is None else arguments
@@ -134,7 +134,7 @@ async def exercise(call) -> dict:
         check_scalar(await invoke("ReadCallsCount"), "IntProperty", 0)
         result = await invoke("GetVector")
         if result.get("executed") is not True or result.get("return_type") != "StructProperty":
-            raise ProbeError("probe_const_vector_return", "GetVector не подтвердил возврат по значению")
+            raise ProbeError("probe_const_vector_return", "GetVector did not confirm a by-value return")
         check_vector(result.get("result"), STORED)
         check_parameter_vector_metadata({"struct": result.get("result_metadata"), "direction": "return"}, layout["size"], "return")
         report.update(session_id=session_id, handle=handle, signature_tokens=tokens, layout=layout)
@@ -147,7 +147,7 @@ async def exercise(call) -> dict:
             cleanup_required = True
             result = await invoke("EchoConstVector", {"Input": value})
             if result.get("executed") is not True or result.get("return_type") != "StructProperty":
-                raise ProbeError("probe_const_vector_return", "EchoConstVector не подтвердил возврат по значению")
+                raise ProbeError("probe_const_vector_return", "EchoConstVector did not confirm a by-value return")
             check_vector(result.get("result"), value)
             check_parameter_vector_metadata({"struct": result.get("result_metadata"), "direction": "return"}, layout["size"], "return")
             count += 1
@@ -170,7 +170,7 @@ async def exercise(call) -> dict:
             except ValueError:
                 local_nonfinite += 1
             else:
-                raise ProbeError("probe_nonfinite_transport", "JSON nonfinite отправлен на MCP вместо локального отказа")
+                raise ProbeError("probe_nonfinite_transport", "Nonfinite JSON was sent to MCP instead of being rejected locally")
         report["local_nonfinite_json_rejections"] = local_nonfinite
         check_layout(await call("g1r_read_struct", {"handle": handle, "property_name": "StoredVector"}), target, session_id)
         report["checks"].append("malformed_const_vector_missing_unknown_and_nonfinite_json_refused_without_counter_change")
@@ -199,7 +199,7 @@ async def exercise(call) -> dict:
         if cleanup_required:
             if getattr(failure, "code", None) in UNKNOWN_GAME:
                 report["cleanup"].append("skipped_unusable_or_unknown_game_root_stops")
-                failure.add_note("Очистка const-vector пропущена после неопределённого вызова или недоступного соединения; игру завершает владелец development-сеанса")
+                failure.add_note("Const-vector cleanup skipped after an uncertain call or unavailable connection; the development session owner stops the game")
             else:
                 async def finish_cleanup():
                     check_scalar(await invoke("ResetProbe"), "", None)
@@ -212,13 +212,13 @@ async def exercise(call) -> dict:
                 except BaseException as error:
                     if failure is None:
                         raise
-                    failure.add_note("Не подтверждена очистка собственного const-vector-CDO: " + str(error))
+                    failure.add_note("Owned const-vector CDO cleanup is not confirmed: " + str(error))
 
 
 async def run(args) -> dict:
     if args.mcp_url:
         if args.mcp_url not in {"http://127.0.0.1:27124/mcp", "http://localhost:27124/mcp"}:
-            raise ProbeError("invalid_mcp_url", "Проверка const-vector использует только локальный MCP")
+            raise ProbeError("invalid_mcp_url", "Const-vector probe uses only local MCP")
         async with streamable_http_client(args.mcp_url) as connection:
             async with ClientSession(connection[0], connection[1]) as session:
                 initialized = await session.initialize()
@@ -233,7 +233,7 @@ async def run(args) -> dict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Проверить dev.18 const FVector input на своей AS-fixture и native math")
+    parser = argparse.ArgumentParser(description="Check dev.18 const FVector input on an owned AS fixture and native math")
     parser.add_argument("--mcp-url")
     parser.add_argument("--modkit-root", type=Path, default=REPOSITORY_ROOT.parent / "G1R-Modkit")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT)

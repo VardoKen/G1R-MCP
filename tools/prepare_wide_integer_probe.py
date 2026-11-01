@@ -1,4 +1,4 @@
-"""Подготовить собственную wide-integer fixture внутри artifacts без игры."""
+"""Prepare an isolated wide-integer fixture within artifacts without the game."""
 from __future__ import annotations
 
 import argparse
@@ -46,21 +46,21 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
             "uint32": "Script/AI/States/FightAI/CombatState/AIState_Combat_G1R.as:1267",
             "int64": "Script/Story/G1R/Quest/Quest_ValleyOfMines_VoMCHAPTER4_ULUMULU_ULUMULU_OBJ_ZARR.as:25"}}
     result["limitations"] = [
-        "Подготовка не подтверждает компиляцию или runtime-маршалинг int64/uint64/uint32",
-        "Точные Int64Property/UInt64Property/UInt32Property и размеры сначала подтверждаются reflection",
-        "Echo меняет только CallsCount собственного CDO; ResetProbe восстанавливает ноль",
-        "JSON содержит целые числа точно; превращение в float в клиенте не допускается"]
+        "Preparation does not confirm compilation or runtime marshaling of int64/uint64/uint32",
+        "The exact Int64Property/UInt64Property/UInt32Property types and sizes must first be confirmed by reflection",
+        "Echo changes only CallsCount on the fixture CDO; ResetProbe restores zero",
+        "JSON represents integers exactly; client conversion to float is not allowed"]
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
     class RussianArgumentParser(argparse.ArgumentParser):
         def format_help(self):
-            return super().format_help().replace("usage:", "Использование:", 1).replace("options:", "Параметры:", 1)
-    parser = RussianArgumentParser(description="Подготовить собственную wide-integer fixture внутри artifacts", add_help=False)
-    parser.add_argument("-h", "--help", action="help", help="Показать справку")
+            return super().format_help().replace("usage:", "Usage:", 1).replace("options:", "Options:", 1)
+    parser = RussianArgumentParser(description="Prepare an isolated wide-integer fixture within artifacts", add_help=False)
+    parser.add_argument("-h", "--help", action="help", help="Show help")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT / "artifacts/wide-integer-probe-dev15",
-                        help="Отдельный каталог внутри artifacts")
+                        help="A separate directory within artifacts")
     args = parser.parse_args(argv)
     try:
         result = prepare_probe(args.workspace_root)

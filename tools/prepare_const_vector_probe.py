@@ -1,4 +1,4 @@
-"""Подготовить собственную const FVector ref-fixture без запуска игры."""
+"""Prepare an isolated const FVector reference fixture without launching the game."""
 from __future__ import annotations
 
 import argparse
@@ -44,22 +44,22 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
             "ufunction_const_struct_in": "Script/AI/CharacterAI_Gothic.as:1292",
             "ufunction_const_struct_in_second": "Script/GAS/Abilities/Locomotion/Actors/RagdollFallingActor.as:40"}}
     result["limitations"] = [
-        "Const FVector&in в UFUNCTION — согласованная композиционная runtime-гипотеза по текущим AS-примерам",
-        "Подготовка не подтверждает компиляцию, CPF Const/Reference/Out-флаги или числовой ABI FVector",
-        "EchoConstVector не пишет во вход; только CallsCount своего CDO меняется и сбрасывается ResetProbe",
-        "Mutable inout, pure out и другие ref-типы не включены",
-        "StoredVector остаётся неизменным; игровые объекты, мир и сохранения не используются"]
+        "Const FVector&in in UFUNCTION is an approved runtime composition hypothesis based on current AS examples",
+        "Preparation does not confirm compilation, CPF Const/Reference/Out flags, or the numeric FVector ABI",
+        "EchoConstVector does not write to its input; only CallsCount on its CDO changes and is reset by ResetProbe",
+        "Mutable inout, pure out, and other reference types are not included",
+        "StoredVector remains unchanged; game objects, the world, and saved games are not used"]
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
     class RussianArgumentParser(argparse.ArgumentParser):
         def format_help(self):
-            return super().format_help().replace("usage:", "Использование:", 1).replace("options:", "Параметры:", 1)
-    parser = RussianArgumentParser(description="Подготовить собственную const FVector fixture внутри artifacts", add_help=False)
-    parser.add_argument("-h", "--help", action="help", help="Показать справку")
+            return super().format_help().replace("usage:", "Usage:", 1).replace("options:", "Options:", 1)
+    parser = RussianArgumentParser(description="Prepare an isolated const FVector fixture within artifacts", add_help=False)
+    parser.add_argument("-h", "--help", action="help", help="Show help")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT / "artifacts/const-vector-probe-dev18",
-                        help="Отдельный каталог внутри artifacts")
+                        help="A separate directory within artifacts")
     args = parser.parse_args(argv)
     try:
         result = prepare_probe(args.workspace_root)

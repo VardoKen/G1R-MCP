@@ -1,4 +1,4 @@
-// Помощники принадлежат инструменту G1R MCP. FHitResult обслуживается AngelScript.
+// Helpers belong to the G1R MCP tool. AngelScript manages FHitResult.
 UCLASS()
 class UG1RMCPDevelopmentHelpers : UScriptWorldSubsystem
 {

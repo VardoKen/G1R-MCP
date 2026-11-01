@@ -11,7 +11,7 @@
 
 namespace g1r_mcp::vector_arguments {
 
-// Только собственная POD-копия. Identity UScriptStruct подтверждается вызывающим кодом.
+// Only an owned POD copy. The caller confirms UScriptStruct identity.
 struct EncodedVector {
     std::array<std::byte,24> bytes{};
     int size{};
@@ -24,13 +24,13 @@ inline void validate_layout(const struct_values::Layout& layout) {
 inline EncodedVector encode(const struct_values::Layout& layout,const nlohmann::json& value) {
     vector_arguments::validate_layout(layout);
     if(!value.is_object() || value.size()!=3 || !value.contains("X") || !value.contains("Y") || !value.contains("Z"))
-        throw HandlerError("invalid_argument","FVector требует только {X:number,Y:number,Z:number}");
+        throw HandlerError("invalid_argument","FVector requires only {X:number,Y:number,Z:number}");
     EncodedVector result;
     result.size=layout.properties_size;
     for(const auto& component:layout.components) {
         const auto& input=value.at(component.name);
         if(component.element_size==4) {
-            // Политика округления совпадает с прежним scalar float input.
+            // Rounding follows the existing scalar float input policy.
             const auto number=float_argument(input);
             std::memcpy(result.bytes.data()+component.offset,&number,sizeof(number));
         } else {

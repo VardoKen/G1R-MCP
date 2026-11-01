@@ -15,16 +15,16 @@ inline void validate(const nlohmann::json& names) {
     std::unordered_set<std::string> unique;
     for(const auto& value:names) {
         if(!value.is_string())
-            throw HandlerError("invalid_property_names", "Каждое имя свойства должно быть строкой");
+            throw HandlerError("invalid_property_names", "Each property name must be a string");
         const auto& name=value.get_ref<const std::string&>();
         if(name.empty() || name.find('\0')!=std::string::npos)
             throw HandlerError("invalid_property_names", "A property name must be nonempty and contain no NUL");
         if(!unique.insert(name).second)
-            throw HandlerError("invalid_property_names", "Имена свойств не должны повторяться");
+            throw HandlerError("invalid_property_names", "Property names must be unique");
     }
 }
 
-// Проверка запроса завершается до reader. Имена не нормализуются и не переставляются.
+// Validate the request before invoking reader. Names are neither normalized nor reordered.
 template<class Reader>
 auto validated(const nlohmann::json& names,Reader&& reader) {
     validate(names);

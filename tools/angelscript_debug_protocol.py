@@ -1,13 +1,13 @@
-"""Ограниченный кодек диагностического протокола AngelScript-отладчика.
+"""Bounded codec for the AngelScript debugger diagnostic protocol.
 
-Независимая реализация по формату открытого клиента Hazelight, MIT,
-Copyright 2019 Hazelight Games AB; исходный код не копировался.
-Ревизия: ffc7ab2948589abb04200b7dcedd326eaeaf7a4d.
+Independent implementation based on the open Hazelight client format, MIT,
+Copyright 2019 Hazelight Games AB; source code was not copied.
+Revision: ffc7ab2948589abb04200b7dcedd326eaeaf7a4d.
 https://github.com/Hazelight/vscode-unreal-angelscript/blob/ffc7ab2948589abb04200b7dcedd326eaeaf7a4d/extension/src/unreal-debugclient.ts
 https://github.com/Hazelight/vscode-unreal-angelscript/blob/ffc7ab2948589abb04200b7dcedd326eaeaf7a4d/extension/src/debug.ts
 
-Заголовки направлений различаются: клиентская длина включает type,
-серверная — только payload. Совместимость с G1R требует отдельной пробы.
+Direction headers differ: client length includes type,
+while server length includes only payload. G1R compatibility requires a separate probe.
 """
 
 from dataclasses import dataclass
@@ -16,7 +16,7 @@ import struct
 
 
 class ProtocolError(ValueError):
-    """Сообщение нарушает проверяемый формат или диагностический предел."""
+    """A message violates the validated format or diagnostic limit."""
 
 
 class MessageType(IntEnum):
@@ -33,38 +33,38 @@ class MessageType(IntEnum):
 
 @dataclass(frozen=True)
 class Frame:
-    """Серверное сообщение без предположений о неизвестном payload."""
+    """Server message without assumptions about unknown payload."""
 
     message_type: int
     payload: bytes
 
 
 def encode_client_frame(message_type: int, payload: bytes = b"") -> bytes:
-    """Собрать исходящий кадр: длина включает однобайтовый тип."""
+    """Build an outgoing frame: length includes the one-byte type."""
     if not 0 <= message_type <= 255:
-        raise ProtocolError("Тип сообщения должен помещаться в один байт")
+        raise ProtocolError("Message type must fit in one byte")
     if len(payload) > 0xFFFFFFFE:
-        raise ProtocolError("Исходящий payload превышает формат uint32")
+        raise ProtocolError("Outgoing payload exceeds the uint32 format")
     return struct.pack("<IB", len(payload) + 1, message_type) + payload
 
 
 def encode_ascii_string(value: str) -> bytes:
-    """Записать подтверждённый исходящий ASCII FString с конечным NUL."""
+    """Encode a confirmed outgoing ASCII FString with a trailing NUL."""
     if "\0" in value:
-        raise ProtocolError("Исходящая строка содержит встроенный NUL")
+        raise ProtocolError("Outgoing string contains an embedded NUL")
     try:
         encoded = value.encode("ascii")
     except UnicodeEncodeError as error:
-        raise ProtocolError("Исходящий Unicode-формат не подтверждён; допустим ASCII") from error
+        raise ProtocolError("Outgoing Unicode format is not confirmed; ASCII is supported") from error
     if len(encoded) >= 0x7FFFFFFF:
-        raise ProtocolError("Исходящая строка превышает формат int32")
+        raise ProtocolError("Outgoing string exceeds the int32 format")
     return struct.pack("<i", len(encoded) + 1) + encoded + b"\0"
 
 
 def encode_evaluate(expression: str, frame_id: int) -> bytes:
-    """Собрать один запрос Evaluate; frame_id не имеет доказанного default."""
+    """Build one Evaluate request; frame_id has no confirmed default."""
     if not -0x80000000 <= frame_id <= 0x7FFFFFFF:
-        raise ProtocolError("frame_id должен помещаться в int32")
+        raise ProtocolError("frame_id must fit in int32")
     return encode_client_frame(
         MessageType.REQUEST_EVALUATE,
         encode_ascii_string(expression) + struct.pack("<i", frame_id),
@@ -72,11 +72,11 @@ def encode_evaluate(expression: str, frame_id: int) -> bytes:
 
 
 class ServerFrameDecoder:
-    """Пошаговое чтение серверных кадров с пределом одного payload."""
+    """Incrementally read server frames with a limit for each payload."""
 
     def __init__(self, max_payload_bytes: int):
         if not 1 <= max_payload_bytes <= 0xFFFFFFFF:
-            raise ValueError("Предел payload должен быть положительным uint32")
+            raise ValueError("Payload limit must be a positive uint32")
         self.max_payload_bytes = max_payload_bytes
         self._buffer = bytearray()
 
@@ -85,7 +85,7 @@ class ServerFrameDecoder:
         return len(self._buffer)
 
     def feed(self, data: bytes) -> list[Frame]:
-        """Потребить фрагмент; несколько полных кадров могут идти подряд."""
+        """Consume a fragment; multiple complete frames may follow one another."""
         frames = []
         offset = 0
         while offset < len(data):
@@ -94,7 +94,7 @@ class ServerFrameDecoder:
             else:
                 payload_length = struct.unpack_from("<I", self._buffer)[0]
                 if payload_length > self.max_payload_bytes:
-                    raise ProtocolError("Серверный payload превышает диагностический предел")
+                    raise ProtocolError("Server payload exceeds the diagnostic limit")
                 needed = 5 + payload_length - len(self._buffer)
             take = min(needed, len(data) - offset)
             self._buffer.extend(data[offset:offset + take])
@@ -103,20 +103,20 @@ class ServerFrameDecoder:
                 continue
             payload_length, message_type = struct.unpack_from("<IB", self._buffer)
             if payload_length > self.max_payload_bytes:
-                raise ProtocolError("Серверный payload превышает диагностический предел")
+                raise ProtocolError("Server payload exceeds the diagnostic limit")
             if len(self._buffer) == 5 + payload_length:
                 frames.append(Frame(message_type, bytes(self._buffer[5:])))
                 self._buffer.clear()
         return frames
 
     def finish(self) -> None:
-        """Подтвердить отсутствие неполного кадра при закрытии/timeout."""
+        """Confirm that no incomplete frame remains on close or timeout."""
         if self._buffer:
-            raise ProtocolError("Получен незавершённый серверный кадр")
+            raise ProtocolError("An incomplete server frame was received")
 
 
 class PayloadReader:
-    """Проверяемые int32 и FString внутри уже ограниченного payload."""
+    """Validated int32 and FString values inside an already bounded payload."""
 
     def __init__(self, payload: bytes):
         self.payload = payload
@@ -124,7 +124,7 @@ class PayloadReader:
 
     def _take(self, count: int) -> bytes:
         if count > len(self.payload) - self.offset:
-            raise ProtocolError("Payload обрезан при чтении значения")
+            raise ProtocolError("Payload is truncated while reading a value")
         value = self.payload[self.offset:self.offset + count]
         self.offset += count
         return value
@@ -135,18 +135,18 @@ class PayloadReader:
     def read_string(self) -> str:
         count = self.read_int()
         if count == -0x80000000:
-            raise ProtocolError("Некорректная длина FString")
+            raise ProtocolError("Invalid FString length")
         raw = self._take(-count * 2 if count < 0 else count)
         try:
             value = raw.decode("utf-16le" if count < 0 else "utf-8", errors="strict")
         except UnicodeDecodeError as error:
-            raise ProtocolError("FString содержит некорректную кодировку") from error
-        # Upstream снимает конечный NUL, но не требует его наличия.
+            raise ProtocolError("FString contains invalid encoding") from error
+        # Upstream removes a trailing NUL but does not require it to be present.
         return value[:-1] if value.endswith("\0") else value
 
     def finish(self) -> None:
         if self.offset != len(self.payload):
-            raise ProtocolError("В известном payload остались лишние байты")
+            raise ProtocolError("Unexpected bytes remain in a known payload")
 
 
 def decode_server_version(payload: bytes) -> int:
@@ -157,7 +157,7 @@ def decode_server_version(payload: bytes) -> int:
 
 
 def decode_evaluate(payload: bytes) -> dict:
-    """Ответ не имеет request_id; принадлежность определяется единственным запросом."""
+    """The response has no request_id; ownership is determined by the single request."""
     reader = PayloadReader(payload)
     result = {
         "name": reader.read_string(),

@@ -17,7 +17,7 @@
 
 namespace g1r::enum_values {
 
-// Читаются только переданные копии. Проверка UObject/UEnum остаётся у вызывающего кода.
+// Read only supplied copies. The caller validates UObject and UEnum.
 using Integer = std::variant<std::int64_t, std::uint64_t>;
 
 struct IntegerLayout {
@@ -68,7 +68,7 @@ inline bool label_value(const Integer& value, std::int64_t& result) noexcept {
     return true;
 }
 
-// MemberVariableLayout: TTuple<FName,int64>, FName — 8 байт; копия строки таблицы — 16 байт.
+// MemberVariableLayout: TTuple<FName,int64>; FName is 8 bytes and each copied table entry is 16 bytes.
 struct Entry {
     std::uint64_t name;
     std::int64_t value;
@@ -116,7 +116,7 @@ inline bool valid_label(std::string_view value) noexcept {
 }
 
 struct LabelMatch {
-    std::string status; // matched, not_found, value_unrepresentable или unavailable
+    std::string status; // matched, not_found, value_unrepresentable or unavailable
     std::string name;
     std::size_t matched_count = 0;
     bool ambiguous = false;

@@ -1,4 +1,4 @@
-"""Проверить только собственную class-fixture через готовый MCP без запуска игры."""
+"""Check only the owned class fixture through ready MCP without launching the game."""
 from __future__ import annotations
 
 import argparse
@@ -35,53 +35,53 @@ def check_target(item: dict, name: str, *, host: bool = False) -> dict:
             or item.get("name") != expected or item.get("path") != "/Script/Angelscript." + expected
             or item.get("class") not in ((HOST,) if host else ("Class", "AngelscriptClass", "ASClass"))
             or not isinstance(item.get("handle"), str) or not item["handle"].startswith("obj-")):
-        raise ProbeError("unsafe_probe_target", "Не подтверждён точный собственный class-fixture объект")
+        raise ProbeError("unsafe_probe_target", "Exact owned class fixture object is not confirmed")
     return item
 
 
 def check_signature(functions: dict, name: str) -> dict:
     if name not in SIGNATURES or not isinstance(functions, dict):
-        raise ProbeError("probe_signature_invalid", "Неизвестный проверочный метод")
+        raise ProbeError("probe_signature_invalid", "Unknown probe method")
     matches = [item for item in functions.get("items", []) if item.get("name") == name]
     if len(matches) != 1:
-        raise ProbeError("probe_signature_absent", "Проверочный метод не найден однозначно")
+        raise ProbeError("probe_signature_absent", "Probe method was not found uniquely")
     method, expected = matches[0], SIGNATURES[name]
     parameters, size = method.get("parameters"), method.get("parameter_size")
     if not isinstance(parameters, list) or type(size) is not int or not 0 <= size <= 32:
-        raise ProbeError("probe_signature_mismatch", "Не подтверждён буфер проверочного метода")
+        raise ProbeError("probe_signature_mismatch", "Probe method buffer is not confirmed")
     if any(not isinstance(parameter, dict) for parameter in parameters):
-        raise ProbeError("probe_signature_mismatch", "Некорректные параметры проверочного метода")
+        raise ProbeError("probe_signature_mismatch", "Invalid probe method parameters")
     inputs, output = expected
     actual_inputs = [parameter for parameter in parameters if parameter.get("return") is not True]
     actual_outputs = [parameter for parameter in parameters if parameter.get("return") is True]
     if len(actual_inputs) != len(inputs) or len(actual_outputs) != (output is not None):
-        raise ProbeError("probe_signature_mismatch", "Не совпали входы или возврат")
+        raise ProbeError("probe_signature_mismatch", "Inputs or return do not match")
     for parameter, wanted in zip(actual_inputs, inputs):
         if (parameter.get("name"), parameter.get("type"), parameter.get("element_size")) != wanted:
-            raise ProbeError("probe_signature_mismatch", "Не совпал тип аргумента")
+            raise ProbeError("probe_signature_mismatch", "Argument type does not match")
     if output is not None and (actual_outputs[0].get("type"), actual_outputs[0].get("element_size")) != output:
-        raise ProbeError("probe_signature_mismatch", "Не совпал тип возврата")
+        raise ProbeError("probe_signature_mismatch", "Return type does not match")
     for parameter in parameters:
         offset, element_size = parameter.get("offset"), parameter.get("element_size")
         if (parameter.get("reference") is True or parameter.get("out") is True and parameter.get("return") is not True
                 or type(offset) is not int or type(element_size) is not int or offset < 0 or element_size < 1
                 or offset + element_size > 32 or parameter.get("return") is not True and offset + element_size > size):
-            raise ProbeError("probe_signature_mismatch", "Не совпала ограниченная раскладка параметров")
+            raise ProbeError("probe_signature_mismatch", "Bounded parameter layout does not match")
     return method
 
 
 def check_result(result: dict, expected: dict | None, session_id: str | None = None) -> None:
     if result.get("executed") is not True:
-        raise ProbeError("probe_not_executed", "Не подтверждено выполнение проверочного метода")
+        raise ProbeError("probe_not_executed", "Probe method execution is not confirmed")
     value = result.get("result")
     if expected is None:
         if value is not None:
-            raise ProbeError("probe_null_mismatch", "Null-класс вернулся не как null")
+            raise ProbeError("probe_null_mismatch", "Null class was not returned as null")
     elif (not isinstance(value, dict) or any(value.get(key) != expected.get(key)
           for key in ("handle", "index", "name", "path", "class"))
           or not isinstance(value.get("session_id"), str) or not value["session_id"]
           or session_id is not None and value["session_id"] != session_id):
-        raise ProbeError("probe_class_identity", "Не сохранена идентичность объекта класса")
+        raise ProbeError("probe_class_identity", "Class object identity was not preserved")
 
 
 def snapshot_values(snapshot: dict, host: dict, session_id: str | None = None) -> dict:
@@ -92,13 +92,13 @@ def snapshot_values(snapshot: dict, host: dict, session_id: str | None = None) -
             or session_id is not None and (snapshot.get("session_id") != session_id
                 or snapshot.get("source") != "live_native" or snapshot.get("consistency") != "single_tick_sequential"
                 or any(objects[0].get(key) != host[key] for key in ("path", "class")))):
-        raise ProbeError("probe_snapshot_invalid", "Не подтверждён полный снимок собственных полей")
+        raise ProbeError("probe_snapshot_invalid", "Complete owned-field snapshot is not confirmed")
     result = {}
     for name in PROPERTIES:
         fields = [field for field in objects[0].get("properties", []) if field.get("name") == name]
         if (len(fields) != 1 or fields[0].get("supported") is not True
                 or fields[0].get("type") != "ClassProperty" or fields[0].get("error") or "value" not in fields[0]):
-            raise ProbeError("probe_snapshot_invalid", "Не подтверждено class-свойство")
+            raise ProbeError("probe_snapshot_invalid", "Class property is not confirmed")
         result[name] = fields[0].get("value")
     return result
 
@@ -112,27 +112,27 @@ async def exercise(call) -> dict:
     try:
         status = await call("g1r_native_status", {})
         if not status.get("ready"):
-            raise ProbeError("game_not_ready", "Нативная игровая очередь не готова")
+            raise ProbeError("game_not_ready", "Native game queue is not ready")
         session_id = status.get("session_id")
         if not isinstance(session_id, str) or not session_id:
-            raise ProbeError("probe_owner_unknown", "Не подтверждён владелец нативной сессии")
+            raise ProbeError("probe_owner_unknown", "Native session owner is not confirmed")
         found = await call("g1r_find_objects", {"query": "Default__" + HOST, "class_query": HOST, "limit": 50})
         exact = [item for item in found.get("items", []) if item.get("name") == "Default__" + HOST]
         if len(exact) != 1:
-            raise ProbeError("probe_object_absent", "CDO собственного класса не найден однозначно")
+            raise ProbeError("probe_object_absent", "Owned class CDO was not found uniquely")
         host = check_target(exact[0], HOST, host=True)
         functions = await call("g1r_object_functions", {"handle": host["handle"], "limit": 100})
         for method in SIGNATURES:
             check_signature(functions, method)
         marker = await call("g1r_invoke", {"handle": host["handle"], "function": "ReadMarker", "arguments": {}})
         if marker.get("executed") is not True or type(marker.get("result")) is not int or marker["result"] != 61:
-            raise ProbeError("probe_marker_mismatch", "Собственный CDO не вернул маркер 61")
+            raise ProbeError("probe_marker_mismatch", "Owned CDO did not return marker 61")
         classes = {}
         for name in CLASS_NAMES:
             found = await call("g1r_find_objects", {"query": name, "class_query": "", "limit": 100})
             exact = [item for item in found.get("items", []) if item.get("name") == name]
             if len(exact) != 1:
-                raise ProbeError("probe_class_absent", "Собственный объект класса не найден однозначно")
+                raise ProbeError("probe_class_absent", "Owned class object was not found uniquely")
             classes[name] = check_target(exact[0], name)
         base, derived, other = (classes[name] for name in CLASS_NAMES)
         report["checks"].append("exact_host_marker_classes_signatures")
@@ -143,7 +143,7 @@ async def exercise(call) -> dict:
 
         initial = await call("g1r_snapshot", {"targets": [{"handle": host["handle"], "properties": PROPERTIES}]})
         if initial.get("session_id") != session_id:
-            raise ProbeError("probe_snapshot_owner", "Начальный снимок принадлежит другой сессии")
+            raise ProbeError("probe_snapshot_owner", "Initial snapshot belongs to a different session")
         for value in snapshot_values(initial, host).values():
             check_result({"executed": True, "result": value}, base, session_id)
         report["checks"].append("initial_class_defaults_match_base_and_session")
@@ -165,9 +165,9 @@ async def exercise(call) -> dict:
         await invoke("StoreTypedClass", None)
         before = await call("g1r_snapshot", {"targets": [{"handle": host["handle"], "properties": PROPERTIES}]})
         if before.get("session_id") != session_id:
-            raise ProbeError("probe_snapshot_owner", "Снимок принадлежит другой сессии")
+            raise ProbeError("probe_snapshot_owner", "Snapshot belongs to a different session")
         if any(value is not None for value in snapshot_values(before, host).values()):
-            raise ProbeError("probe_initial_state", "Собственные class-поля не нормализованы к null")
+            raise ProbeError("probe_initial_state", "Owned class fields are not normalized to null")
         watch = await call("g1r_watch_start", {"handle": host["handle"], "properties": PROPERTIES,
                                                 "duration_ms": 5000, "interval_ms": 50, "capacity": 16})
         watch_id = watch["watch_id"]
@@ -175,7 +175,7 @@ async def exercise(call) -> dict:
         await invoke("StoreTypedClass", {"handle": derived["handle"]})
         after = await call("g1r_snapshot", {"targets": [{"handle": host["handle"], "properties": PROPERTIES}]})
         if after.get("session_id") != session_id:
-            raise ProbeError("probe_snapshot_owner", "Снимок принадлежит другой сессии")
+            raise ProbeError("probe_snapshot_owner", "Snapshot belongs to a different session")
         values = snapshot_values(after, host)
         for name, target in (("StoredAnyClass", other), ("StoredTypedClass", derived)):
             check_result({"executed": True, "result": values[name]}, target, session_id)
@@ -184,21 +184,21 @@ async def exercise(call) -> dict:
         while time.monotonic() < deadline:
             events = await call("g1r_watch_read", {"watch_id": watch_id, "after_seq": 0, "limit": 100})
             if events.get("dropped_events") != 0 or events.get("gap") is True:
-                raise ProbeError("probe_watch_loss", "Короткая проверка потеряла события")
+                raise ProbeError("probe_watch_loss", "Short probe lost events")
             changed = [event for event in events.get("events", []) if event.get("kind") == "changed"]
             if changed and snapshot_values(changed[-1]["snapshot"], host) == values:
                 observed = events
                 break
             await asyncio.sleep(0.05)
         if observed is None:
-            raise ProbeError("probe_watch_change_absent", "Наблюдение не подтвердило class-свойства")
+            raise ProbeError("probe_watch_change_absent", "Watch did not confirm class properties")
         await asyncio.sleep(0.2)
         stable = await call("g1r_watch_read", {"watch_id": watch_id, "after_seq": 0, "limit": 100})
         if stable.get("last_seq") != observed.get("last_seq"):
-            raise ProbeError("probe_false_class_change", "Неизменные классы породили ложные события")
+            raise ProbeError("probe_false_class_change", "Unchanged classes produced false events")
         diff = await call("g1r_compare_snapshots", {"before": before, "after": after, "limit": 100})
         if diff.get("value_changes") != 2:
-            raise ProbeError("probe_snapshot_diff", "Сравнение не подтвердило два class-изменения")
+            raise ProbeError("probe_snapshot_diff", "Comparison did not confirm two class changes")
         report["watch"] = {"changed_events": sum(event.get("kind") == "changed" for event in stable["events"]),
                            "dropped_events": stable["dropped_events"], "last_seq": stable["last_seq"]}
         report["checks"].append("class_properties_watch_stability_and_snapshot_diff")
@@ -214,14 +214,14 @@ async def exercise(call) -> dict:
                     try:
                         result = await call("g1r_invoke", {"handle": host["handle"], "function": method, "arguments": {"Input": None}})
                         if result.get("executed") is not True:
-                            raise ProbeError("probe_cleanup_unconfirmed", "Очистка поля не подтвердила выполнение")
+                            raise ProbeError("probe_cleanup_unconfirmed", "Field cleanup execution is not confirmed")
                         report["cleanup"].append(method)
                     except BaseException as error:
                         cleanup_errors.append(f"{method}: {getattr(error, 'code', 'failed')}")
                 try:
                     restored = await call("g1r_snapshot", {"targets": [{"handle": host["handle"], "properties": PROPERTIES}]})
                     if any(value is not None for value in snapshot_values(restored, host, session_id).values()):
-                        raise ProbeError("probe_restore_mismatch", "Собственные class-поля не восстановлены к null")
+                        raise ProbeError("probe_restore_mismatch", "Owned class fields were not restored to null")
                     report["cleanup"].append("restored_null_snapshot")
                 except BaseException as error:
                     cleanup_errors.append(f"restore_snapshot: {getattr(error, 'code', 'failed')}")
@@ -232,12 +232,12 @@ async def exercise(call) -> dict:
                         if (result.get("cleanup_complete") is not True
                                 or method == "g1r_watch_forget" and result.get("forgotten") is not True
                                 or method == "g1r_watch_stop" and result.get("state") not in {"stopped", "completed", "failed"}):
-                            raise ProbeError("probe_cleanup_unconfirmed", "Освобождение наблюдения не подтверждено")
+                            raise ProbeError("probe_cleanup_unconfirmed", "Watch release is not confirmed")
                         report["cleanup"].append(method)
                     except BaseException as error:
                         cleanup_errors.append(f"{method}: {getattr(error, 'code', 'failed')}")
             if cleanup_errors:
-                message = "Не подтверждена очистка: " + "; ".join(cleanup_errors)
+                message = "Cleanup is not confirmed: " + "; ".join(cleanup_errors)
                 if failure is None:
                     raise ProbeError("probe_cleanup_failed", message)
                 failure.add_note(message)
@@ -246,7 +246,7 @@ async def exercise(call) -> dict:
         except BaseException as cleanup_error:
             if failure is None:
                 raise
-            failure.add_note("Не подтверждено завершение очистки: " + str(cleanup_error))
+            failure.add_note("Cleanup completion is not confirmed: " + str(cleanup_error))
     return report
 
 
@@ -276,7 +276,7 @@ async def _run_with_signals(args):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Проверить только собственную class-fixture через готовый MCP")
+    parser = argparse.ArgumentParser(description="Check only the owned class fixture through ready MCP")
     parser.add_argument("--modkit-root", type=Path, default=REPOSITORY_ROOT.parent / "G1R-Modkit")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT)
     parser.add_argument("--native-port", type=int, default=27123)

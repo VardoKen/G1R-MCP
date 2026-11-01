@@ -16,7 +16,7 @@ using game_memory::read;
 json GameAccess::read_array(const json& params) {
     if(!params.is_object() || !params.contains("handle") || !params.at("handle").is_string()
        || !params.contains("property_name") || !params.at("property_name").is_string())
-        throw HandlerError("invalid_array_params","Требуются строковые handle и property_name");
+        throw HandlerError("invalid_array_params","String handle and property_name fields are required");
     const auto handle=params.at("handle").get<std::string>();
     const auto property_name=params.at("property_name").get<std::string>();
     if(handle.empty() || handle.find('\0')!=std::string::npos
@@ -60,19 +60,19 @@ json GameAccess::read_array(const json& params) {
                 if(name(read<uint64_t>(field+0x20))==property_name){result.field=field;result.owner=klass;break;}
             }
         }
-        if(!result.field)throw HandlerError("property_not_found","Свойство массива не найдено");
+        if(!result.field)throw HandlerError("property_not_found","Array property not found");
         result.owner_identity=validate_object(reinterpret_cast<void*>(result.owner));
         result.field_name=read<uint64_t>(result.field+0x20);result.field_class=read<uintptr_t>(result.field+8);
         if(game_memory::field_type(result.field,[this](uint64_t value){return name(value);})!="ArrayProperty")
-            throw HandlerError("unsupported_array_type","Выбранное свойство не является точным ArrayProperty");
+            throw HandlerError("unsupported_array_type","The selected property is not an exact ArrayProperty");
         result.offset=read<int32_t>(result.field+0x44);result.size=read<int32_t>(result.field+0x34);
         result.dim=read<int32_t>(result.field+0x30);result.owner_size=read<int32_t>(result.owner+0x58);
         result.flags=read<uint64_t>(result.field+0x38);result.array_flags=read<uint8_t>(result.field+0x70);
         if(result.dim!=1 || result.size!=16 || result.offset<0 || result.owner_size<16
            || result.offset>result.owner_size-16)
-            throw HandlerError("unsupported_array_layout","Массив требует подтверждённый заголовок 16 байт внутри объекта");
+            throw HandlerError("unsupported_array_layout","The array requires a confirmed 16-byte header inside the object");
         result.inner=read<uintptr_t>(result.field+0x78);
-        if(!result.inner)throw HandlerError("unsupported_array_layout","Inner массива отсутствует");
+        if(!result.inner)throw HandlerError("unsupported_array_layout","The array Inner property is missing");
         result.inner_name=read<uint64_t>(result.inner+0x20);result.inner_class=read<uintptr_t>(result.inner+8);
         result.stride=read<int32_t>(result.inner+0x34);result.inner_dim=read<int32_t>(result.inner+0x30);
         result.inner_offset=read<int32_t>(result.inner+0x44);result.inner_flags=read<uint64_t>(result.inner+0x38);
@@ -90,7 +90,7 @@ json GameAccess::read_array(const json& params) {
             || (type=="ClassProperty" && result.stride==8)
             || type=="BoolProperty" || type=="EnumProperty" || type=="StructProperty";
         if(!supported || result.inner_dim!=1)
-            throw HandlerError("unsupported_array_element","Тип или ArrayDim элемента массива пока не поддержан");
+            throw HandlerError("unsupported_array_element","The array element type or ArrayDim is unsupported");
         if(type=="StructProperty") {
             result.element_struct=scalar_struct_values::capture(result.inner,result.stride,result.inner_dim,
                 []<class Value>(uintptr_t address){return read<Value>(address);},
@@ -126,13 +126,13 @@ json GameAccess::read_array(const json& params) {
     const auto metadata=capture();
     const auto object_address=reinterpret_cast<uintptr_t>(object);
     if(object_address>std::numeric_limits<uintptr_t>::max()-static_cast<uintptr_t>(metadata.offset)-16)
-        throw HandlerError("invalid_array_header","Адрес заголовка массива переполнен");
+        throw HandlerError("invalid_array_header","The array header address overflows");
     const auto header_address=object_address+metadata.offset;
     const auto header=read<ArrayHeader>(header_address);
     const auto page=array_page(header,metadata.stride,metadata.inner_dim,offset,limit);
     std::vector<std::byte> copied(page.bytes);
     if(page.bytes && !game_memory::copy(copied.data(),reinterpret_cast<void*>(page.begin),page.bytes))
-        throw HandlerError("invalid_memory","Страница массива недоступна");
+        throw HandlerError("invalid_memory","The array page is unavailable");
     auto revalidate=[&]() {
         const auto after=capture();
         if(!same_serial_identity(serial_identity(initial),serial_identity(validate_object(object)))
@@ -147,7 +147,7 @@ json GameAccess::read_array(const json& params) {
            || metadata.inner_dim!=after.inner_dim || metadata.inner_offset!=after.inner_offset
            || metadata.array_flags!=after.array_flags || metadata.element_type!=after.element_type
            || metadata.auxiliary!=after.auxiliary || metadata.element_struct!=after.element_struct)
-            throw HandlerError("array_changed","Объект, заголовок или раскладка массива изменились при чтении");
+            throw HandlerError("array_changed","The object, array header or layout changed during the read");
         resolve(handle);
     };
     revalidate();
@@ -166,7 +166,7 @@ json GameAccess::read_array(const json& params) {
                 value=result.at("value");if(result.contains("enum"))item["enum"]=result.at("enum");
             } else value=property_value(address,metadata.element_type,metadata.stride,metadata.inner);
             if(value.is_null() && metadata.element_type!="ObjectProperty" && metadata.element_type!="ClassProperty")
-                throw HandlerError("unsupported_array_value","Значение элемента не поддержано");
+                throw HandlerError("unsupported_array_value","The element value is unsupported");
             item["value"]=std::move(value);item["supported"]=true;
         } catch(const HandlerError& error) {
             item["error"]={{"code",error.code()},{"message",error.what()}};partial=true;

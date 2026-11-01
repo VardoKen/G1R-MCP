@@ -1,4 +1,4 @@
-"""Ограниченное завершение операций probe перед передачей отмены вызывающему коду."""
+"""Bounded completion of probe operations before forwarding cancellation to the caller."""
 
 from __future__ import annotations
 
@@ -19,16 +19,16 @@ class CleanupTimeout(RuntimeError):
 
 
 async def settle_task(task: asyncio.Task, timeout: float, label: str) -> Any:
-    """Дождаться одного уже созданного task; отмена не повторяет его действия.
+    """Wait for one existing task; cancellation does not repeat its actions.
 
-    Внешняя отмена передаётся после завершения task, поэтому закрываемые в task
-    процессы и сохранённые его closure идентичности остаются доступны владельцу.
-    По истечении явного срока результат операции объявляется неопределённым.
+    External cancellation is forwarded after the task completes, so its processes
+    and identities saved in its closure remain available to the owner.
+    Once the explicit deadline expires, the operation outcome is unknown.
     """
     if (not isinstance(task, asyncio.Task) or isinstance(timeout, bool)
             or not isinstance(timeout, (int, float)) or not math.isfinite(timeout)
             or not 0 < timeout <= 120):
-        raise ValueError("Нужен task и конечный срок до 120 секунд")
+        raise ValueError("A task and a finite deadline of at most 120 seconds are required")
     cancelled = False
     deadline = time.monotonic() + timeout
     current = asyncio.current_task()
@@ -37,14 +37,14 @@ async def settle_task(task: asyncio.Task, timeout: float, label: str) -> Any:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 task.cancel()
-                # Освободить локальный task; неопределённая внешняя операция не повторяется.
+                # Release the local task; an uncertain external operation is not retried.
                 try:
                     await asyncio.wait({task}, timeout=1)
                     if task.done():
                         task.exception() if not task.cancelled() else None
                 except BaseException:
                     pass
-                raise CleanupTimeout(f"{label}: операция не завершилась за {timeout:g} с")
+                raise CleanupTimeout(f"{label}: operation did not complete within {timeout:g} seconds")
             try:
                 await asyncio.wait({task}, timeout=remaining)
             except asyncio.CancelledError:
@@ -59,16 +59,16 @@ async def settle_task(task: asyncio.Task, timeout: float, label: str) -> Any:
             result = task.result()
         except BaseException as error:
             if cancelled:
-                error.add_note(f"{label}: отмена вызывающего кода отложена до завершения операции")
+                error.add_note(f"{label}: caller cancellation was deferred until the operation completed")
             raise
     if cancelled:
-        raise asyncio.CancelledError(f"{label}: отмена после подтверждённого завершения")
+        raise asyncio.CancelledError(f"{label}: cancelled after confirmed completion")
     return result
 
 
 @contextmanager
 def deferred_sigint():
-    """Повторный Ctrl+C отменяет task; не обрывает его защищённую очистку."""
+    """Repeated Ctrl+C cancels the task without interrupting protected cleanup."""
     if threading.current_thread() is not threading.main_thread():
         yield
         return

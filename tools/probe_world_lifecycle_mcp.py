@@ -1,4 +1,4 @@
-"""Наблюдать собственный PostInitialize через MCP без ручного вызова callback."""
+"""Observe the owned PostInitialize through MCP without manually calling the callback."""
 from __future__ import annotations
 
 import argparse
@@ -26,8 +26,8 @@ MARKER = 111
 
 
 async def exercise(call, *, wait_seconds=3, clock=time.monotonic, sleep=asyncio.sleep):
-    # Отдельный экземпляр существующей read-only проверки сохраняет её границы,
-    # не меняя глобальное состояние IngameTool-пробы и её fixture.
+    # A separate instance of the existing read-only check preserves its boundaries,
+    # without changing the global state of the IngameTool probe or its fixture.
     spec = importlib.util.spec_from_file_location("_g1r_world_lifecycle_observation", REPOSITORY_ROOT / "tools" / "probe_lifecycle_mcp.py")
     implementation = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(implementation)
@@ -44,14 +44,14 @@ async def exercise(call, *, wait_seconds=3, clock=time.monotonic, sleep=asyncio.
         report["status"] = "not_tested_not_triggered"
     report["callback"] = "PostInitialize"
     report["gameplay_ready_confirmed"] = False
-    report["limitations"] = ["Положительный счётчик доказывает только выполнение PostInitialize собственной подсистемы",
-                             "Отсутствие экземпляра или нулевой счётчик в главном меню не считается подтверждённым lifecycle",
-                             "Начало gameplay, полный жизненный цикл и сохранения не проверяются"]
+    report["limitations"] = ["A positive counter proves only execution of the owned subsystem PostInitialize",
+                             "A missing instance or zero counter in the main menu is not considered confirmed lifecycle",
+                             "Gameplay start, the full lifecycle, and saves are not checked"]
     return report
 
 
 async def exercise_reload_watch(call, *, wait_seconds=120, clock=time.monotonic, sleep=asyncio.sleep):
-    """Два reload собственного пакета: baseline, затем инвалидирование watch."""
+    """Two reloads of the owned package: baseline, then watch invalidation."""
     report, watch_id = {"status": "started", "watch_trial": {"status": "not_started"}}, None
 
     async def find_live():
@@ -192,13 +192,13 @@ async def run_probe(args):
             if getattr(args, "reload_and_watch", False):
                 await call("g1r_status", {})
                 await call("g1r_capabilities", {})
-                await call("g1r_session_acquire", {"reason": "Проверка собственного PostInitialize: baseline reload и watch invalidation"})
+                await call("g1r_session_acquire", {"reason": "Owned PostInitialize check: baseline reload and watch invalidation"})
                 try:
                     report = await exercise_reload_watch(call, wait_seconds=args.wait_seconds)
                 finally:
                     released = await settle_task(asyncio.create_task(call("g1r_session_release", {})), 45, "world lifecycle ownership release")
                     if released.get("released") is not True:
-                        raise ProbeError("ownership_release_unconfirmed", "Заявка lifecycle-проверки не освобождена")
+                        raise ProbeError("ownership_release_unconfirmed", "The lifecycle probe claim was not released")
             else:
                 report = await exercise(call, wait_seconds=args.wait_seconds)
             report["server_version"] = initialized.server_info.version
@@ -206,10 +206,10 @@ async def run_probe(args):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Наблюдать собственный PostInitialize без загрузки игрового мира")
+    parser = argparse.ArgumentParser(description="Observe the owned PostInitialize without loading the game world")
     parser.add_argument("--transport", choices=("http", "stdio"), default="http")
     parser.add_argument("--mcp-url", default="http://127.0.0.1:27124/mcp")
-    parser.add_argument("--reload-and-watch", action="store_true", help="Перезагрузить текущую карту дважды и проверить watch своего пакета")
+    parser.add_argument("--reload-and-watch", action="store_true", help="Reload the current map twice and check the owned package watch")
     parser.add_argument("--modkit-root", type=Path, default=REPOSITORY_ROOT.parent / "G1R-Modkit")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT)
     parser.add_argument("--native-port", type=int, default=27123)

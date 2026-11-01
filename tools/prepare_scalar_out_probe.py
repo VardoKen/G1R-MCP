@@ -1,4 +1,4 @@
-"""Подготовить собственную scalar-out fixture внутри artifacts без игры."""
+"""Prepare an isolated scalar-out fixture within artifacts without the game."""
 from __future__ import annotations
 
 import argparse
@@ -54,23 +54,23 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
             "uint64_type": "Script/Story/Support/DialogImport.as:1",
             "wide_echo_precedent": "tests/fixtures/wide_integer_probe/Script/G1RMCPWideIntegerProbe.as"}}
     result["limitations"] = [
-        "Семь pure-out типов — согласованная изолированная runtime-гипотеза, не доказанный игровой API",
-        "Подготовка не подтверждает компиляцию, CPF-флаги или числовые размеры out-параметров",
-        "Для AS float ожидаемый DoubleProperty/8 сначала подтверждается runtime reflection",
-        "AS double/float64, inout и const-ref не объявлены",
-        "GetOutputs изменяет только CallsCount своего CDO; ResetProbe восстанавливает ноль",
-        "JSON wide-integer значения точные; клиент не должен преобразовывать их в float"]
+        "Seven pure-out types are an approved isolated runtime hypothesis, not a proven game API",
+        "Preparation does not confirm compilation, CPF flags, or numeric out-parameter sizes",
+        "For AS float, the expected DoubleProperty/8 must first be confirmed by runtime reflection",
+        "AS double/float64, inout, and const-ref are not declared",
+        "GetOutputs changes only CallsCount on its CDO; ResetProbe restores zero",
+        "JSON wide-integer values are exact; the client must not convert them to float"]
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
     class RussianArgumentParser(argparse.ArgumentParser):
         def format_help(self):
-            return super().format_help().replace("usage:", "Использование:", 1).replace("options:", "Параметры:", 1)
-    parser = RussianArgumentParser(description="Подготовить собственную scalar-out fixture внутри artifacts", add_help=False)
-    parser.add_argument("-h", "--help", action="help", help="Показать справку")
+            return super().format_help().replace("usage:", "Usage:", 1).replace("options:", "Options:", 1)
+    parser = RussianArgumentParser(description="Prepare an isolated scalar-out fixture within artifacts", add_help=False)
+    parser.add_argument("-h", "--help", action="help", help="Show help")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT / "artifacts/scalar-out-probe-dev17",
-                        help="Отдельный каталог внутри artifacts")
+                        help="A separate directory within artifacts")
     args = parser.parse_args(argv)
     try:
         result = prepare_probe(args.workspace_root)

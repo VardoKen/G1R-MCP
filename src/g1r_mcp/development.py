@@ -1,8 +1,8 @@
-"""Ограниченный контур запуска разработки через фиксированные инструменты.
+"""Bounded development launch workflow using fixed tools.
 
-Рецепт и снимок процессов читаются без запуска игры. Start/stop/load выполняют
-одну явную операцию; ответ Steam и загрузчика не доказывает компиляцию,
-готовность Tick или загрузку выбранного пакета.
+Read recipes and process snapshots without starting the game. Start/stop/load perform
+one explicit operation; Steam and loader responses do not prove compilation,
+Tick readiness or loading of the selected package.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ _TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{7}Z$")
 
 
 class DevelopmentError(Exception):
-    """Ошибка операции с явным признаком неопределённого внешнего эффекта."""
+    """Operation error with an explicit indication of uncertain external effects."""
     def __init__(self, code: str, message: str, *, outcome_unknown: bool = False,
                  receipt: dict | None = None):
         super().__init__(message)
@@ -57,7 +57,7 @@ Executor = Callable[[list[str], int], CommandResult]
 
 
 def execute_command(arguments: list[str], timeout: int) -> CommandResult:
-    """Запустить один фиксированный инструмент без shell и без повторов."""
+    """Run one fixed tool without a shell or retries."""
     process = None
     started = False
     try:
@@ -90,23 +90,23 @@ def execute_command(arguments: list[str], timeout: int) -> CommandResult:
         for thread in threads:
             thread.join(1)
         if failed.is_set() or any(thread.is_alive() for thread in threads):
-            raise DevelopmentError("tool_output_too_large", "Ответ инструмента превышает предел или канал не завершился",
+            raise DevelopmentError("tool_output_too_large", "The tool response exceeds the limit or the channel did not finish",
                                    outcome_unknown=True)
         return CommandResult(returncode, chunks[0].decode("utf-8"), chunks[1].decode("utf-8"))
     except subprocess.TimeoutExpired:
         if process is not None:
             process.kill()
             process.wait(timeout=2)
-        raise DevelopmentError("operation_timeout", "Инструмент не завершился за 30 секунд; исход внешней операции неизвестен",
+        raise DevelopmentError("operation_timeout", "The tool did not finish within 30 seconds; the external operation outcome is unknown",
                                outcome_unknown=True) from None
     except (OSError, UnicodeError):
-        raise DevelopmentError("tool_unavailable", "Не удалось запустить или прочитать фиксированный инструмент",
+        raise DevelopmentError("tool_unavailable", "Could not start or read the fixed tool",
                                outcome_unknown=started) from None
     except DevelopmentError:
         raise
     except BaseException as error:
-        # KeyboardInterrupt/SystemExit не оставляют запущенный локальный helper.
-        # Внешний эффект (Steam/LoadLibrary) остаётся неопределённым и не повторяется.
+        # KeyboardInterrupt/SystemExit must not leave a local helper running.
+        # The external effect (Steam/LoadLibrary) remains uncertain and is not retried.
         if process is not None:
             try:
                 process.kill()
@@ -117,7 +117,7 @@ def execute_command(arguments: list[str], timeout: int) -> CommandResult:
             except BaseException:
                 pass
         if started:
-            error.add_note("Локальный helper остановлен; исход внешней операции неизвестен, повтор запрещён")
+            error.add_note("The local helper was stopped; the external operation outcome is unknown and retries are prohibited")
         raise
 
 
@@ -132,11 +132,11 @@ def _unique_json(pairs: list[tuple[str, object]]) -> dict:
 
 def _identity(value: object) -> dict:
     if not isinstance(value, dict) or type(value.get("pid")) is not int or not 1 <= value["pid"] <= 0xFFFFFFFF:
-        raise DevelopmentError("invalid_process_identity", "Нужны PID, creation_time и executable проверенного процесса")
+        raise DevelopmentError("invalid_process_identity", "The verified process PID, creation_time, and executable are required")
     if not isinstance(value.get("creation_time"), str) or not _TIMESTAMP.fullmatch(value["creation_time"]):
-        raise DevelopmentError("invalid_process_identity", "creation_time должен быть точной UTC-меткой из development recipe")
+        raise DevelopmentError("invalid_process_identity", "creation_time must be the exact UTC timestamp from the development recipe")
     if not isinstance(value.get("executable"), str) or not value["executable"]:
-        raise DevelopmentError("invalid_process_identity", "Отсутствует точный executable процесса")
+        raise DevelopmentError("invalid_process_identity", "The exact process executable is missing")
     return {"pid": value["pid"], "creation_time": value["creation_time"], "executable": value["executable"]}
 
 
@@ -164,7 +164,7 @@ class DevelopmentService:
         self._closed = False
 
     def close(self) -> None:
-        """Освободить только удерживаемый read-only HANDLE; не завершать игру."""
+        """Release only the retained read-only HANDLE without terminating the game."""
         with self._observation_lock:
             if self._closed:
                 return
@@ -194,7 +194,7 @@ class DevelopmentService:
                 record.update(stage="launch_unobserved", outcome_unknown=True)
                 return copy.deepcopy(record)
             identity = inner[0]
-            # Не присваивать запоздалой заявке ранее существовавший процесс.
+            # Do not assign a preexisting process to a late claim.
             created = datetime.fromisoformat(identity["creation_time"].replace("Z", "+00:00"))
             requested = datetime.fromisoformat(record["launch_request_started_at"])
             if created < requested:
@@ -232,7 +232,7 @@ class DevelopmentService:
                     try:
                         self._close_process_lease()
                     except Exception as error:
-                        # Не терять уже прочитанный exitcode из-за ошибки освобождения HANDLE.
+                        # Preserve an already read exitcode if releasing the HANDLE fails.
                         record["observer_close_error"] = getattr(error, "code", "process_handle_close_failed")
                 else:
                     record.update(stage="observation_unknown", outcome_unknown=True,
@@ -246,25 +246,25 @@ class DevelopmentService:
         try:
             script_path = _checked(self.repository / "tools" / script, self.repository)
             if not script_path.is_file():
-                raise WorkspaceError("invalid_path", "Фиксированный инструмент должен быть обычным файлом")
+                raise WorkspaceError("invalid_path", "The fixed tool must be a regular file")
         except WorkspaceError as error:
             raise DevelopmentError("tool_unavailable", str(error)) from None
         result = self.executor([self.powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                                 "-File", str(script_path), *arguments, "-Json"], PROCESS_TIMEOUT_SECONDS)
         if len(result.stdout.encode("utf-8")) > MAX_PROCESS_OUTPUT or len(result.stderr.encode("utf-8")) > MAX_PROCESS_OUTPUT:
-            raise DevelopmentError("tool_output_too_large", "Ответ инструмента превышает предел",
+            raise DevelopmentError("tool_output_too_large", "The tool response exceeds the limit",
                                    outcome_unknown=mutating)
         if result.returncode != 0:
-            raise DevelopmentError("tool_failed", "Фиксированный инструмент отказал; автоматического повтора нет",
+            raise DevelopmentError("tool_failed", "The fixed tool failed; there is no automatic retry",
                                    outcome_unknown=mutating)
         try:
             value = json.loads(result.stdout.lstrip("\ufeff"), object_pairs_hook=_unique_json,
                                parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
         except (ValueError, RecursionError):
-            raise DevelopmentError("tool_protocol_error", "Инструмент не вернул корректный структурированный JSON",
+            raise DevelopmentError("tool_protocol_error", "The tool did not return valid structured JSON",
                                    outcome_unknown=mutating) from None
         if not isinstance(value, dict):
-            raise DevelopmentError("tool_protocol_error", "Корнем ответа инструмента должен быть объект",
+            raise DevelopmentError("tool_protocol_error", "The tool response root must be an object",
                                    outcome_unknown=mutating)
         return value
 
@@ -276,59 +276,59 @@ class DevelopmentService:
         value = self._command("game_process_state.ps1", ["-GameRoot", str(self.game)], mutating=False)
         processes = value.get("processes")
         if not isinstance(processes, list) or len(processes) > 2:
-            raise DevelopmentError("tool_protocol_error", "Неверный список игровых процессов")
+            raise DevelopmentError("tool_protocol_error", "Invalid game process list")
         checked = []
         allowed = {os.path.normcase(str(self.inner_executable)), os.path.normcase(str(self.bootstrap_executable))}
         for item in processes:
             identity = _identity(item)
             if os.path.normcase(identity["executable"]) not in allowed:
-                raise DevelopmentError("process_path_mismatch", "Игровой процесс имеет неподтверждённый executable")
+                raise DevelopmentError("process_path_mismatch", "The game process has an unverified executable")
             checked.append(identity)
         if len({item["pid"] for item in checked}) != len(checked):
-            raise DevelopmentError("tool_protocol_error", "Список процессов содержит повторный PID")
+            raise DevelopmentError("tool_protocol_error", "The process list contains a duplicate PID")
         if len({os.path.normcase(item["executable"]) for item in checked}) != len(checked):
-            raise DevelopmentError("ambiguous_process", "Обнаружено несколько экземпляров одного игрового EXE")
+            raise DevelopmentError("ambiguous_process", "Multiple instances of the same game EXE were found")
         return {"processes": checked, "running": bool(checked), "source": "windows_process_snapshot",
                 "launch_observation": self._observe_launch(checked)}
 
     def _manifest(self, relative_package: str, *, enable_ingame_tools: bool = False,
                   show_script_errors: bool = False) -> dict:
         if type(enable_ingame_tools) is not bool:
-            raise DevelopmentError("invalid_arguments", "enable_ingame_tools должен быть bool")
+            raise DevelopmentError("invalid_arguments", "enable_ingame_tools must be a bool")
         if type(show_script_errors) is not bool:
-            raise DevelopmentError("invalid_arguments", "show_script_errors должен быть bool")
+            raise DevelopmentError("invalid_arguments", "show_script_errors must be a bool")
         try:
             package, normalized = self.workspace._package(relative_package)
             if normalized == ".":
-                raise DevelopmentError("invalid_package", "Для запуска нужен отдельный каталог официального пакета")
+                raise DevelopmentError("invalid_package", "Launching requires a separate official package directory")
             validation = validate_package(self.workspace.root, normalized)
             if not validation["valid_structure"]:
-                raise DevelopmentError("invalid_package", "Официальный пакет не прошёл структурную проверку")
+                raise DevelopmentError("invalid_package", "The official package failed structural validation")
             name = validation["metadata"]["name"]
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", name) or package.name != name:
-                raise DevelopmentError("invalid_package_name", "Имя пакета должно точно совпадать с именем каталога")
+                raise DevelopmentError("invalid_package_name", "The package name must exactly match the directory name")
             entries = []
             total = 0
             file_stamps = {}
 
             def walk_failure(error: OSError) -> None:
-                raise DevelopmentError("access_error", "Не удалось полностью перечислить файлы пакета")
+                raise DevelopmentError("access_error", "Could not enumerate all package files")
 
             with _guard_directories(package, self.workspace.root):
                 directory_count = 0
                 for directory, directories, files in os.walk(package, followlinks=False, onerror=walk_failure):
                     directory_count += 1
                     if directory_count > MAX_PACKAGE_DIRECTORIES:
-                        raise DevelopmentError("manifest_limit", "Пакет превышает предел 10000 каталогов")
+                        raise DevelopmentError("manifest_limit", "The package exceeds the 10000 directory limit")
                     parent = _checked(Path(directory), package, directory=True)
                     for child in directories:
                         _checked(parent / child, package, directory=True)
                     for child in files:
                         file = _checked(parent / child, package)
                         if not file.is_file():
-                            raise DevelopmentError("unsafe_package_file", "Пакет содержит не обычный файл")
+                            raise DevelopmentError("unsafe_package_file", "The package contains a nonregular file")
                         if len(entries) >= MAX_PACKAGE_FILES:
-                            raise DevelopmentError("manifest_limit", "Пакет превышает предел 10000 файлов")
+                            raise DevelopmentError("manifest_limit", "The package exceeds the 10000 file limit")
                         before = file.stat()
                         data = _read_bytes(file, package,
                                            MAX_DESCRIPTOR_BYTES if file == package / "GothicMod.json" else None)
@@ -337,7 +337,7 @@ class DevelopmentService:
                                         "sha256": hashlib.sha256(data).hexdigest()})
                         info = file.stat()
                         if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns):
-                            raise DevelopmentError("package_changed", "Файл пакета изменился во время чтения manifest")
+                            raise DevelopmentError("package_changed", "A package file changed while the manifest was being read")
                         file_stamps[file.relative_to(package).as_posix()] = (info.st_dev, info.st_ino,
                                                                            info.st_size, info.st_mtime_ns)
                 after_paths = set()
@@ -345,7 +345,7 @@ class DevelopmentService:
                 for directory, directories, files in os.walk(package, followlinks=False, onerror=walk_failure):
                     directory_count += 1
                     if directory_count > MAX_PACKAGE_DIRECTORIES:
-                        raise DevelopmentError("manifest_limit", "Пакет превышает предел 10000 каталогов")
+                        raise DevelopmentError("manifest_limit", "The package exceeds the 10000 directory limit")
                     parent = _checked(Path(directory), package, directory=True)
                     for child in directories:
                         _checked(parent / child, package, directory=True)
@@ -355,11 +355,11 @@ class DevelopmentService:
                         after_paths.add(relative)
                         info = file.stat()
                         if file_stamps.get(relative) != (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns):
-                            raise DevelopmentError("package_changed", "Пакет изменился во время чтения manifest")
+                            raise DevelopmentError("package_changed", "The package changed while the manifest was being read")
                 if after_paths != set(file_stamps):
-                    raise DevelopmentError("package_changed", "Состав пакета изменился во время чтения manifest")
+                    raise DevelopmentError("package_changed", "Package contents changed while the manifest was being read")
             entries.sort(key=lambda item: item["path"])
-            # Валидатор должен описывать именно те байты дескриптора, которые вошли в хеш.
+            # The validator must describe the exact descriptor bytes included in the hash.
             final_validation = validate_package(self.workspace.root, normalized)
             descriptor_entry = next((entry for entry in entries if entry["path"] == "GothicMod.json"), None)
             descriptor_hash = hashlib.sha256(_read_bytes(package / "GothicMod.json", package,
@@ -368,7 +368,7 @@ class DevelopmentService:
                     or final_validation["script_count"] != validation["script_count"]
                     or final_validation.get("patch_count", 0) != validation.get("patch_count", 0)
                     or descriptor_entry is None or descriptor_entry["sha256"] != descriptor_hash):
-                raise DevelopmentError("package_changed", "Дескриптор или структура пакета изменились во время проверки manifest")
+                raise DevelopmentError("package_changed", "The descriptor or package structure changed during manifest validation")
             payload = {"package_path": normalized, "package_name": name,
                        "workspace_root": str(self.workspace.root), "modkit_root": str(self.modkit),
                        "game_root": str(self.game), "files": entries,
@@ -377,7 +377,7 @@ class DevelopmentService:
                 payload["launch_options"]["show_script_errors"] = True
             serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
             if len(serialized) > MAX_MANIFEST_BYTES:
-                raise DevelopmentError("manifest_limit", "Полный manifest превышает предел 768 КиБ")
+                raise DevelopmentError("manifest_limit", "The full manifest exceeds the 768 KiB limit")
             digest = hashlib.sha256(serialized).hexdigest()
             return {**payload, "manifest_sha256": digest, "total_bytes": total,
                     "script_count": validation["script_count"], "patch_count": validation.get("patch_count", 0),
@@ -385,27 +385,27 @@ class DevelopmentService:
         except (PackageError, WorkspaceError) as error:
             raise DevelopmentError(error.code, str(error)) from None
         except OSError:
-            raise DevelopmentError("access_error", "Не удалось полностью прочитать пакет для запуска") from None
+            raise DevelopmentError("access_error", "Could not read the complete package for launch") from None
 
     def _composition_manifest(self, relative_package: str, companion_packages: list[str] | None,
                               *, enable_ingame_tools: bool = False, show_script_errors: bool = False) -> dict:
         if companion_packages is not None and (not isinstance(companion_packages, list)
                 or any(not isinstance(item, str) or not item for item in companion_packages)):
-            raise DevelopmentError("invalid_arguments", "companion_packages должен быть списком путей пакетов")
+            raise DevelopmentError("invalid_arguments", "companion_packages must be a list of package paths")
         if not companion_packages:
             return self._manifest(relative_package, enable_ingame_tools=enable_ingame_tools,
                                   show_script_errors=show_script_errors)
         if len(companion_packages) >= MAX_DEVELOPMENT_PACKAGES:
-            raise DevelopmentError("manifest_limit", "Development-сеанс поддерживает не более четырёх пакетов")
+            raise DevelopmentError("manifest_limit", "A development session supports no more than four packages")
         packages = [self._manifest(path, enable_ingame_tools=enable_ingame_tools,
                                    show_script_errors=show_script_errors)
                     for path in [relative_package, *companion_packages]]
         names = [item["package_name"] for item in packages]
         if len({name.casefold() for name in names}) != len(names):
-            raise DevelopmentError("duplicate_package", "Имена выбранных пакетов должны быть уникальны без учёта регистра")
+            raise DevelopmentError("duplicate_package", "Selected package names must be unique regardless of case")
         source_paths = [os.path.normcase(str(self.workspace.root / item["package_path"])) for item in packages]
         if len(set(source_paths)) != len(source_paths):
-            raise DevelopmentError("duplicate_package", "Один пакет нельзя выбрать несколько раз")
+            raise DevelopmentError("duplicate_package", "The same package cannot be selected more than once")
         payload = {"composition": "explicit_companion_packages", "package_path": packages[0]["package_path"],
                    "package_name": names[0], "workspace_root": str(self.workspace.root),
                    "modkit_root": str(self.modkit), "game_root": str(self.game),
@@ -416,13 +416,13 @@ class DevelopmentService:
             payload["launch_options"]["show_script_errors"] = True
         serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         if len(serialized) > MAX_MANIFEST_BYTES:
-            raise DevelopmentError("manifest_limit", "Составной manifest превышает предел 768 КиБ")
+            raise DevelopmentError("manifest_limit", "The combined manifest exceeds the 768 KiB limit")
         return {**payload, "manifest_sha256": hashlib.sha256(serialized).hexdigest(),
                 "total_bytes": sum(item["total_bytes"] for item in packages),
                 "compiled": False, "runtime_validation": "not_performed"}
 
     def _stage_composition(self, manifest: dict) -> dict:
-        """Скопировать подтверждённые байты в новый сохраняемый рабочий development-сеанс."""
+        """Copy verified bytes into a new persistent working development session."""
         sessions = self.workspace.root / "artifacts" / "development-sessions"
         stage = sessions / uuid.uuid4().hex
         package_root = stage / "packages"
@@ -435,7 +435,7 @@ class DevelopmentService:
                         self.workspace._unprotected(_checked(parent, self.workspace.root, directory=True))
                 with _guard_directories(sessions, self.workspace.root):
                     if os.path.lexists(stage):
-                        raise DevelopmentError("staging_conflict", "Development-сеанс уже существует")
+                        raise DevelopmentError("staging_conflict", "The development session already exists")
                     stage.mkdir()
                     self.workspace._unprotected(_checked(stage, self.workspace.root, directory=True))
                     with _guard_directories(stage, self.workspace.root):
@@ -455,7 +455,7 @@ class DevelopmentService:
                     data = _read_bytes(source_root / entry["path"], source_root,
                                        MAX_DESCRIPTOR_BYTES if entry["path"] == "GothicMod.json" else None)
                     if len(data) != entry["bytes"] or hashlib.sha256(data).hexdigest() != entry["sha256"]:
-                        raise DevelopmentError("package_changed", "Исходный пакет изменился при подготовке development-сеанса")
+                        raise DevelopmentError("package_changed", "The source package changed while the development session was being prepared")
                     destination = target / entry["path"]
                     with _destination_lock(target), _guard_directories(target, self.workspace.root):
                         current = target
@@ -473,7 +473,7 @@ class DevelopmentService:
                                         show_script_errors=manifest["launch_options"].get("show_script_errors", False))
                 for key in ("package_name", "files", "total_bytes", "script_count", "patch_count"):
                     if staged[key] != source[key]:
-                        raise DevelopmentError("staging_changed", "Рабочая копия не совпадает с подтверждёнными байтами пакета")
+                        raise DevelopmentError("staging_changed", "The working copy does not match the verified package bytes")
                 copied.append({"role": source["role"], "source_package_path": source["package_path"],
                                "source_manifest_sha256": source["manifest_sha256"],
                                "relative_package": relative, "package_name": package_name,
@@ -489,23 +489,23 @@ class DevelopmentService:
             self._verify_staged_composition(stage_info)
             return stage_info
         except (OSError, WorkspaceError) as error:
-            raise DevelopmentError("staging_error", "Не удалось подготовить отдельный рабочий development-сеанс") from error
+            raise DevelopmentError("staging_error", "Could not prepare a separate working development session") from error
 
     def _verify_staged_composition(self, stage: dict) -> None:
         root = self.workspace._unprotected(_checked(Path(stage["mods_directory"]), self.workspace.root, directory=True))
         expected = {item["package_name"] for item in stage["packages"]}
         with _guard_directories(root, self.workspace.root):
             if {item.name for item in root.iterdir()} != expected:
-                raise DevelopmentError("staging_changed", "Состав рабочего development-сеанса изменился")
+                raise DevelopmentError("staging_changed", "The working development session contents changed")
             for item in stage["packages"]:
                 current = self._manifest(item["relative_package"],
                     enable_ingame_tools=item["manifest"]["launch_options"]["enable_ingame_tools"],
                     show_script_errors=item["manifest"]["launch_options"].get("show_script_errors", False))
                 if current["manifest_sha256"] != item["manifest_sha256_at_launch"]:
-                    raise DevelopmentError("staging_changed", "Рабочий пакет изменился до запуска игры")
+                    raise DevelopmentError("staging_changed", "The working package changed before game launch")
 
     def native_artifact(self) -> dict:
-        """Получить SHA-256 собранной DLL для явной последующей загрузки."""
+        """Get the built DLL SHA-256 for a subsequent explicit load."""
         try:
             dll = _checked(self.repository / "build" / "native" / "Release" / "G1R_MCP.dll", self.repository)
             raw = _read_bytes(dll, self.repository, MAX_FILE_BYTES)
@@ -531,7 +531,7 @@ class DevelopmentService:
                            "enable_ingame_tools": enable_ingame_tools,
                            "show_script_errors": show_script_errors,
                            "compiler_exit_on_error": not show_script_errors,
-                           "effects": "Заменить выбор пакетов только в запускаемой игровой сессии",
+                           "effects": "Replace the package selection only in the game session being launched",
                            "compilation_trigger": "game_startup", "hot_reload": "function_bodies_file_watch",
                            **({"staging_created_by": "development_start", "edit_target": "staged_copy_only",
                                "staging_retention": "retain_for_review", "source_packages_modified": False}
@@ -545,10 +545,10 @@ class DevelopmentService:
         if allow_bootstrap:
             allowed.add(os.path.normcase(str(self.bootstrap_executable)))
         if os.path.normcase(expected["executable"]) not in allowed:
-            raise DevelopmentError("process_path_mismatch", "Ожидаемый процесс имеет неподтверждённый EXE выбранной игры")
+            raise DevelopmentError("process_path_mismatch", "The expected process has an unverified EXE for the selected game")
         matches = [item for item in state["processes"] if item == expected]
         if len(matches) != 1:
-            raise DevelopmentError("process_changed", "PID, время создания или путь игры изменились")
+            raise DevelopmentError("process_changed", "The PID, creation time, or game path changed")
         return expected
 
     def start(self, relative_package: str, expected_manifest_sha256: str, *, restart: bool = False,
@@ -556,7 +556,7 @@ class DevelopmentService:
               enable_ingame_tools: bool = False, show_script_errors: bool = False) -> dict:
         with self._observation_lock:
             if self._closed:
-                raise DevelopmentError("service_closed", "Контур наблюдения уже закрыт")
+                raise DevelopmentError("service_closed", "The observation workflow is already closed")
             return self._start(relative_package, expected_manifest_sha256, restart=restart,
                                expected_process=expected_process, companion_packages=companion_packages,
                                enable_ingame_tools=enable_ingame_tools, show_script_errors=show_script_errors)
@@ -565,14 +565,14 @@ class DevelopmentService:
                expected_process: dict | None = None, companion_packages: list[str] | None = None,
                enable_ingame_tools: bool = False, show_script_errors: bool = False) -> dict:
         if not isinstance(expected_manifest_sha256, str) or not _SHA.fullmatch(expected_manifest_sha256):
-            raise DevelopmentError("invalid_manifest_hash", "Нужен SHA-256 полного пакета из development recipe")
+            raise DevelopmentError("invalid_manifest_hash", "The SHA-256 of the full package from the development recipe is required")
         if type(restart) is not bool:
-            raise DevelopmentError("invalid_arguments", "restart должен быть bool")
+            raise DevelopmentError("invalid_arguments", "restart must be a bool")
         manifest = self._composition_manifest(relative_package, companion_packages,
                                               enable_ingame_tools=enable_ingame_tools,
                                               show_script_errors=show_script_errors)
         if manifest["manifest_sha256"] != expected_manifest_sha256.lower():
-            raise DevelopmentError("package_changed", "Пакет изменился после подготовки рецепта")
+            raise DevelopmentError("package_changed", "The package changed after the recipe was prepared")
         state = self.process_state()
         composed = "packages" in manifest
         arguments = ["-GameRoot", str(self.game)]
@@ -585,16 +585,16 @@ class DevelopmentService:
             arguments += ["-Restart", "-ExpectedPid", str(expected["pid"]),
                           "-ExpectedCreationTime", expected["creation_time"]]
         elif state["running"]:
-            raise DevelopmentError("game_running", "Для работающей игры нужны restart и точная идентичность процесса")
+            raise DevelopmentError("game_running", "A running game requires restart and an exact process identity")
         elif expected_process is not None:
-            raise DevelopmentError("invalid_arguments", "expected_process используется только при restart")
+            raise DevelopmentError("invalid_arguments", "expected_process is used only with restart")
         stage = self._stage_composition(manifest) if composed else None
         if stage is not None:
             fresh = self._composition_manifest(relative_package, companion_packages,
                                                enable_ingame_tools=enable_ingame_tools,
                                                show_script_errors=show_script_errors)
             if fresh["manifest_sha256"] != manifest["manifest_sha256"]:
-                raise DevelopmentError("package_changed", "Исходные пакеты изменились при подготовке development-сеанса")
+                raise DevelopmentError("package_changed", "Source packages changed while the development session was being prepared")
             self._verify_staged_composition(stage)
             arguments.extend(["-ModsDirectory", stage["mods_directory"], "-ModsCsv",
                               ",".join(manifest["selected_mods"])])
@@ -604,7 +604,7 @@ class DevelopmentService:
         try:
             self._close_process_lease()
         except Exception:
-            raise DevelopmentError("observer_close_failed", "Старый HANDLE не освобождён; новый запуск не выполнялся") from None
+            raise DevelopmentError("observer_close_failed", "The old HANDLE was not released; no new launch was performed") from None
         if self._launch_observation is not None and self._launch_observation["stage"] != "process_exited":
             self._launch_observation.update(stage="observation_closed", observer_closed=True, outcome_unknown=True)
         request_started_at = datetime.now(timezone.utc).isoformat()
@@ -616,7 +616,7 @@ class DevelopmentService:
                 and isinstance(receipt_root, str)
                 and os.path.normcase(receipt_root) == os.path.normcase(stage["mods_directory"]))
         if response.get("state") != "launch_requested" or not receipt_matches:
-            raise DevelopmentError("tool_protocol_error", "Ответ запуска не подтвердил передачу выбранного пакета Steam",
+            raise DevelopmentError("tool_protocol_error", "The launch response did not confirm that the selected package was passed to Steam",
                                    outcome_unknown=True)
         self._launch_observation = {"launch_id": str(uuid.uuid4()),
             "manifest_sha256": manifest["manifest_sha256"], "package_name": manifest["package_name"],
@@ -650,7 +650,7 @@ class DevelopmentService:
                   expected_window: int | None = None) -> dict:
         with self._observation_lock:
             if self._closed:
-                raise DevelopmentError("service_closed", "Сервис разработки уже закрыт")
+                raise DevelopmentError("service_closed", "The development service is already closed")
             expected = self._expected_process(expected_process, self.process_state())
             try:
                 return queue_key(expected, virtual_key, expected_window=expected_window)
@@ -662,7 +662,7 @@ class DevelopmentService:
     def stop(self, expected_process: dict) -> dict:
         with self._observation_lock:
             if self._closed:
-                raise DevelopmentError("service_closed", "Контур наблюдения уже закрыт")
+                raise DevelopmentError("service_closed", "The observation workflow is already closed")
             return self._stop(expected_process)
 
     def _stop(self, expected_process: dict) -> dict:
@@ -671,7 +671,7 @@ class DevelopmentService:
                                  "-ExpectedPid", str(expected["pid"]),
                                  "-ExpectedCreationTime", expected["creation_time"]], mutating=True)
         if response.get("state") != "stopped" or response.get("process") != expected:
-            raise DevelopmentError("tool_protocol_error", "Ответ остановки не подтвердил завершение исходного процесса",
+            raise DevelopmentError("tool_protocol_error", "The stop response did not confirm termination of the original process",
                                    outcome_unknown=True)
         return {"state": "stop_result", "process": expected, "tool_result": response,
                 "outcome_unknown": False}
@@ -679,12 +679,12 @@ class DevelopmentService:
     def load_native(self, expected_process: dict, expected_dll_sha256: str) -> dict:
         with self._observation_lock:
             if self._closed:
-                raise DevelopmentError("service_closed", "Контур наблюдения уже закрыт")
+                raise DevelopmentError("service_closed", "The observation workflow is already closed")
             return self._load_native(expected_process, expected_dll_sha256)
 
     def _load_native(self, expected_process: dict, expected_dll_sha256: str) -> dict:
         if not isinstance(expected_dll_sha256, str) or not _SHA.fullmatch(expected_dll_sha256):
-            raise DevelopmentError("invalid_dll_hash", "Нужен SHA-256 проверенной DLL")
+            raise DevelopmentError("invalid_dll_hash", "The verified DLL SHA-256 is required")
         expected = self._expected_process(expected_process, self.process_state())
         try:
             dll = _checked(self.repository / "build" / "native" / "Release" / "G1R_MCP.dll", self.repository)
@@ -693,13 +693,13 @@ class DevelopmentService:
         except WorkspaceError as error:
             raise DevelopmentError(error.code, str(error)) from None
         if actual != expected_dll_sha256.lower():
-            raise DevelopmentError("dll_changed", "DLL изменилась после получения её SHA-256")
+            raise DevelopmentError("dll_changed", "The DLL changed after its SHA-256 was obtained")
         response = self._command("load_native.ps1", ["-GameRoot", str(self.game),
                                  "-ExpectedPid", str(expected["pid"]),
                                  "-ExpectedCreationTime", expected["creation_time"],
                                  "-ExpectedDllSha256", actual], mutating=True)
         if response.get("state") != "loaded" or response.get("process") != expected or response.get("dll_sha256") != actual:
-            raise DevelopmentError("tool_protocol_error", "Ответ загрузчика не подтвердил выбранные процесс и DLL",
+            raise DevelopmentError("tool_protocol_error", "The loader response did not confirm the selected process and DLL",
                                    outcome_unknown=True)
         return {"state": "load_result", "process": expected, "dll_sha256": actual,
                 "tool_result": response, "game_ready": False, "outcome_unknown": False}

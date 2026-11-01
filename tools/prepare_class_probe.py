@@ -1,4 +1,4 @@
-"""Подготовить классовую fixture внутри artifacts; игру и DLL не запускать."""
+"""Prepare a class fixture within artifacts without launching the game or DLL."""
 from __future__ import annotations
 
 import argparse
@@ -31,13 +31,13 @@ def _cleanup(stage: Path, workspace: Path, created: dict) -> None:
     with _guard_directories(stage, workspace):
         contents = set(stage.iterdir())
         if contents not in (set(), {package}):
-            raise WorkspaceError("unsafe_cleanup", "Временная база содержит чужие пути; остатки сохранены")
+            raise WorkspaceError("unsafe_cleanup", "The temporary workspace contains unrelated paths; remaining files were preserved")
         if contents:
             for directory in (package, script):
                 _assert_owned(created, directory, stage, directory=True)
             files = [path for path in (descriptor, source) if os.path.lexists(path)]
             if set(package.iterdir()) != {script, descriptor} or set(script.iterdir()) != ({source} if source in files else set()):
-                raise WorkspaceError("unsafe_cleanup", "Временный пакет содержит чужие пути; остатки сохранены")
+                raise WorkspaceError("unsafe_cleanup", "The temporary package contains unrelated paths; remaining files were preserved")
             for path in files:
                 _assert_owned(created, path, stage)
             with _guard_directories(script, stage):
@@ -57,7 +57,7 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
     validation = validate_package(fixture, ".")
     if (not validation["valid_structure"] or validation["script_count"] != 1
             or validation["metadata"].get("name") != PACKAGE_NAME):
-        raise PackageError("fixture_invalid", "Классовая fixture не прошла структурную проверку")
+        raise PackageError("fixture_invalid", "The class fixture failed structural validation")
     source = _read_bytes(fixture / SCRIPT_RELATIVE, fixture, 2 * 1024 * 1024)
     workspace = _workspace_path(Path(workspace_root), Path(repository_root))
     repository = _checked(Path(repository_root), directory=True)
@@ -66,7 +66,7 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
     created = {}
     with _destination_lock(target), _guard_directories(workspace, repository):
         if os.path.lexists(target):
-            raise PackageError("already_exists", "Классовая fixture уже существует; выберите новую рабочую базу")
+            raise PackageError("already_exists", "The class fixture already exists; choose a new workspace")
         try:
             stage = Path(tempfile.mkdtemp(prefix=".g1r-class-probe-", dir=workspace))
             _record_owned(created, stage, workspace, directory=True)
@@ -82,9 +82,9 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
                 _record_owned(created, package / SCRIPT_RELATIVE, stage)
                 copied = validate_package(stage, PACKAGE_NAME)
                 if not copied["valid_structure"] or copied["script_count"] != 1:
-                    raise PackageError("fixture_invalid", "Копия классовой fixture не прошла проверку")
+                    raise PackageError("fixture_invalid", "The class fixture copy failed validation")
                 if os.path.lexists(target):
-                    raise PackageError("already_exists", "Назначение появилось до атомарного завершения")
+                    raise PackageError("already_exists", "The destination appeared before atomic completion")
                 package.rename(target)
         finally:
             if stage is not None:
@@ -92,7 +92,7 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
                 try:
                     _cleanup(stage, workspace, created)
                 except (WorkspaceError, OSError) as error:
-                    message = "Небезопасная очистка пропущена; остатки сохранены: " + str(error)
+                    message = "Unsafe cleanup was skipped; remaining files were preserved: " + str(error)
                     if failure is None:
                         raise WorkspaceError("unsafe_cleanup", message) from error
                     failure.add_note(message)
@@ -117,13 +117,13 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
                          {"name": "EchoTypedClass", "inputs": [{"name": "Input", "type": "TSubclassOf<UG1RMCPClassBase>"}], "result": "TSubclassOf<UG1RMCPClassBase>"},
                          {"name": "StoreAnyClass", "inputs": [{"name": "Input", "type": "UClass"}], "result": "void"},
                          {"name": "StoreTypedClass", "inputs": [{"name": "Input", "type": "TSubclassOf<UG1RMCPClassBase>"}], "result": "void"}]},
-        "limitations": ["Подготовка не доказывает компиляцию, применение типов или загрузку класса",
-                        "Вызовы меняют только собственные проверочные поля; callbacks и создание игровых объектов отсутствуют"],
+        "limitations": ["Preparation does not prove compilation, type application, or class loading",
+                        "Calls change only the fixture fields; callbacks and game object creation are absent"],
     }
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Подготовить собственную class-fixture только внутри artifacts")
+    parser = argparse.ArgumentParser(description="Prepare an isolated class fixture only within artifacts")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT / "artifacts" / "class-probe-dev6")
     args = parser.parse_args()
     try:

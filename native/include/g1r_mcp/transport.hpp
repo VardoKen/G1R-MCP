@@ -40,9 +40,9 @@ private:
     nlohmann::json details_;
 };
 
-// Обработчик исполняется на рабочем потоке транспорта: игровые вызовы здесь
-// запрещены. Вызывающий код передаёт работу в игровую очередь и ограничивает
-// ожидание результата. stop() ждёт завершения уже вошедшего обработчика.
+// The handler runs on the transport worker thread; game calls are
+// prohibited here. The caller sends work to the game queue and bounds
+// the result wait. stop() waits for an already entered handler.
 class Transport {
 public:
     using Handler = std::function<nlohmann::json(const nlohmann::json&)>;

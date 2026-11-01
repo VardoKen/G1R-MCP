@@ -19,16 +19,16 @@ inline const nlohmann::json& checked_function_contract(const std::map<std::strin
                                                      const std::string& session,const std::string& handle,
                                                      const std::string& function_name) {
     if(!token.is_string() || !valid_signature_token(token.get_ref<const std::string&>()))
-        throw HandlerError("invalid_signature_token","Требуется выданный токен sig-N");
+        throw HandlerError("invalid_signature_token","An issued sig-N token is required");
     const auto found=saved.find(token.get<std::string>());
-    if(found==saved.end())throw HandlerError("unknown_signature_token","Токен отсутствует в текущей native-сессии; перечитайте сигнатуру");
+    if(found==saved.end())throw HandlerError("unknown_signature_token","The token is absent from the current native session; read the signature again");
     const auto& contract=found->second;
     if(contract.at("session")!=session || contract.at("target_handle")!=handle || contract.at("function_name")!=function_name)
-        throw HandlerError("signature_token_mismatch","Токен выдан другой сессии, объекту или функции");
+        throw HandlerError("signature_token_mismatch","The token belongs to a different session, object or function");
     return contract;
 }
 inline void require_same_function_contract(const nlohmann::json& expected,const nlohmann::json& actual) {
-    if(expected!=actual)throw HandlerError("signature_changed","Отражённая сигнатура изменилась после чтения; вызов не выполнен");
+    if(expected!=actual)throw HandlerError("signature_changed","The reflected signature changed after being read; the call did not execute");
 }
 inline nlohmann::json public_parameter_type_metadata(const std::string& type,const nlohmann::json& auxiliary) {
     nlohmann::json result=nlohmann::json::object();
@@ -55,19 +55,19 @@ inline std::string store_function_contract(std::map<std::string,nlohmann::json>&
                                          const nlohmann::json& contract) {
     for(const auto& [token,known]:saved)if(known==contract)return token;
     if(sequence==std::numeric_limits<std::uint64_t>::max())
-        throw HandlerError("signature_contract_limit","Счётчик токенов исчерпан");
+        throw HandlerError("signature_contract_limit","The token counter is exhausted");
     const auto token="sig-"+std::to_string(++sequence);
     saved.emplace(token,contract);return token;
 }
-// Включаем все поля цепочки: CPF_Parm может измениться между двумя чтениями.
+// Include every field in the chain; CPF_Parm can change between reads.
 template<class Reader>nlohmann::json capture_function_field_chain(std::uintptr_t head,Reader&& read_field) {
     nlohmann::json fields=nlohmann::json::array();std::set<std::uintptr_t> visited;
     while(head) {
         if(!visited.insert(head).second)
-            throw HandlerError("unsupported_signature","Цепочка параметров циклическая");
+            throw HandlerError("unsupported_signature","The parameter chain contains a cycle");
         auto field=std::invoke(std::forward<Reader>(read_field),head);
         if(!field.is_object() || !field.contains("next") || !field.at("next").is_number_unsigned())
-            throw HandlerError("unsupported_signature","Неполная запись поля сигнатуры");
+            throw HandlerError("unsupported_signature","The signature field entry is incomplete");
         fields.push_back(std::move(field));head=fields.back().at("next").get<std::uintptr_t>();
     }
     return fields;

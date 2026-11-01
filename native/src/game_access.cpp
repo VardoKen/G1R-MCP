@@ -203,7 +203,7 @@ bool copy_memory(void* destination, const void* source, size_t count) {
 template<class T> T read(uintptr_t address) {
     T value{};
     if (!copy_memory(&value, reinterpret_cast<void*>(address), sizeof(T)))
-        throw HandlerError("invalid_memory", "Память объекта недоступна");
+        throw HandlerError("invalid_memory", "Object memory is unavailable");
     return value;
 }
 bool call_event(void* function, void* object, void* event, void* params,native_exception::Diagnostic* fault) {
@@ -247,7 +247,7 @@ bool allocate_object_array(uintptr_t allocator,size_t bytes,void** result) {
 std::string utf8(const wchar_t* value, int length) {
     if (length <= 0) return {};
     int count = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value,length,nullptr,0,nullptr,nullptr);
-    if (!count) throw HandlerError("invalid_string", "Некорректная строка UTF-16");
+    if (!count) throw HandlerError("invalid_string", "Invalid UTF-16 string");
     std::string result(count,'\0');
     WideCharToMultiByte(CP_UTF8,WC_ERR_INVALID_CHARS,value,length,result.data(),count,nullptr,nullptr);
     return result;
@@ -257,7 +257,7 @@ std::string copied_string(const g1r_mcp::StringHeader& header) {
     std::vector<wchar_t> text(static_cast<size_t>(header.count));
     if(header.count && !copy_memory(text.data(),reinterpret_cast<void*>(header.data),
                                    static_cast<size_t>(header.count)*sizeof(wchar_t)))
-        throw HandlerError("invalid_memory","Строка недоступна");
+        throw HandlerError("invalid_memory","String memory is unavailable");
     if(header.count && text.back()==0)text.pop_back();
     return utf8(text.data(),static_cast<int>(text.size()));
 }
@@ -325,7 +325,7 @@ uintptr_t GameAccess::ensure_image_base() {
     if(base_)return base_;
     if(file_hash()!=kHash) {
         startup_error_="exe_hash_mismatch";
-        throw HandlerError("exe_hash_mismatch","Требуется подтверждённая сборка игры");
+        throw HandlerError("exe_hash_mismatch","The confirmed game executable is required");
     }
     base_=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
     return base_;
@@ -425,19 +425,19 @@ void __fastcall GameAccess::hooked_as_stack_trace(void* output) {
     bool complete=false;
     try {
         ArrayHeader header{};
-        if(!copy_memory(&header,output,sizeof(header)))throw HandlerError("invalid_memory","Стек недоступен");
+        if(!copy_memory(&header,output,sizeof(header)))throw HandlerError("invalid_memory","Stack memory is unavailable");
         if(header.count<0 || header.capacity<header.count ||
            (!header.data && (header.count || header.capacity)) ||
            (header.data && (!header.capacity || header.data%alignof(StringHeader))))
-            throw HandlerError("invalid_array_header","Некорректный массив стека");
+            throw HandlerError("invalid_array_header","Invalid stack array");
         const auto capacity_bytes=static_cast<uintptr_t>(header.capacity)*sizeof(StringHeader);
         if(header.data>std::numeric_limits<uintptr_t>::max()-capacity_bytes)
-            throw HandlerError("invalid_array_header","Адресный диапазон стека переполняется");
+            throw HandlerError("invalid_array_header","The stack address range overflows");
         frames.reserve(static_cast<size_t>(header.count));
         for(int32_t index=0;index<header.count;++index) {
             StringHeader frame{};
             if(!copy_memory(&frame,reinterpret_cast<const void*>(header.data+static_cast<uintptr_t>(index)*sizeof(frame)),sizeof(frame)))
-                throw HandlerError("invalid_memory","Кадр стека недоступен");
+                throw HandlerError("invalid_memory","Stack frame memory is unavailable");
             frames.push_back(copied_string(frame));
         }
         complete=true;
@@ -551,7 +551,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.62"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.63"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -592,12 +592,12 @@ json GameAccess::status() const {
                               {"checks",{"object_serial","class_identity","class_serial"}},
                               {"coverage","conditional_on_observed_nonzero_object_and_class_serial"},
                               {"allocates_serial",false},{"zero_aba_protection",false}}},
-            {"limitations",{"Экспериментальная привязка к одному EXE","Нулевые serial не защищают от ABA; появившийся serial отзывает прежнюю ссылку","Одно активное соединение; ссылки и наблюдения принадлежат его сессии","Смена мира не определяет отдельное поколение; проверяется объект перед каждым чтением","Без выгрузки DLL: завершение через закрытие игры"}}};
+            {"limitations",{"Experimental binding to one executable","Zero serial values do not protect against ABA; an observed serial change invalidates the previous handle","One active connection; handles and observations belong to its session","World changes do not define a separate generation; objects are checked before each read","The DLL cannot be unloaded; close the game to terminate it"}}};
 }
 json GameAccess::compile_diagnostics() {
     const auto image_base=ensure_image_base();
     const auto manager=read<uintptr_t>(image_base+kAngelscriptManager);
-    if(!manager)throw HandlerError("compile_diagnostics_unavailable","Менеджер AngelScript ещё не создан");
+    if(!manager)throw HandlerError("compile_diagnostics_unavailable","The AngelScript manager has not been created");
     auto* compilation_lock=reinterpret_cast<CRITICAL_SECTION*>(manager+0x390);
     std::string text;
     EnterCriticalSection(compilation_lock);
@@ -613,7 +613,7 @@ json GameAccess::compile_diagnostics() {
                 const auto count=std::min<size_t>(bytes-offset,1048576);
                 if(!copy_memory(reinterpret_cast<std::byte*>(copied.data())+offset,
                                 reinterpret_cast<const void*>(value.data+offset),count))
-                    throw HandlerError("invalid_memory","Текст диагностики недоступен");
+                    throw HandlerError("invalid_memory","Diagnostic text is unavailable");
                 offset+=count;
             }
             if(!copied.empty() && copied.back()==0)copied.pop_back();
@@ -634,24 +634,24 @@ json GameAccess::request(const json& envelope) {
     if(envelope.at("op")=="compile_diagnostics") return compile_diagnostics();
     if(envelope.at("op")=="movieplayer_status")return movieplayer_status(envelope.at("session_id").get<std::string>());
     if(envelope.at("op")=="movieplayer_finish")return request_movieplayer_finish(envelope);
-    if(!enabled_) throw HandlerError("native_not_ready","Перехват игры не установлен: "+startup_error_);
+    if(!enabled_) throw HandlerError("native_not_ready","Game hooks are not installed: "+startup_error_);
     auto job=std::make_shared<Job>();job->request=envelope;auto future=job->result.get_future();
     {std::unique_lock lock(queue_mutex_,std::try_to_lock);
-     if(!lock.owns_lock())throw HandlerError("game_thread_busy","Очередь занята обслуживанием игрового потока; запрос не поставлен",
+     if(!lock.owns_lock())throw HandlerError("game_thread_busy","The game thread is servicing the queue; the request was not queued",
         {{"executed",false},{"may_have_executed",false},{"do_not_retry",false},{"request_started",false},{"stage","not_queued"}});
      queue_.push_back(job);}
     if(future.wait_for(std::chrono::milliseconds(kRequestWaitMs))!=std::future_status::ready) {
         if(job->state.cancel()) {
             ++cancelled_jobs_;
             {std::unique_lock lock(queue_mutex_,std::try_to_lock);if(lock.owns_lock()){auto entry=std::find(queue_.begin(),queue_.end(),job);if(entry!=queue_.end())queue_.erase(entry);}}
-            throw HandlerError("game_not_pumping","Запрос отменён до начала: игровой Tick не обслужил очередь",
+            throw HandlerError("game_not_pumping","The request was cancelled before execution because the game Tick did not service the queue",
                 {{"executed",false},{"may_have_executed",false},{"do_not_retry",false},
                  {"request_started",false},{"stage","queued_cancelled"},{"native_status",status()}});
         }
         if(future.wait_for(std::chrono::milliseconds(0))==std::future_status::ready)return future.get();
-        if(job->state.get()==JobState::cancelled)throw HandlerError("session_closed","Запрос отменён до исполнения после закрытия сессии",
+        if(job->state.get()==JobState::cancelled)throw HandlerError("session_closed","The request was cancelled before execution after its session closed",
             {{"executed",false},{"may_have_executed",false},{"do_not_retry",false},{"request_started",false},{"stage","queued_cancelled"}});
-        throw HandlerError("game_timeout","Ожидание закончено; принятый вызов мог выполниться",
+        throw HandlerError("game_timeout","The wait timed out; the accepted call may have executed",
             {{"executed",false},{"may_have_executed",true},{"do_not_retry",true},
              {"request_started",true},{"stage","running_outcome_unknown"},{"native_status",status()}});
     }
@@ -659,7 +659,7 @@ json GameAccess::request(const json& envelope) {
 }
 void GameAccess::disconnect(const std::string& session) {
     movieplayer_jobs_.disconnect(session);
-    // Сетевой поток: только пометка и отмена ещё не вошедших в Tick работ.
+    // Network thread: only mark cleanup and cancel jobs that have not entered Tick.
     std::lock_guard lock(queue_mutex_);
     session_cleanup_pending_=true;
     for (const auto& job : queue_) {
@@ -667,7 +667,7 @@ void GameAccess::disconnect(const std::string& session) {
         if (job->state.cancel()) {
             ++cancelled_jobs_;
             job->result.set_exception(std::make_exception_ptr(
-                HandlerError("session_closed","Сессия отключилась до исполнения запроса")));
+                HandlerError("session_closed","The session disconnected before the request executed")));
         }
     }
 }
@@ -695,8 +695,8 @@ void GameAccess::pump() {
     }
     const auto now=static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
-    // Уведомление disconnect ждёт уже вошедшее чтение; после пометки новая
-    // выборка не начинается. Реальная очистка выполняется тем же Tick.
+    // Disconnect notification waits for an active read; once marked,
+    // no new sample starts. The same Tick performs the actual cleanup.
     {
         std::lock_guard lock(queue_mutex_);
         if(session_cleanup_pending_) {
@@ -712,13 +712,13 @@ std::string GameAccess::name(uint64_t fname) const {
     uint32_t index=static_cast<uint32_t>(fname),number=static_cast<uint32_t>(fname>>32);
     uint32_t block=index>>16;
     auto current=read<uint32_t>(base_+kNames+8);
-    if(block>current || block>=8192) throw HandlerError("invalid_name","Недействительное имя");
+    if(block>current || block>=8192) throw HandlerError("invalid_name","Invalid name");
     auto data=read<uintptr_t>(base_+kNames+0x10+block*8ull)+(index&65535)*2ull;
     auto header=read<uint16_t>(data);int length=header>>6;
-    if(length<1 || length>1023 || (index&65535)*2ull+2+length*((header&1)?2:1)>0x20000) throw HandlerError("invalid_name","Недействительная запись имени");
+    if(length<1 || length>1023 || (index&65535)*2ull+2+length*((header&1)?2:1)>0x20000) throw HandlerError("invalid_name","Invalid name entry");
     std::string result;
-    if(header&1) {std::vector<wchar_t> text(length);if(!copy_memory(text.data(),reinterpret_cast<void*>(data+2),length*2ull))throw HandlerError("invalid_memory","Имя недоступно");result=utf8(text.data(),length);}
-    else {std::string bytes(length,'\0');if(!copy_memory(bytes.data(),reinterpret_cast<void*>(data+2),length))throw HandlerError("invalid_memory","Имя недоступно");
+    if(header&1) {std::vector<wchar_t> text(length);if(!copy_memory(text.data(),reinterpret_cast<void*>(data+2),length*2ull))throw HandlerError("invalid_memory","Name memory is unavailable");result=utf8(text.data(),length);}
+    else {std::string bytes(length,'\0');if(!copy_memory(bytes.data(),reinterpret_cast<void*>(data+2),length))throw HandlerError("invalid_memory","Name memory is unavailable");
         std::wstring text; for(unsigned char byte:bytes)text.push_back(static_cast<wchar_t>(byte));result=utf8(text.data(),static_cast<int>(text.size()));}
     if(number) result+="_"+std::to_string(number-1);return result;
 }
@@ -747,9 +747,9 @@ GameAccess::SlotIdentity GameAccess::slot_identity(int index) const {
     const auto object=read<uintptr_t>(item);
     if(!object)return {};
     const auto serial=read<int32_t>(item+0x10);
-    if(!valid_observed_serial(serial))throw HandlerError("unsupported_serial_value","Наблюдаемый serial слота не поддержан");
+    if(!valid_observed_serial(serial))throw HandlerError("unsupported_serial_value","The observed slot serial value is unsupported");
     if(read<uintptr_t>(item)!=object || read<int32_t>(item+0x10)!=serial)
-        throw HandlerError("stale_handle","Identity слота изменилась при чтении; получите новую ссылку");
+        throw HandlerError("stale_handle","Slot identity changed during the read; obtain a new handle");
     return {reinterpret_cast<void*>(object),serial};
 }
 void* GameAccess::slot(int index) const {
@@ -761,7 +761,7 @@ ObjectSerialIdentity GameAccess::serial_identity(const Handle& value) {
 }
 std::string GameAccess::handle_for(void* object,int index) {
     const auto identity=validate_object(object);
-    if(identity.index!=index)throw HandlerError("stale_handle","Индекс объекта изменился");
+    if(identity.index!=index)throw HandlerError("stale_handle","The object index changed");
     for(const auto& [id,existing]:handles_) {
         if(same_serial_identity(serial_identity(existing),serial_identity(identity)))return id;
     }
@@ -769,19 +769,19 @@ std::string GameAccess::handle_for(void* object,int index) {
     handles_[id]=identity;return id;
 }
 GameAccess::Handle GameAccess::validate_object(void* object) const {
-    if(!object)throw HandlerError("invalid_object","Указатель объекта отсутствует");
+    if(!object)throw HandlerError("invalid_object","The object pointer is missing");
     const auto ptr=reinterpret_cast<uintptr_t>(object);
     const auto index=read<int32_t>(ptr+0xc);
     const auto item=slot_identity(index);
-    if(index<0 || item.object!=object)throw HandlerError("stale_handle","Объект не соответствует слоту реестра");
-    if(read<uint32_t>(ptr+8)&0x18000)throw HandlerError("object_destroying","Объект уничтожается");
+    if(index<0 || item.object!=object)throw HandlerError("stale_handle","The object does not match its registry slot");
+    if(read<uint32_t>(ptr+8)&0x18000)throw HandlerError("object_destroying","The object is being destroyed");
     const auto object_class=read<uintptr_t>(ptr+0x10);
-    if(!object_class)throw HandlerError("invalid_object_class","У объекта отсутствует класс");
+    if(!object_class)throw HandlerError("invalid_object_class","The object has no class");
     const auto class_index=read<int32_t>(object_class+0xc);
     const auto class_item=slot_identity(class_index);
     if(class_index<0 || class_item.object!=reinterpret_cast<void*>(object_class)
        || (read<uint32_t>(object_class+8)&0x18000))
-        throw HandlerError("invalid_object_class","Класс объекта не соответствует живому слоту");
+        throw HandlerError("invalid_object_class","The object class does not match a live registry slot");
     const auto object_fname=read<uint64_t>(ptr+0x18);
     const auto class_fname=read<uint64_t>(object_class+0x18);
     name(object_fname);name(class_fname);
@@ -791,25 +791,25 @@ GameAccess::Handle GameAccess::validate_object(void* object) const {
        || read<int32_t>(ptr+0xc)!=index || read<uintptr_t>(ptr+0x10)!=object_class
        || read<uint64_t>(ptr+0x18)!=object_fname || read<int32_t>(object_class+0xc)!=class_index
        || read<uint64_t>(object_class+0x18)!=class_fname)
-        throw HandlerError("stale_handle","Identity объекта или класса изменилась при чтении; получите новую ссылку");
+        throw HandlerError("stale_handle","Object or class identity changed during the read; obtain a new handle");
     if((read<uint32_t>(ptr+8)|read<uint32_t>(object_class+8))&0x18000)
-        throw HandlerError("object_destroying","Объект или класс уничтожается");
+        throw HandlerError("object_destroying","The object or its class is being destroyed");
     return {object,reinterpret_cast<void*>(object_class),index,object_fname,item.serial,class_index,class_fname,class_item.serial};
 }
 void GameAccess::validate_class(void* object_class) const {
-    // Точная identity metaclass подтверждена read-only в текущей игре:
+    // Exact metaclass identity was confirmed by a read-only probe in the current game:
     // /Script/CoreUObject.Class (index 15, class Class), 30.10.2026.
     const auto identity=validate_object(object_class);
     auto metaclass=reinterpret_cast<uintptr_t>(identity.object_class);
     std::set<uintptr_t> visited;
     for(;metaclass;) {
         if(!visited.insert(metaclass).second)
-            throw HandlerError("invalid_object_class","Цикл метакласса");
+            throw HandlerError("invalid_object_class","The metaclass chain contains a cycle");
         validate_object(reinterpret_cast<void*>(metaclass));
         if(object_path(reinterpret_cast<void*>(metaclass))=="/Script/CoreUObject.Class")return;
         metaclass=read<uintptr_t>(metaclass+0x40);
     }
-    throw HandlerError("invalid_object_class","Объект PropertyClass не является подтверждённым UClass");
+    throw HandlerError("invalid_object_class","The PropertyClass object is not a confirmed UClass");
 }
 bool GameAccess::is_compatible_object(void* object,void* expected_class) const {
     const auto identity=validate_object(object);
@@ -841,7 +841,7 @@ json GameAccess::object_descriptor(void* object,void* expected_class) {
     validate_class(expected_class);
     if(!object)return nullptr;
     if(!is_compatible_object(object,expected_class))
-        throw HandlerError("incompatible_object_result","Объект не принадлежит объявленному классу свойства");
+        throw HandlerError("incompatible_object_result","The object is incompatible with the property's declared class");
     const auto identity=validate_object(object);
     const auto path=object_path(object);
     json result={{"handle",handle_for(object,identity.index)},{"index",identity.index},
@@ -849,7 +849,7 @@ json GameAccess::object_descriptor(void* object,void* expected_class) {
         {"session_id",handle_session_}};
     const auto after=validate_object(object);
     if(!same_serial_identity(serial_identity(identity),serial_identity(after)))
-        throw HandlerError("stale_handle","Объектное значение изменилось при копировании");
+        throw HandlerError("stale_handle","The object value changed while being copied");
     return result;
 }
 json GameAccess::class_descriptor(void* object,void* property_class,void* meta_class) {
@@ -858,64 +858,64 @@ json GameAccess::class_descriptor(void* object,void* property_class,void* meta_c
     if(!object)return nullptr;
     validate_class(object);
     if(!is_compatible_class(object,property_class,meta_class))
-        throw HandlerError("incompatible_class_result","UClass не соответствует PropertyClass или MetaClass");
+        throw HandlerError("incompatible_class_result","UClass is incompatible with PropertyClass or MetaClass");
     auto result=object_descriptor(object,property_class);
     if(!is_compatible_class(object,property_class,meta_class))
-        throw HandlerError("incompatible_class_result","Классовое значение изменилось при копировании");
+        throw HandlerError("incompatible_class_result","The class value changed while being copied");
     return result;
 }
 json GameAccess::property_value(uintptr_t address,const std::string& type,int size,uintptr_t field) {
     if(type=="ClassProperty") {
-        if(size!=8)throw HandlerError("unsupported_property_layout","ClassProperty требует указатель x64");
+        if(size!=8)throw HandlerError("unsupported_property_layout","ClassProperty requires an x64 pointer");
         return class_descriptor(reinterpret_cast<void*>(read<uintptr_t>(address)),
             reinterpret_cast<void*>(read<uintptr_t>(field+0x70)),reinterpret_cast<void*>(read<uintptr_t>(field+0x78)));
     }
     if(type=="ObjectProperty") {
-        if(size!=sizeof(uintptr_t))throw HandlerError("unsupported_property_layout","ObjectProperty требует указатель x64");
+        if(size!=sizeof(uintptr_t))throw HandlerError("unsupported_property_layout","ObjectProperty requires an x64 pointer");
         const auto expected_class=reinterpret_cast<void*>(read<uintptr_t>(field+0x70));
         return object_descriptor(reinterpret_cast<void*>(read<uintptr_t>(address)),expected_class);
     }
     if(type=="NameProperty") {
-        if(size!=8)throw HandlerError("unsupported_property_layout","NameProperty требует FName размером 8 байт");
+        if(size!=8)throw HandlerError("unsupported_property_layout","NameProperty requires an 8-byte FName");
         return name(read<uint64_t>(address));
     }
     if(type=="EnumProperty" || type=="ByteProperty")return enum_property(address,type,size,field).at("value");
     return scalar(address,type,size,field);
 }
 GameAccess::EnumTable GameAccess::enum_table(void* object) const {
-    if(!object)throw HandlerError("enum_validation_unavailable","UEnum для проверки аргумента отсутствует");
+    if(!object)throw HandlerError("enum_validation_unavailable","The UEnum required for argument validation is missing");
     try {
         const auto identity=validate_object(object);
         const auto enum_class=reinterpret_cast<uintptr_t>(identity.object_class);
         validate_class(identity.object_class);
-        // Root read-only probe 31.10.2026 подтвердил /Script/CoreUObject.Enum:
-        // index 19, name Enum, class Class; UserDefinedEnum принимает наследование.
+        // Root read-only probe on 2026-10-31 confirmed /Script/CoreUObject.Enum:
+        // index 19, name Enum, class Class; UserDefinedEnum supports inheritance.
         bool valid_enum=false;
         std::set<uintptr_t> visited;
         auto current=enum_class;
         for(;current;) {
-            if(!visited.insert(current).second)throw HandlerError("invalid_enum_class","Цикл класса UEnum");
+            if(!visited.insert(current).second)throw HandlerError("invalid_enum_class","The UEnum class chain contains a cycle");
             validate_class(reinterpret_cast<void*>(current));
             if(object_path(reinterpret_cast<void*>(current))=="/Script/CoreUObject.Enum"){valid_enum=true;break;}
             current=read<uintptr_t>(current+0x40);
         }
-        if(!valid_enum)throw HandlerError("invalid_enum_class","Объявление enum не является UEnum");
+        if(!valid_enum)throw HandlerError("invalid_enum_class","The enum declaration is not a UEnum");
         const auto path=object_path(object);
         const auto ptr=reinterpret_cast<uintptr_t>(object);
         const auto data=read<uintptr_t>(ptr+0x40);
         const auto count=read<int32_t>(ptr+0x48),capacity=read<int32_t>(ptr+0x4c);
         const auto bytes=g1r::enum_values::table_byte_size(count,capacity,data!=0);
         if(data>std::numeric_limits<uintptr_t>::max()-bytes)
-            throw HandlerError("invalid_enum_table","Адресный диапазон таблицы enum переполнен");
+            throw HandlerError("invalid_enum_table","The enum table address range overflows");
         std::vector<std::byte> copied(bytes);
         if(bytes && !copy_memory(copied.data(),reinterpret_cast<void*>(data),bytes))
-            throw HandlerError("invalid_enum_table","Таблица enum недоступна");
+            throw HandlerError("invalid_enum_table","The enum table is unavailable");
         if(read<uintptr_t>(ptr+0x40)!=data || read<int32_t>(ptr+0x48)!=count
            || read<int32_t>(ptr+0x4c)!=capacity)
-            throw HandlerError("enum_table_changed","Таблица enum изменилась при копировании");
+            throw HandlerError("enum_table_changed","The enum table changed while being copied");
         const auto after=validate_object(object);
         if(!same_serial_identity(serial_identity(identity),serial_identity(after)))
-            throw HandlerError("stale_handle","Enum изменился при копировании");
+            throw HandlerError("stale_handle","The enum changed while being copied");
         auto entries=g1r::enum_values::decode_entries(copied,count,capacity);
         return {identity,path,std::move(entries)};
     } catch(const std::invalid_argument& error) {
@@ -944,21 +944,21 @@ GameAccess::EnumLayout GameAccess::enum_layout(const std::string& type,int size,
     try {
         if(field_type(field,[this](auto f){return name(f);})!=type
            || read<int32_t>(field+0x34)!=size || read<int32_t>(field+0x30)!=1)
-            throw HandlerError("unsupported_enum_underlying_layout","Внешняя раскладка enum изменилась или не поддержана");
+            throw HandlerError("unsupported_enum_underlying_layout","The outer enum layout changed or is unsupported");
         std::string underlying_type="ByteProperty";
         uintptr_t enum_ptr=0;
         if(type=="EnumProperty") {
             const auto underlying=read<uintptr_t>(field+0x70);
-            if(!underlying)throw HandlerError("unsupported_enum_underlying_layout","UnderlyingProp отсутствует");
+            if(!underlying)throw HandlerError("unsupported_enum_underlying_layout","UnderlyingProp is missing");
             underlying_type=field_type(underlying,[this](auto f){return name(f);});
             if(read<int32_t>(underlying+0x30)!=1 || read<int32_t>(underlying+0x34)!=size)
-                throw HandlerError("unsupported_enum_underlying_layout","Размер/массив UnderlyingProp не совпадает");
+                throw HandlerError("unsupported_enum_underlying_layout","The UnderlyingProp size or array dimension does not match");
             enum_ptr=read<uintptr_t>(field+0x78);
         } else enum_ptr=read<uintptr_t>(field+0x70);
         g1r::enum_values::integer_layout(underlying_type,size);
         return {underlying_type,size,reinterpret_cast<void*>(enum_ptr)};
     } catch(const std::invalid_argument& error) {
-        throw HandlerError(error.what(),"Неподдерживаемая раскладка enum");
+        throw HandlerError(error.what(),"Unsupported enum layout");
     }
 }
 json GameAccess::enum_property(uintptr_t address,const std::string& type,int size,uintptr_t field) {
@@ -967,22 +967,22 @@ json GameAccess::enum_property(uintptr_t address,const std::string& type,int siz
         const auto declared=enum_layout(type,size,field);
         const auto layout=ev::integer_layout(declared.underlying_type,size);
         std::array<std::byte,8> copied{};
-        if(!copy_memory(copied.data(),reinterpret_cast<void*>(address),layout.bytes))throw HandlerError("invalid_memory","Число enum недоступно");
+        if(!copy_memory(copied.data(),reinterpret_cast<void*>(address),layout.bytes))throw HandlerError("invalid_memory","The enum integer value is unavailable");
         const auto integer=ev::decode_integer(declared.underlying_type,size,std::span(copied).first(layout.bytes));
         auto value=std::visit([](auto number){return json(number);},integer);
         json result={{"value",value}};
         if(type=="EnumProperty" || declared.object)result["enum"]=enum_metadata(declared.object,value,declared.underlying_type);
         return result;
     } catch(const std::invalid_argument& error) {
-        throw HandlerError(error.what(),"Неподдерживаемая раскладка enum");
+        throw HandlerError(error.what(),"Unsupported enum layout");
     }
 }
 void* GameAccess::resolve(const std::string& id) {
-    auto found=handles_.find(id);if(found==handles_.end())throw HandlerError("stale_handle","Ссылка неизвестна или истекла");
+    auto found=handles_.find(id);if(found==handles_.end())throw HandlerError("stale_handle","The handle is unknown or expired");
     const auto& h=found->second;
     const auto current=validate_object(h.object);
     if(!same_serial_identity(serial_identity(h),serial_identity(current)))
-        throw HandlerError("stale_handle","Наблюдаемая identity объекта или класса изменилась; получите новую ссылку");
+        throw HandlerError("stale_handle","Observed object or class identity changed; obtain a new handle");
     return h.object;
 }
 json GameAccess::object_info(void* object,int index) {
@@ -1039,13 +1039,13 @@ json GameAccess::selected_properties(void* object,const json& names) {
             try {
                 if(offset<0 || size<=0 || size>class_size || offset>class_size-size
                    || read<int32_t>(field+0x30)!=1)
-                    throw HandlerError("unsupported_property_layout","Неподдерживаемая раскладка свойства");
+                    throw HandlerError("unsupported_property_layout","Unsupported property layout");
                 json value;
                 if(type=="EnumProperty" || type=="ByteProperty") {
                     const auto result=enum_property(reinterpret_cast<uintptr_t>(object)+offset,type,size,field);
                     value=result.at("value");if(result.contains("enum"))item["enum"]=result.at("enum");
                 } else value=property_value(reinterpret_cast<uintptr_t>(object)+offset,type,size,field);
-                if(value.is_null() && type!="ObjectProperty" && type!="ClassProperty")throw HandlerError("unsupported_property_type","Тип свойства не поддержан");
+                if(value.is_null() && type!="ObjectProperty" && type!="ClassProperty")throw HandlerError("unsupported_property_type","The property type is unsupported");
                 item["value"]=std::move(value);item["supported"]=true;
             } catch(const HandlerError& error) {
                 item["error"]={{"code",error.code()},{"message",error.what()}};
@@ -1061,7 +1061,7 @@ json GameAccess::selected_properties(void* object,const json& names) {
         if(found==selected.end()) {
             items.push_back({{"name",key},{"type",nullptr},{"supported",false},
                 {"error",{{"code",scan_truncated?"property_scan_truncated":"property_not_found"},
-                           {"message",scan_truncated?"Property chain contains a cycle":"Свойство не найдено"}}}});
+                           {"message",scan_truncated?"Property chain contains a cycle":"Property not found"}}}});
             partial=true;
         } else {
             if(!found->second.at("supported").get<bool>())partial=true;
@@ -1116,12 +1116,12 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
             {"index",observed.index},{"name",observed.name},{"serial",observed.serial},
             {"class_index",observed.class_index},{"class_name",observed.class_name},{"class_serial",observed.class_serial}};
     };
-    if(resolve(target_handle)!=object)throw HandlerError("signature_token_mismatch","Ссылка сигнатуры относится к другому объекту");
+    if(resolve(target_handle)!=object)throw HandlerError("signature_token_mismatch","The signature handle belongs to a different object");
     validate_class(reinterpret_cast<void*>(owner));
     const auto object_identity=validate_object(object),owner_identity=validate_object(reinterpret_cast<void*>(owner));
     const auto function_identity=validate_object(reinterpret_cast<void*>(function));
     if(!contains(object_name(function_identity.object_class),"Function"))
-        throw HandlerError("unsupported_signature","Запись отражения не является UFunction");
+        throw HandlerError("unsupported_signature","The reflected entry is not a UFunction");
     const auto function_name=object_name(reinterpret_cast<void*>(function));
     const auto field_head=read<uintptr_t>(function+0x50);
     const auto function_flags=read<uint32_t>(function+0xb0);
@@ -1140,17 +1140,17 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         if(!(flags&0x80))return captured;
         ++count;extent=parameter_extent(extent,offset,size,array_dim);
         const bool returned=(flags&0x400)!=0;
-        if(returned && ++returns>1)throw HandlerError("unsupported_signature","У UFunction несколько возвратов");
+        if(returned && ++returns>1)throw HandlerError("unsupported_signature","UFunction has multiple return parameters");
         const bool scalar_output=!returned && supported_scalar_output_type(type) && (flags&0x100);
         json scalar_public=nullptr;
         if(scalar_output) {
             if(parameter_direction::classify(flags)!=parameter_direction::Direction::output)
-                throw HandlerError("unsupported_signature","Скалярный параметр не является pure out");
+                throw HandlerError("unsupported_signature","The scalar parameter is not a pure output");
             scalar_public=scalar_output_metadata(capture_scalar_output_layout(field,type,size,array_dim));
         } else if(!returned && type!="StructProperty" && type!="StrProperty" && type!="ArrayProperty" && (flags&(0x100|kReferenceParm)))
-            throw HandlerError("unsupported_signature","Out/ref аргументы этого типа не поддержаны");
+            throw HandlerError("unsupported_signature","Out or reference arguments of this type are unsupported");
         if(returned && supported_scalar_output_type(type) && (flags&(kReferenceParm|kConstParm)))
-            throw HandlerError("unsupported_signature","Const/ref скалярный возврат не поддержан");
+            throw HandlerError("unsupported_signature","Const or reference scalar returns are unsupported");
         bool supported=false;
         json vector_public=nullptr,transform_public=nullptr,rotator_public=nullptr,array_public=nullptr,color_public=nullptr,scalar_struct_public=nullptr;std::string vector_direction;
         if(type=="BoolProperty") {
@@ -1166,19 +1166,19 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
             const auto structure_path=object_path(reinterpret_cast<void*>(read<uintptr_t>(field+0x70)));
             if(structure_path=="/Script/CoreUObject.LinearColor") {
                 if(flags&(kConstParm|kReferenceParm) || (!returned && (flags&0x100)))
-                    throw HandlerError("unsupported_signature","FLinearColor поддержан только по значению, без Const/Ref/Out");
+                    throw HandlerError("unsupported_signature","FLinearColor is supported only by value without Const, Ref or Out");
                 const auto color=capture_linear_color_parameter(field,size,array_dim);
                 captured["aux"]={{"linear_color",linear_color_snapshot_json(color)}};
                 color_public=linear_color_snapshot_json(color,false);supported=true;
             } else if(structure_path=="/Script/CoreUObject.Transform") {
                 if(returned) {
                     if(flags&(kConstParm|kReferenceParm))
-                        throw HandlerError("unsupported_signature","Const/ref возврат Transform не поддержан");
+                        throw HandlerError("unsupported_signature","Const or reference Transform returns are unsupported");
                 } else if(vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
-                    throw HandlerError("unsupported_signature","Transform требует вход по значению либо const reference; Out не поддержан");
+                    throw HandlerError("unsupported_signature","Transform requires input by value or const reference; Out is unsupported");
                 const auto transform=capture_transform_parameter(field,size,array_dim);
                 if(offset%transform.layout.min_alignment)
-                    throw HandlerError("unsupported_transform_layout","Смещение Transform не соответствует отражённому выравниванию");
+                    throw HandlerError("unsupported_transform_layout","The Transform offset does not match its reflected alignment");
                 captured["aux"]={{"transform",transform_snapshot_json(transform)}};
                 transform_public=transform_snapshot_json(transform,false);supported=true;
             } else if(structure_path=="/Script/CoreUObject.Vector") {
@@ -1187,7 +1187,7 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                     vector_direction=direction==vector_parameter_direction::Direction::output?"output":"input";
                 } else {
                     if(flags&(kReferenceParm|kConstParm))
-                        throw HandlerError("unsupported_signature","Const/ref возврат FVector не поддержан");
+                        throw HandlerError("unsupported_signature","Const or reference FVector returns are unsupported");
                     vector_direction="return";
                 }
                 const auto vector=capture_vector_parameter(field,size,array_dim);
@@ -1196,34 +1196,34 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
             } else if(structure_path=="/Script/CoreUObject.Rotator") {
                 if(returned) {
                     if(flags&(kConstParm|kReferenceParm))
-                        throw HandlerError("unsupported_signature","Const/ref возврат FRotator не поддержан");
+                        throw HandlerError("unsupported_signature","Const or reference FRotator returns are unsupported");
                 } else if(vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
-                    throw HandlerError("unsupported_signature","FRotator требует вход по значению либо const reference; mutable Out не поддержан");
+                    throw HandlerError("unsupported_signature","FRotator requires input by value or const reference; mutable Out is unsupported");
                 const auto rotator=capture_scalar_struct(field,size,array_dim);
                 rotator_arguments::validate(rotator);
                 if(offset%rotator.layout.min_alignment)
-                    throw HandlerError("unsupported_rotator_layout","Смещение FRotator не соответствует отражённому выравниванию");
+                    throw HandlerError("unsupported_rotator_layout","The FRotator offset does not match its reflected alignment");
                 captured["aux"]={{"rotator",scalar_struct_snapshot_json(rotator)}};
                 rotator_public=scalar_struct_snapshot_json(rotator,false);supported=true;
             } else {
                 if(!returned || (flags&(kConstParm|kReferenceParm)))
-                    throw HandlerError("unsupported_signature","Скалярный DTO поддержан только как возврат по значению");
+                    throw HandlerError("unsupported_signature","Scalar DTO is supported only as a return by value");
                 const auto scalar_struct=capture_scalar_struct(field,size,array_dim);
                 if(offset%scalar_struct.layout.min_alignment)
-                    throw HandlerError("unsupported_scalar_struct_layout","Смещение DTO не соответствует отражённому выравниванию");
+                    throw HandlerError("unsupported_scalar_struct_layout","The DTO offset does not match its reflected alignment");
                 captured["aux"]={{"scalar_struct",scalar_struct_snapshot_json(scalar_struct)}};
                 scalar_struct_public=scalar_struct_snapshot_json(scalar_struct,false);supported=true;
             }
         }
         else if(type=="StrProperty") {
             supported=size==16;
-            if(offset%8)throw HandlerError("unsupported_signature","FString требует выравнивание параметра 8 байт");
+            if(offset%8)throw HandlerError("unsupported_signature","FString requires 8-byte parameter alignment");
             if(!returned && vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
                 throw HandlerError("unsupported_signature","FString requires value or const reference input");
         }
         else if(type=="ArrayProperty") {
             if(returned || !(flags&kConstParm) || vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
-                throw HandlerError("unsupported_signature","Object array поддержан только как const reference input");
+                throw HandlerError("unsupported_signature","Object arrays are supported only as const reference inputs");
             const auto array=capture_object_array_parameter(field,size,array_dim,flags);
             captured["aux"]={{"object_array",array}};array_public=array.at("public");supported=true;
         }
@@ -1265,7 +1265,7 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
             } else captured["aux"]["enum"]=nullptr;
             supported=true;
         }
-        if(!supported)throw HandlerError("unsupported_signature","Тип или размер параметра пока не поддержан: "+type);
+        if(!supported)throw HandlerError("unsupported_signature","The parameter type or size is unsupported: "+type);
         json public_parameter={{"name",name(field_name)},{"type",type},{"offset",offset},{"element_size",size},
             {"array_dim",array_dim},{"flags",flags},{"return",returned},{"out",(flags&0x100)!=0},
             {"reference",(flags&kReferenceParm)!=0},{"const",(flags&kConstParm)!=0}};
@@ -1282,7 +1282,6 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         if(!transform_public.is_null()) {
             public_parameter["struct"]=transform_public;public_parameter["direction"]=returned?"return":"input";
             public_parameter["passing"]=!returned && (flags&kConstParm)?"const_reference":"value";
-            if(!returned)public_parameter["argument_constraints"]={{"rotation_normalization","required"},{"max_norm_squared_deviation",1e-6},{"normalization","none"}};
         }
         if(!rotator_public.is_null()) {
             public_parameter["struct"]=rotator_public;public_parameter["direction"]=returned?"return":"input";
@@ -1305,7 +1304,7 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         parameters.push_back(std::move(public_parameter));
         return captured;
     });
-    if(count!=declared_count)throw HandlerError("unsupported_signature","NumParms не совпадает с полной цепочкой CPF_Parm");
+    if(count!=declared_count)throw HandlerError("unsupported_signature","NumParms does not match the complete CPF_Parm chain");
     json result={{"session",handle_session_},{"target_handle",target_handle},{"function_name",function_name},
         {"target",identity(object_identity)},{"owner",identity(owner_identity)},{"function",identity(function_identity)},
         {"function_outer",read<uintptr_t>(function+0x20)},{"function_flags",function_flags},
@@ -1317,11 +1316,11 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
     if(!same_serial_identity(serial_identity(object_identity),serial_identity(validate_object(object)))
        || !same_serial_identity(serial_identity(owner_identity),serial_identity(validate_object(reinterpret_cast<void*>(owner))))
        || !same_serial_identity(serial_identity(function_identity),serial_identity(validate_object(reinterpret_cast<void*>(function)))))
-        throw HandlerError("signature_changed","Identity UFunction или её владельца изменилась при чтении");
+        throw HandlerError("signature_changed","UFunction or owner identity changed during the read");
     if(read<uintptr_t>(function+0x50)!=field_head || read<uint32_t>(function+0xb0)!=function_flags
        || read<uint8_t>(function+0xb4)!=declared_count || read<uint16_t>(function+0xb6)!=parameter_bytes
        || read<uint16_t>(function+0xb8)!=return_offset || read<uintptr_t>(function+0x20)!=result.at("function_outer").get<uintptr_t>())
-        throw HandlerError("signature_changed","Заголовок UFunction изменился при чтении");
+        throw HandlerError("signature_changed","The UFunction header changed during the read");
     for(const auto& captured:fields) {
         const auto field=captured.at("pointer").get<uintptr_t>(),field_class=captured.at("field_class").get<uintptr_t>();
         if(read<uintptr_t>(field+0x18)!=captured.at("next").get<uintptr_t>()
@@ -1332,7 +1331,7 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
            || read<int32_t>(field+0x44)!=captured.at("offset").get<int32_t>()
            || read<int32_t>(field+0x34)!=captured.at("size").get<int32_t>()
            || read<int32_t>(field+0x30)!=captured.at("array_dim").get<int32_t>())
-            throw HandlerError("signature_changed","Цепочка полей UFunction изменилась при чтении");
+            throw HandlerError("signature_changed","The UFunction field chain changed during the read");
         if(!captured.contains("aux"))continue;
         const auto& auxiliary=captured.at("aux");const auto type=captured.at("type").get<std::string>();
         if(type=="StructProperty") {
@@ -1340,54 +1339,54 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                 const auto current=capture_scalar_struct(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>());
                 rotator_arguments::validate(current);
                 if(scalar_struct_snapshot_json(current)!=auxiliary.at("rotator"))
-                    throw HandlerError("signature_changed","Вложенная reflection FRotator изменилась при чтении сигнатуры");
+                    throw HandlerError("signature_changed","The nested FRotator reflection changed while reading the signature");
                 continue;
             }
             if(auxiliary.contains("scalar_struct")) {
                 const auto current=capture_scalar_struct(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>());
                 if(scalar_struct_snapshot_json(current)!=auxiliary.at("scalar_struct"))
-                    throw HandlerError("signature_changed","Скалярный DTO изменился при чтении сигнатуры");
+                    throw HandlerError("signature_changed","The scalar DTO changed while reading the signature");
             } else if(auxiliary.contains("linear_color")) {
                 const auto current=capture_linear_color_parameter(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>());
                 if(linear_color_snapshot_json(current)!=auxiliary.at("linear_color"))
-                    throw HandlerError("signature_changed","FLinearColor metadata изменились при чтении сигнатуры");
+                    throw HandlerError("signature_changed","FLinearColor metadata changed while reading the signature");
             } else if(auxiliary.contains("transform")) {
                 const auto current=capture_transform_parameter(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>());
                 if(transform_snapshot_json(current)!=auxiliary.at("transform"))
-                    throw HandlerError("signature_changed","Transform layout изменился при чтении сигнатуры");
+                    throw HandlerError("signature_changed","Transform layout changed while reading the signature");
             } else {
             const auto current=capture_vector_parameter(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>());
             if(vector_snapshot_json(current)!=auxiliary.at("vector"))
-                throw HandlerError("signature_changed","FVector layout изменился при чтении сигнатуры");
+                throw HandlerError("signature_changed","FVector layout changed while reading the signature");
             }
         } else if(type=="ArrayProperty") {
             const auto current=capture_object_array_parameter(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>(),captured.at("flags").get<uint64_t>());
-            if(current!=auxiliary.at("object_array"))throw HandlerError("signature_changed","Object array metadata изменились при чтении сигнатуры");
+            if(current!=auxiliary.at("object_array"))throw HandlerError("signature_changed","Object array metadata changed while reading the signature");
         } else if(type=="BoolProperty") {
             if(read<uint8_t>(field+0x70)!=auxiliary.at("field_size").get<uint8_t>()
                || read<uint8_t>(field+0x71)!=auxiliary.at("byte_offset").get<uint8_t>()
                || read<uint8_t>(field+0x72)!=auxiliary.at("byte_mask").get<uint8_t>()
                || read<uint8_t>(field+0x73)!=auxiliary.at("field_mask").get<uint8_t>())
-                throw HandlerError("signature_changed","Маска BoolProperty изменилась при чтении сигнатуры");
+                throw HandlerError("signature_changed","The BoolProperty mask changed while reading the signature");
         } else if(type=="ObjectProperty" || type=="ClassProperty") {
             const auto declared=read<uintptr_t>(field+0x70);
             if(identity(validate_object(reinterpret_cast<void*>(declared)))!=auxiliary.at("declared"))
-                throw HandlerError("signature_changed","Объявленный класс аргумента изменился при чтении сигнатуры");
+                throw HandlerError("signature_changed","The declared argument class changed while reading the signature");
             if(json{{"name",object_name(reinterpret_cast<void*>(declared))},
                     {"path",object_path(reinterpret_cast<void*>(declared))}}!=auxiliary.at("declared_type"))
-                throw HandlerError("signature_changed","Имя или путь объявленного класса изменились");
+                throw HandlerError("signature_changed","The declared class name or path changed");
             if(type=="ClassProperty") {
                 const auto meta=read<uintptr_t>(field+0x78);
                 if(identity(validate_object(reinterpret_cast<void*>(meta)))!=auxiliary.at("meta"))
-                    throw HandlerError("signature_changed","Метакласс аргумента изменился при чтении сигнатуры");
+                    throw HandlerError("signature_changed","The argument metaclass changed while reading the signature");
                 if(json{{"name",object_name(reinterpret_cast<void*>(meta))},
                         {"path",object_path(reinterpret_cast<void*>(meta))}}!=auxiliary.at("meta_type"))
-                    throw HandlerError("signature_changed","Имя или путь метакласса изменились");
+                    throw HandlerError("signature_changed","The metaclass name or path changed");
             }
         } else if(type=="EnumProperty" || type=="ByteProperty") {
             const auto declared=enum_layout(type,captured.at("size").get<int>(),field);
             if(declared.underlying_type!=auxiliary.at("underlying_type").get<std::string>() || declared.size!=auxiliary.at("size").get<int>())
-                throw HandlerError("signature_changed","Раскладка enum изменилась при чтении сигнатуры");
+                throw HandlerError("signature_changed","The enum layout changed while reading the signature");
             if(type=="EnumProperty") {
                 const auto underlying=read<uintptr_t>(field+0x70);const auto& before=auxiliary.at("underlying");
                 const auto underlying_class=read<uintptr_t>(underlying+8);
@@ -1396,7 +1395,7 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                     {"next",read<uintptr_t>(underlying+0x18)},{"name",read<uint64_t>(underlying+0x20)},
                     {"array_dim",read<int32_t>(underlying+0x30)},{"size",read<int32_t>(underlying+0x34)},
                     {"flags",read<uint64_t>(underlying+0x38)},{"offset",read<int32_t>(underlying+0x44)}};
-                if(current!=before)throw HandlerError("signature_changed","UnderlyingProp изменился при чтении сигнатуры");
+                if(current!=before)throw HandlerError("signature_changed","UnderlyingProp changed while reading the signature");
             }
             if(declared.object) {
                 const auto table=enum_table(declared.object);const auto enum_address=reinterpret_cast<uintptr_t>(declared.object);
@@ -1406,11 +1405,11 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                 const json current={{"identity",identity(table.identity)},{"path",table.path},{"entries",std::move(entries)},
                     {"data",read<uintptr_t>(enum_address+0x40)},{"count",read<int32_t>(enum_address+0x48)},
                     {"capacity",read<int32_t>(enum_address+0x4c)}};
-                if(current!=auxiliary.at("enum"))throw HandlerError("signature_changed","UEnum изменился при чтении сигнатуры");
-            } else if(!auxiliary.at("enum").is_null())throw HandlerError("signature_changed","UEnum исчез при чтении сигнатуры");
+                if(current!=auxiliary.at("enum"))throw HandlerError("signature_changed","UEnum changed while reading the signature");
+            } else if(!auxiliary.at("enum").is_null())throw HandlerError("signature_changed","UEnum disappeared while reading the signature");
         }
     }
-    if(resolve(target_handle)!=object)throw HandlerError("signature_changed","Ссылка объекта изменилась при чтении сигнатуры");
+    if(resolve(target_handle)!=object)throw HandlerError("signature_changed","The object handle changed while reading the signature");
     return result;
 }
 json GameAccess::functions(void* object,std::size_t limit,const std::string& query,const std::string& target_handle) {
@@ -1479,18 +1478,18 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);uintptr_t function=0,function_owner=0;
     std::set<uintptr_t> visited_classes;
     for(;klass && !function;klass=read<uintptr_t>(klass+0x40)) {
-        if(!visited_classes.insert(klass).second)throw HandlerError("unsupported_signature","Цепочка владельцев функций циклическая");
+        if(!visited_classes.insert(klass).second)throw HandlerError("unsupported_signature","The function owner chain contains a cycle");
         auto field=read<uintptr_t>(klass+0x48);
         std::set<uintptr_t> visited_functions;
         for(;field;field=read<uintptr_t>(field+0x28)) {
-            if(!visited_functions.insert(field).second)throw HandlerError("unsupported_signature","Цепочка UFunction циклическая");
+            if(!visited_functions.insert(field).second)throw HandlerError("unsupported_signature","The UFunction chain contains a cycle");
             if(object_name(reinterpret_cast<void*>(field))==function_name && contains(object_name(reinterpret_cast<void*>(read<uintptr_t>(field+0x10))),"Function")){function=field;function_owner=klass;break;}
         }
     }
-    if(!function)throw HandlerError("function_not_found","Отражённая функция не найдена");
+    if(!function)throw HandlerError("function_not_found","Reflected function not found");
     if(expected_token) {
         if(expected_contract.at("function").at("object")!=function || expected_contract.at("owner").at("object")!=function_owner)
-            throw HandlerError("signature_token_mismatch","Токен выдан другой реализации одноимённой функции");
+            throw HandlerError("signature_token_mismatch","The token belongs to a different implementation of the same function name");
         require_same_function_contract(expected_contract,capture_function_contract(object,function_owner,function,target_handle));
     }
     auto bytes=read<uint16_t>(function+0xb6);
@@ -1500,7 +1499,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     int extent=bytes;
     for(;parameter;parameter=read<uintptr_t>(parameter+0x18)) {
         if(!visited_fields.insert(parameter).second)
-            throw HandlerError("unsupported_signature","Цепочка отражённых параметров содержит цикл");
+            throw HandlerError("unsupported_signature","The reflected parameter chain contains a cycle");
         const auto flags=read<uint64_t>(parameter+0x38);
         if(!(flags&0x80))continue;
         extent=parameter_extent(extent,read<int32_t>(parameter+0x44),
@@ -1540,7 +1539,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                 if(name(read<uint64_t>(field+0x20))==source.property_name){result.field=field;result.owner=klass;break;}
             }
         }
-        if(!result.field)throw HandlerError("property_not_found","Свойство источника FName не найдено");
+        if(!result.field)throw HandlerError("property_not_found","FName source property not found");
         result.owner_identity=serial_identity(validate_object(reinterpret_cast<void*>(result.owner)));
         result.field_next=read<uintptr_t>(result.field+0x18);result.field_class=read<uintptr_t>(result.field+8);
         result.field_name=read<uint64_t>(result.field+0x20);
@@ -1549,10 +1548,10 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         if(field_type(result.field,[this](uint64_t value){return name(value);})!="NameProperty"
            || result.size!=8 || result.dim!=1 || result.offset<0
            || result.owner_size<8 || result.offset>result.owner_size-8)
-            throw HandlerError("unsupported_name_source","Источник должен быть точным NameProperty размером 8 байт");
+            throw HandlerError("unsupported_name_source","The source must be an exact 8-byte NameProperty");
         const auto address=reinterpret_cast<uintptr_t>(object)+static_cast<uintptr_t>(result.offset);
         if(address<reinterpret_cast<uintptr_t>(object) || address>UINTPTR_MAX-sizeof(uint64_t))
-            throw HandlerError("unsupported_name_source","Адрес источника FName переполняется");
+            throw HandlerError("unsupported_name_source","The FName source address overflows");
         result.packed=read<uint64_t>(address);
         result.text=name(result.packed);
         if(result.packed!=read<uint64_t>(address)
@@ -1564,8 +1563,8 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
            || field_type(result.field,[this](uint64_t value){return name(value);})!="NameProperty"
            || !same_serial_identity(result.owner_identity,serial_identity(validate_object(reinterpret_cast<void*>(result.owner))))
            || !same_serial_identity(result.object_identity,serial_identity(validate_object(object))))
-            throw HandlerError("name_source_changed","Метаданные или identity источника FName изменились при копировании");
-        if(resolve(source.handle)!=object)throw HandlerError("stale_handle","Ссылка источника FName изменилась");
+            throw HandlerError("name_source_changed","FName source metadata or identity changed while being copied");
+        if(resolve(source.handle)!=object)throw HandlerError("stale_handle","The FName source handle changed");
         return result;
     };
     struct NameInput {uintptr_t field{};int32_t offset{};NameSource source;};
@@ -1598,7 +1597,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         if(type=="ArrayProperty")contains_object_array=true;
     }
     if(contains_object_array && (contains_string_input || has_string_return))
-        throw HandlerError("unsupported_signature","Object array входы пока не смешиваются с FString входом или возвратом");
+        throw HandlerError("unsupported_signature","Object array inputs cannot currently be combined with FString inputs or returns");
     const bool strict_pod_contract=contains_vector || contains_transform || contains_color || contains_rotator || contains_scalar_struct || contains_scalar_output || contains_string_input || contains_object_array;
     if(strict_pod_contract) {
         pod_function_contract=capture_function_contract(object,function_owner,function,target_handle);
@@ -1606,9 +1605,9 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         for(const auto field:parameter_fields) {
             const auto offset=read<int32_t>(field+0x44),size=read<int32_t>(field+0x34);
             if(parameter_extent(0,offset,size,read<int32_t>(field+0x30))>extent)
-                throw HandlerError("unsupported_signature","Параметр выходит за выделенный буфер UFunction");
+                throw HandlerError("unsupported_signature","The parameter exceeds the allocated UFunction buffer");
             for(const auto& [start,end]:intervals)if(offset<end && start<offset+size)
-                throw HandlerError("unsupported_signature","POD функция содержит перекрывающиеся параметры");
+                throw HandlerError("unsupported_signature","The POD function contains overlapping parameters");
             intervals.emplace_back(offset,offset+size);
         }
     }
@@ -1635,13 +1634,13 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         });
     };
     if(contains_object_array) {
-        if(object_array_inputs_quarantined_)throw HandlerError("object_array_input_quarantined","Object array входы заблокированы после неподтверждённой очистки");
+        if(object_array_inputs_quarantined_)throw HandlerError("object_array_input_quarantined","Object array inputs are blocked after unconfirmed cleanup");
         uint8_t realloc_bytes[sizeof(kObjectArrayReallocBytes)]{},free_bytes[sizeof(kStringFreeBytes)]{};
         if(!copy_memory(realloc_bytes,reinterpret_cast<void*>(base_+kObjectArrayRealloc),sizeof(realloc_bytes))
            || !copy_memory(free_bytes,reinterpret_cast<void*>(base_+kFree),sizeof(free_bytes))
            || std::memcmp(realloc_bytes,kObjectArrayReallocBytes,sizeof(realloc_bytes))
            || std::memcmp(free_bytes,kStringFreeBytes,sizeof(free_bytes)))
-            throw HandlerError("unsupported_array_allocator","Подписи Realloc или Free объектного массива не совпадают");
+            throw HandlerError("unsupported_array_allocator","The object array Realloc or Free signatures do not match");
         object_array_input_lifetime::InputBudget budget;
         array_inputs.reserve(parameter_fields.size());
         for(const auto field:parameter_fields) {
@@ -1649,10 +1648,10 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             if(field_type(field,[this](auto value){return name(value);})!="ArrayProperty")continue;
             const auto metadata=capture_object_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags);
             const auto key=name(read<uint64_t>(field+0x20));
-            if(!arguments.contains(key))throw HandlerError("missing_argument","Не задан Object array аргумент "+key);
+            if(!arguments.contains(key))throw HandlerError("missing_argument","Object array argument is missing: "+key);
             const auto& values=arguments.at(key);
             if(!values.is_array())
-                throw HandlerError("invalid_argument","Object array требует JSON-массив");
+                throw HandlerError("invalid_argument","Object array requires a JSON array");
             budget.add(values.size());
             ObjectArrayInput input{field,read<int32_t>(field+0x44),flags,key,metadata,{},{},{}};
             input.elements.reserve(values.size());
@@ -1663,7 +1662,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                 if(!handle.empty()) {
                     auto object_value=resolve(handle);
                     if(!is_compatible_object(object_value,declared))
-                        throw HandlerError("incompatible_object_argument","Элемент массива не соответствует PropertyClass");
+                        throw HandlerError("incompatible_object_argument","The array element is incompatible with PropertyClass");
                     element.identity=serial_identity(validate_object(object_value));element.pointer=reinterpret_cast<uintptr_t>(object_value);
                 }
                 input.elements.push_back(std::move(element));
@@ -1681,7 +1680,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                 if(reinterpret_cast<uintptr_t>(current)!=element.pointer
                    || !same_serial_identity(element.identity,serial_identity(validate_object(current)))
                    || !is_compatible_object(current,declared))
-                    throw HandlerError("stale_handle","Identity элемента Object array изменилась до вызова");
+                    throw HandlerError("stale_handle","Object array element identity changed before the call");
             }
         }
     };
@@ -1691,16 +1690,16 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             auto& input=array_inputs[index];ArrayHeader current{};
             if(!copy_memory(&current,buffer+input.offset,sizeof(current))) {
                 array_ledger.mark_uncertain();array_quarantine_cause=3;
-                throw HandlerError("array_lifetime_unknown","Заголовок Object array недоступен");
+                throw HandlerError("array_lifetime_unknown","The Object array header is unavailable");
             }
             array_ledger.validate_unchanged_input(index,current);
             if(current.count && !copy_memory(input.pointers.data(),reinterpret_cast<void*>(current.data),input.elements.size()*sizeof(uintptr_t))) {
                 array_ledger.mark_uncertain();array_quarantine_cause=3;
-                throw HandlerError("array_lifetime_unknown","Байты Object array недоступны");
+                throw HandlerError("array_lifetime_unknown","Object array bytes are unavailable");
             }
             for(size_t item=0;item<input.elements.size();++item)if(input.pointers[item]!=input.elements[item].pointer) {
                 array_ledger.mark_uncertain();array_quarantine_cause=3;
-                throw HandlerError("array_lifetime_unknown","Указатели const Object array изменились");
+                throw HandlerError("array_lifetime_unknown","The const Object array pointers changed");
             }
         }
         require_same_function_contract(pod_function_contract,capture_function_contract(object,function_owner,function,target_handle));
@@ -1729,13 +1728,13 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         });
     };
     if(contains_string_input) {
-        if(string_inputs_quarantined_)throw HandlerError("string_input_quarantined","FString входы заблокированы после неподтверждённой очистки");
+        if(string_inputs_quarantined_)throw HandlerError("string_input_quarantined","FString inputs are blocked after unconfirmed cleanup");
         uint8_t constructor_bytes[sizeof(kStringConstructBytes)]{},free_bytes[sizeof(kStringFreeBytes)]{};
         if(!copy_memory(constructor_bytes,reinterpret_cast<void*>(base_+kStringConstruct),sizeof(constructor_bytes))
            || !copy_memory(free_bytes,reinterpret_cast<void*>(base_+kFree),sizeof(free_bytes))
            || std::memcmp(constructor_bytes,kStringConstructBytes,sizeof(constructor_bytes))
            || std::memcmp(free_bytes,kStringFreeBytes,sizeof(free_bytes)))
-            throw HandlerError("unsupported_string_allocator","Подписи конструктора или освобождения FString не совпадают");
+            throw HandlerError("unsupported_string_allocator","The FString constructor or release signatures do not match");
         string_input_lifetime::InputBudget budget;
         string_inputs.reserve(parameter_fields.size());
         for(const auto field:parameter_fields) {
@@ -1746,7 +1745,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                || vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
                 throw HandlerError("unsupported_signature","FString requires aligned value or const reference input of 16 bytes");
             const auto key=name(read<uint64_t>(field+0x20));
-            if(!arguments.contains(key))throw HandlerError("missing_argument","Не задан FString аргумент "+key);
+            if(!arguments.contains(key))throw HandlerError("missing_argument","FString argument is missing: "+key);
             auto source=string_arguments::encode(arguments.at(key));budget.add(source.size());
             string_inputs.push_back({field,offset,flags,key,std::move(source),{}});
         }
@@ -1759,14 +1758,14 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             const auto& input=string_inputs[index];StringHeader current{};
             if(!copy_memory(&current,buffer+input.offset,sizeof(current))) {
                 string_ledger.mark_uncertain();string_quarantine_cause=3;
-                throw HandlerError("string_lifetime_unknown","Заголовок FString входа недоступен");
+                throw HandlerError("string_lifetime_unknown","The FString input header is unavailable");
             }
             string_ledger.validate_unchanged_input(index,current);
             std::u16string copied(input.source.size()+1,u'\0');
             if(current.data && (!copy_memory(copied.data(),reinterpret_cast<void*>(current.data),copied.size()*sizeof(char16_t))
                || copied.back()!=0 || !std::equal(input.source.begin(),input.source.end(),copied.begin()))) {
                 string_ledger.mark_uncertain();string_quarantine_cause=3;
-                throw HandlerError("string_lifetime_unknown","Байты FString const-входа изменились либо недоступны");
+                throw HandlerError("string_lifetime_unknown","Const FString input bytes changed or are unavailable");
             }
         }
         require_same_function_contract(pod_function_contract,capture_function_contract(object,function_owner,function,target_handle));
@@ -1777,49 +1776,49 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         auto type=field_type(field,[this](auto f){return name(f);});int offset=read<int32_t>(field+0x44),size=read<int32_t>(field+0x34);
         const auto current_extent=parameter_extent(extent,offset,size,read<int32_t>(field+0x30));
         if(current_extent>extent)
-            throw HandlerError("unsupported_signature","Параметр изменился и выходит за выделенный буфер UFunction");
+            throw HandlerError("unsupported_signature","The parameter changed and exceeds the allocated UFunction buffer");
         if(flags&0x400){
-            if(return_field)throw HandlerError("unsupported_signature","У функции обнаружено несколько возвращаемых параметров");
+            if(return_field)throw HandlerError("unsupported_signature","The function has multiple return parameters");
             return_field=field;return_type=type;return_size=size;return_offset=offset;
             if(supported_scalar_output_type(type) && (flags&(kReferenceParm|kConstParm)))
-                throw HandlerError("unsupported_signature","Const/ref скалярный возврат не поддержан");
+                throw HandlerError("unsupported_signature","Const or reference scalar returns are unsupported");
             if(type=="StructProperty") {
                 const auto structure_path=object_path(reinterpret_cast<void*>(read<uintptr_t>(field+0x70)));
                 if(structure_path=="/Script/CoreUObject.LinearColor") {
-                    if(!contains_color)throw HandlerError("signature_changed","FLinearColor возврат появился после чтения полной сигнатуры");
-                    if(flags&(kConstParm|kReferenceParm))throw HandlerError("unsupported_signature","Const/ref возврат FLinearColor не поддержан");
+                    if(!contains_color)throw HandlerError("signature_changed","The FLinearColor return appeared after reading the complete signature");
+                    if(flags&(kConstParm|kReferenceParm))throw HandlerError("unsupported_signature","Const or reference FLinearColor returns are unsupported");
                     const auto color=capture_linear_color_parameter(field,size,read<int32_t>(field+0x30));
                     color_parameters.push_back({field,offset,flags,color,true});
                 } else if(structure_path=="/Script/CoreUObject.Transform") {
-                    if(!contains_transform)throw HandlerError("signature_changed","Transform возврат появился после чтения полной сигнатуры");
-                    if(flags&(kConstParm|kReferenceParm))throw HandlerError("unsupported_signature","Const/ref возврат Transform не поддержан");
+                    if(!contains_transform)throw HandlerError("signature_changed","The Transform return appeared after reading the complete signature");
+                    if(flags&(kConstParm|kReferenceParm))throw HandlerError("unsupported_signature","Const or reference Transform returns are unsupported");
                     const auto transform=capture_transform_parameter(field,size,read<int32_t>(field+0x30));
                     if(offset%transform.layout.min_alignment
                        || reinterpret_cast<uintptr_t>(buffer+offset)%static_cast<uintptr_t>(transform.layout.min_alignment))
-                        throw HandlerError("unsupported_transform_layout","Буфер Transform не соответствует отражённому выравниванию");
+                        throw HandlerError("unsupported_transform_layout","The Transform buffer does not match its reflected alignment");
                     transform_return=TransformReturn{field,offset,transform};
                 } else if(structure_path=="/Script/CoreUObject.Vector") {
-                    if(!contains_vector)throw HandlerError("signature_changed","FVector возврат появился после чтения полной сигнатуры");
+                    if(!contains_vector)throw HandlerError("signature_changed","The FVector return appeared after reading the complete signature");
                     if(flags&(kReferenceParm|kConstParm))
-                        throw HandlerError("unsupported_signature","Const/ref возврат FVector не поддержан");
+                        throw HandlerError("unsupported_signature","Const or reference FVector returns are unsupported");
                     const auto layout=capture_vector_parameter(field,size,read<int32_t>(field+0x30));
                     vector_parameters.push_back({field,offset,size,flags,name(read<uint64_t>(field+0x20)),layout,false,true});
                 } else if(structure_path=="/Script/CoreUObject.Rotator") {
-                    if(!contains_rotator)throw HandlerError("signature_changed","FRotator возврат появился после чтения полной сигнатуры");
-                    if(flags&(kConstParm|kReferenceParm))throw HandlerError("unsupported_signature","Const/ref возврат FRotator не поддержан");
+                    if(!contains_rotator)throw HandlerError("signature_changed","The FRotator return appeared after reading the complete signature");
+                    if(flags&(kConstParm|kReferenceParm))throw HandlerError("unsupported_signature","Const or reference FRotator returns are unsupported");
                     auto rotator=capture_scalar_struct(field,size,read<int32_t>(field+0x30));
                     rotator_arguments::validate(rotator);
                     if(offset%rotator.layout.min_alignment
                        || reinterpret_cast<uintptr_t>(buffer+offset)%static_cast<uintptr_t>(rotator.layout.min_alignment))
-                        throw HandlerError("unsupported_rotator_layout","Буфер FRotator не соответствует отражённому выравниванию");
+                        throw HandlerError("unsupported_rotator_layout","The FRotator buffer does not match its reflected alignment");
                     scalar_struct_return=std::move(rotator);
                 } else {
-                    if(!contains_scalar_struct)throw HandlerError("signature_changed","Скалярный DTO возврат появился после чтения полной сигнатуры");
-                    if(flags&(kConstParm|kReferenceParm))throw HandlerError("unsupported_signature","Const/ref возврат DTO не поддержан");
+                    if(!contains_scalar_struct)throw HandlerError("signature_changed","The scalar DTO return appeared after reading the complete signature");
+                    if(flags&(kConstParm|kReferenceParm))throw HandlerError("unsupported_signature","Const or reference DTO returns are unsupported");
                     auto scalar_struct=capture_scalar_struct(field,size,read<int32_t>(field+0x30));
                     if(offset%scalar_struct.layout.min_alignment
                        || reinterpret_cast<uintptr_t>(buffer+offset)%static_cast<uintptr_t>(scalar_struct.layout.min_alignment))
-                        throw HandlerError("unsupported_scalar_struct_layout","Буфер DTO не соответствует отражённому выравниванию");
+                        throw HandlerError("unsupported_scalar_struct_layout","The DTO buffer does not match its reflected alignment");
                     scalar_struct_return=std::move(scalar_struct);
                 }
                 continue;
@@ -1827,62 +1826,62 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             if(type=="NameProperty")validate_name_return_layout(size,read<int32_t>(field+0x30));
             else if(type=="EnumProperty" || type=="ByteProperty")enum_layout(type,size,field);
             else if(type=="ObjectProperty" || type=="ClassProperty") {
-                if(size!=8)throw HandlerError("unsupported_signature","Размер объектного возврата не поддержан");
+                if(size!=8)throw HandlerError("unsupported_signature","The object return size is unsupported");
                 validate_class(reinterpret_cast<void*>(read<uintptr_t>(field+0x70)));
                 if(type=="ClassProperty")validate_class(reinterpret_cast<void*>(read<uintptr_t>(field+0x78)));
             } else if((type=="StrProperty" && size!=16)
                || (type!="StrProperty" && property_value(reinterpret_cast<uintptr_t>(buffer+offset),type,size,field).is_null()))
-                throw HandlerError("unsupported_signature","Тип результата пока не поддержан");
+                throw HandlerError("unsupported_signature","The result type is unsupported");
             continue;
         }
         if(type=="StructProperty") {
             const auto structure_path=object_path(reinterpret_cast<void*>(read<uintptr_t>(field+0x70)));
             if(structure_path=="/Script/CoreUObject.Rotator") {
-                if(!contains_rotator)throw HandlerError("signature_changed","FRotator параметр появился после чтения полной сигнатуры");
+                if(!contains_rotator)throw HandlerError("signature_changed","The FRotator parameter appeared after reading the complete signature");
                 if(vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
-                    throw HandlerError("unsupported_signature","FRotator требует вход по значению либо const reference; mutable Out не поддержан");
+                    throw HandlerError("unsupported_signature","FRotator requires input by value or const reference; mutable Out is unsupported");
                 const auto rotator=capture_scalar_struct(field,size,read<int32_t>(field+0x30));
                 rotator_arguments::validate(rotator);
                 if(offset%rotator.layout.min_alignment
                    || reinterpret_cast<uintptr_t>(buffer+offset)%static_cast<uintptr_t>(rotator.layout.min_alignment))
-                    throw HandlerError("unsupported_rotator_layout","Буфер FRotator не соответствует отражённому выравниванию");
+                    throw HandlerError("unsupported_rotator_layout","The FRotator buffer does not match its reflected alignment");
                 const auto key=name(read<uint64_t>(field+0x20));const auto found=arguments.find(key);
-                if(found==arguments.end())throw HandlerError("invalid_arguments","Не указан аргумент FRotator: "+key);
+                if(found==arguments.end())throw HandlerError("invalid_arguments","FRotator argument is missing: "+key);
                 if(!found->is_object() || found->size()!=1 || !found->contains("rotator"))
-                    throw HandlerError("invalid_argument","FRotator требует только {rotator:{Pitch,Yaw,Roll}}");
+                    throw HandlerError("invalid_argument","FRotator requires only {rotator:{Pitch,Yaw,Roll}}");
                 const auto encoded=rotator_arguments::encode(rotator.layout,found->at("rotator"));
                 std::memcpy(buffer+offset,encoded.data(),encoded.size());
                 ++input_count;continue;
             }
             if(structure_path=="/Script/CoreUObject.LinearColor") {
-                if(!contains_color)throw HandlerError("signature_changed","FLinearColor вход появился после чтения полной сигнатуры");
-                if(flags&(kConstParm|kReferenceParm|0x100))throw HandlerError("unsupported_signature","FLinearColor вход поддержан только по значению");
+                if(!contains_color)throw HandlerError("signature_changed","The FLinearColor input appeared after reading the complete signature");
+                if(flags&(kConstParm|kReferenceParm|0x100))throw HandlerError("unsupported_signature","FLinearColor input is supported only by value");
                 const auto key=name(read<uint64_t>(field+0x20));
-                if(!arguments.contains(key))throw HandlerError("missing_argument","Не задан FLinearColor аргумент "+key);
+                if(!arguments.contains(key))throw HandlerError("missing_argument","FLinearColor argument is missing: "+key);
                 const auto color=capture_linear_color_parameter(field,size,read<int32_t>(field+0x30));
                 const auto encoded=linear_color_arguments::encode(color.layout,arguments.at(key));
                 std::memcpy(buffer+offset,encoded.bytes.data(),static_cast<size_t>(encoded.size));
                 color_parameters.push_back({field,offset,flags,color,false});++input_count;continue;
             } else if(structure_path=="/Script/CoreUObject.Transform") {
-                if(!contains_transform)throw HandlerError("signature_changed","Transform появился после чтения полной сигнатуры");
+                if(!contains_transform)throw HandlerError("signature_changed","Transform appeared after reading the complete signature");
                 if(vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
-                    throw HandlerError("unsupported_signature","Transform требует вход по значению либо const reference; Out/Return не поддержаны");
+                    throw HandlerError("unsupported_signature","Transform requires input by value or const reference; Out and Return are unsupported");
                 const auto key=name(read<uint64_t>(field+0x20));
-                if(!arguments.contains(key))throw HandlerError("missing_argument","Не задан Transform аргумент "+key);
+                if(!arguments.contains(key))throw HandlerError("missing_argument","Transform argument is missing: "+key);
                 const auto transform=capture_transform_parameter(field,size,read<int32_t>(field+0x30));
                 if(offset%transform.layout.min_alignment
                    || reinterpret_cast<uintptr_t>(buffer+offset)%static_cast<uintptr_t>(transform.layout.min_alignment))
-                    throw HandlerError("unsupported_transform_layout","Буфер Transform не соответствует отражённому выравниванию");
+                    throw HandlerError("unsupported_transform_layout","The Transform buffer does not match its reflected alignment");
                 const auto encoded=transform_arguments::encode(transform.layout,arguments.at(key));
                 std::memcpy(buffer+offset,encoded.bytes.data(),static_cast<size_t>(encoded.size));
                 ++input_count;continue;
             }
             if(structure_path!="/Script/CoreUObject.Vector")
-                throw HandlerError("unsupported_signature","Скалярный DTO поддержан только как возврат по значению");
-            if(!contains_vector)throw HandlerError("signature_changed","FVector параметр появился после чтения полной сигнатуры");
+                throw HandlerError("unsupported_signature","Scalar DTO is supported only as a return by value");
+            if(!contains_vector)throw HandlerError("signature_changed","The FVector parameter appeared after reading the complete signature");
             const auto direction=vector_parameter_direction::classify(flags);
             const auto key=name(read<uint64_t>(field+0x20));
-            if(!arguments.contains(key))throw HandlerError("missing_argument","Не задан FVector аргумент "+key);
+            if(!arguments.contains(key))throw HandlerError("missing_argument","FVector argument is missing: "+key);
             const auto layout=capture_vector_parameter(field,size,read<int32_t>(field+0x30));
             if(direction==vector_parameter_direction::Direction::output) {
                 vector_parameter_direction::validate_output_marker(arguments.at(key));
@@ -1896,53 +1895,53 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             continue;
         }
         if(type=="StrProperty") {
-            if(!contains_string_input)throw HandlerError("signature_changed","FString вход появился после чтения полной сигнатуры");
+            if(!contains_string_input)throw HandlerError("signature_changed","The FString input appeared after reading the complete signature");
             auto input=std::find_if(string_inputs.begin(),string_inputs.end(),[field](const auto& value){return value.field==field;});
             if(input==string_inputs.end() || input->offset!=offset || input->flags!=flags || size!=16 || offset%8)
-                throw HandlerError("signature_changed","FString вход изменился после предварительной проверки");
+                throw HandlerError("signature_changed","The FString input changed after prevalidation");
             ++input_count;continue;
         }
         if(type=="ArrayProperty") {
-            if(!contains_object_array)throw HandlerError("signature_changed","Object array появился после чтения полной сигнатуры");
+            if(!contains_object_array)throw HandlerError("signature_changed","Object array appeared after reading the complete signature");
             auto input=std::find_if(array_inputs.begin(),array_inputs.end(),[field](const auto& value){return value.field==field;});
             if(input==array_inputs.end() || input->offset!=offset || input->flags!=flags || size!=16 || offset%8)
-                throw HandlerError("signature_changed","Object array вход изменился после предварительной проверки");
+                throw HandlerError("signature_changed","The Object array input changed after prevalidation");
             ++input_count;continue;
         }
         if(supported_scalar_output_type(type) && (flags&0x100)) {
-            if(!contains_scalar_output)throw HandlerError("signature_changed","Скалярный out появился после чтения полной сигнатуры");
+            if(!contains_scalar_output)throw HandlerError("signature_changed","The scalar output appeared after reading the complete signature");
             if(parameter_direction::classify(flags)!=parameter_direction::Direction::output)
-                throw HandlerError("unsupported_signature","Скалярный параметр не является pure out");
+                throw HandlerError("unsupported_signature","The scalar parameter is not a pure output");
             const auto key=name(read<uint64_t>(field+0x20));
-            if(!arguments.contains(key))throw HandlerError("missing_argument","Не задан скалярный out аргумент "+key);
+            if(!arguments.contains(key))throw HandlerError("missing_argument","Scalar output argument is missing: "+key);
             parameter_direction::validate_output_marker(arguments.at(key));
             const auto layout=capture_scalar_output_layout(field,type,size,read<int32_t>(field+0x30));
             std::memset(buffer+offset,0,static_cast<size_t>(size));
             scalar_parameters.push_back({field,offset,flags,key,layout});
             ++input_count;continue;
         }
-        if(flags&(0x100|kReferenceParm))throw HandlerError("unsupported_signature","Out/ref аргументы этого типа не поддержаны");
+        if(flags&(0x100|kReferenceParm))throw HandlerError("unsupported_signature","Out or reference arguments of this type are unsupported");
         if(type=="NameProperty")validate_name_argument_layout(size,read<int32_t>(field+0x30));
-        auto key=name(read<uint64_t>(field+0x20));if(!arguments.contains(key))throw HandlerError("missing_argument","Не задан аргумент "+key);auto v=arguments.at(key);++input_count;
+        auto key=name(read<uint64_t>(field+0x20));if(!arguments.contains(key))throw HandlerError("missing_argument","Argument is missing: "+key);auto v=arguments.at(key);++input_count;
         if(type=="NameProperty") {
             if(v.is_object() && v.contains("name")) {
                 if(v.size()!=1 || !v.at("name").is_string())
-                    throw HandlerError("invalid_name_argument","Текстовый FName требует только {name:строка}");
+                    throw HandlerError("invalid_name_argument","Text FName requires only {name:string}");
                 const auto& text=v.at("name").get_ref<const std::string&>();
                 if(text.find('\0')!=std::string::npos)
-                    throw HandlerError("invalid_name_argument","Текстовый FName не принимает встроенный NUL");
+                    throw HandlerError("invalid_name_argument","Text FName cannot contain an embedded NUL");
                 std::wstring encoded;
                 if(!text.empty()) {
                     const auto length=static_cast<int>(text.size());
                     const auto units=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text.data(),length,nullptr,0);
-                    if(!units)throw HandlerError("invalid_name_argument","Текстовый FName содержит неверный UTF-8");
+                    if(!units)throw HandlerError("invalid_name_argument","Text FName contains invalid UTF-8");
                     encoded.resize(static_cast<size_t>(units));
                     if(MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text.data(),length,encoded.data(),units)!=units)
-                        throw HandlerError("invalid_name_argument","Текстовый FName не удалось преобразовать в UTF-16");
+                        throw HandlerError("invalid_name_argument","Text FName could not be converted to UTF-16");
                 }
                 uint64_t packed{};
                 if(!construct_name(base_+kNameConstruct,&packed,reinterpret_cast<const char16_t*>(encoded.c_str())))
-                    throw HandlerError("name_constructor_fault","Конструктор FName вызвал native exception");
+                    throw HandlerError("name_constructor_fault","The FName constructor raised a native exception");
                 std::memcpy(buffer+offset,&packed,sizeof(packed));
             } else {
                 const auto source=validated_name_argument(size,read<int32_t>(field+0x30),v,capture_name);
@@ -1963,8 +1962,6 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             std::optional<Handle> identity;
             if(type=="EnumProperty" || declared.object) {
                 const auto table=enum_table(declared.object);
-                if(!enum_arguments::contains_value(encoded.value,table.entries))
-                    throw HandlerError("unknown_enum_value","Число отсутствует среди объявленных значений UEnum");
                 identity=table.identity;
             }
             std::memcpy(buffer+offset,encoded.bytes.data(),encoded.size);
@@ -1978,7 +1975,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             if(!handle.empty()) {
                 argument=resolve(handle);
                 if(!is_compatible_object(argument,expected))
-                    throw HandlerError("incompatible_object_argument","Ссылка не принадлежит объявленному классу аргумента");
+                    throw HandlerError("incompatible_object_argument","The handle is incompatible with the declared argument class");
                 object_arguments.emplace_back(handle,expected);
             }
             *reinterpret_cast<void**>(buffer+offset)=argument;
@@ -1994,51 +1991,49 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                 try { validate_class(argument); }
                 catch(const HandlerError& error) {
                     if(error.code()!="invalid_object_class")throw;
-                    throw HandlerError("invalid_class_argument","Ссылка указывает на UObject, не являющийся UClass");
+                    throw HandlerError("invalid_class_argument","The handle refers to a UObject that is not a UClass");
                 }
                 if(!is_compatible_class(argument,property_class,meta_class))
-                    throw HandlerError("incompatible_class_argument","Представляемый класс не соответствует ограничению аргумента");
+                    throw HandlerError("incompatible_class_argument","The represented class is incompatible with the argument constraint");
                 class_arguments.push_back({handle,property_class,meta_class});
             }
             *reinterpret_cast<void**>(buffer+offset)=argument;
         }
-        else throw HandlerError("unsupported_signature","Тип аргумента пока не поддержан: "+type);
+        else throw HandlerError("unsupported_signature","The argument type is unsupported: "+type);
     }
-    if(arguments.size()!=input_count)throw HandlerError("unknown_argument","Переданы лишние аргументы");
+    if(arguments.size()!=input_count)throw HandlerError("unknown_argument","Extra arguments were provided");
     if(strict_pod_contract)require_same_function_contract(pod_function_contract,capture_function_contract(object,function_owner,function,target_handle));
     for(const auto& [handle,expected]:object_arguments) {
         if(!is_compatible_object(resolve(handle),expected))
-            throw HandlerError("incompatible_object_argument","Аргумент изменился до вызова функции");
+            throw HandlerError("incompatible_object_argument","The argument changed before the function call");
     }
     for(const auto& argument:class_arguments) {
         if(!is_compatible_class(resolve(argument.handle),argument.property_class,argument.meta_class))
-            throw HandlerError("incompatible_class_argument","Классовый аргумент изменился до вызова функции");
+            throw HandlerError("incompatible_class_argument","The class argument changed before the function call");
     }
     for(const auto& argument:enum_inputs) {
         const auto current=enum_layout(argument.type,argument.layout.size,argument.field);
         if(current.underlying_type!=argument.layout.underlying_type || current.size!=argument.layout.size
            || current.object!=argument.layout.object)
-            throw HandlerError("unsupported_signature","Раскладка enum аргумента изменилась до вызова");
+            throw HandlerError("unsupported_signature","The enum argument layout changed before the call");
         if(argument.enum_identity) {
             const auto table=enum_table(current.object);
             const auto& before=*argument.enum_identity;
             if(!same_serial_identity(serial_identity(before),serial_identity(table.identity)))
-                throw HandlerError("unsupported_signature","Объявленный UEnum изменился до вызова");
-            if(!enum_arguments::contains_value(argument.value,table.entries))
-                throw HandlerError("unknown_enum_value","Enum аргумент больше не объявлен перед вызовом");
+                throw HandlerError("unsupported_signature","The declared UEnum changed before the call");
         }
     }
     for(const auto& input:name_inputs) {
         if(field_type(input.field,[this](uint64_t value){return name(value);})!="NameProperty"
            || read<int32_t>(input.field+0x44)!=input.offset)
-            throw HandlerError("unsupported_signature","Метаданные аргумента FName изменились до вызова");
+            throw HandlerError("unsupported_signature","FName argument metadata changed before the call");
         validate_name_argument_layout(read<int32_t>(input.field+0x34),read<int32_t>(input.field+0x30));
         if(!(capture_name(input.source.source)==input.source))
-            throw HandlerError("name_source_changed","Значение или метаданные источника FName изменились до вызова");
+            throw HandlerError("name_source_changed","The FName source value or metadata changed before the call");
     }
     const auto invocation_after=validate_object(object);
     if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(invocation_after)))
-        throw HandlerError("stale_handle","Identity цели изменилась до вызова; получите новую ссылку");
+        throw HandlerError("stale_handle","Target identity changed before the call; obtain a new handle");
     for(auto& input:string_inputs) {
         const auto constructor_contract=capture_function_contract(object,function_owner,function,target_handle);
         require_same_function_contract(pod_function_contract,constructor_contract);
@@ -2048,7 +2043,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             string_ledger.mark_uncertain();string_quarantine_cause=1;
             extra_retained_count=1;
             extra_retained_bytes=header.capacity>0?static_cast<size_t>(header.capacity)*sizeof(char16_t):0;
-            throw HandlerError("string_constructor_fault","Конструктор FString завершился native exception; владение неизвестно");
+            throw HandlerError("string_constructor_fault","The FString constructor raised a native exception; ownership is unknown");
         }
         extra_retained_count=header.data?1:0;
         extra_retained_bytes=header.capacity>0?static_cast<size_t>(header.capacity)*sizeof(char16_t):0;
@@ -2068,7 +2063,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             if(!allocate_object_array(base_+kObjectArrayRealloc,allocation_bytes,&memory)) {
                 array_ledger.mark_uncertain();array_quarantine_cause=1;
                 extra_array_count=1;extra_array_bytes=allocation_bytes;
-                throw HandlerError("array_allocator_fault","Realloc Object array завершился native exception; владение неизвестно");
+                throw HandlerError("array_allocator_fault","Object array Realloc raised a native exception; ownership is unknown");
             }
             header={reinterpret_cast<uintptr_t>(memory),count,count};
             extra_array_count=memory?1:0;extra_array_bytes=allocation_bytes;
@@ -2078,7 +2073,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         if(count) {
             for(size_t index=0;index<input.elements.size();++index)input.pointers[index]=input.elements[index].pointer;
             if(!copy_memory(reinterpret_cast<void*>(header.data),input.pointers.data(),static_cast<size_t>(count)*sizeof(uintptr_t)))
-                throw HandlerError("invalid_memory","Игровой буфер Object array недоступен для заполнения");
+                throw HandlerError("invalid_memory","The engine Object array buffer is unavailable for writing");
         }
         std::memcpy(buffer+input.offset,&header,sizeof(header));
     }
@@ -2089,11 +2084,11 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         uintptr_t current_function{},current_owner{};std::set<uintptr_t> current_classes;
         for(;current_class && !current_function;current_class=read<uintptr_t>(current_class+0x40)) {
             if(!current_classes.insert(current_class).second)
-                throw HandlerError("signature_changed","Цепочка владельцев функции изменилась до вызова");
+                throw HandlerError("signature_changed","The function owner chain changed before the call");
             auto field=read<uintptr_t>(current_class+0x48);std::set<uintptr_t> current_fields;
             for(;field;field=read<uintptr_t>(field+0x28)) {
                 if(!current_fields.insert(field).second)
-                    throw HandlerError("signature_changed","Цепочка функций изменилась до вызова");
+                    throw HandlerError("signature_changed","The function chain changed before the call");
                 if(object_name(reinterpret_cast<void*>(field))==function_name
                    && contains(object_name(reinterpret_cast<void*>(read<uintptr_t>(field+0x10))),"Function")) {
                     current_function=field;current_owner=current_class;break;
@@ -2101,7 +2096,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             }
         }
         if(current_function!=function || current_owner!=function_owner)
-            throw HandlerError("signature_changed","Ближайшая реализация функции изменилась до вызова");
+            throw HandlerError("signature_changed","The nearest function implementation changed before the call");
         const auto final_contract=capture_function_contract(object,function_owner,function,target_handle);
         if(expected_token)require_same_function_contract(expected_contract,final_contract);
         if(strict_pod_contract)require_same_function_contract(pod_function_contract,final_contract);
@@ -2122,7 +2117,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             details["cleanup_attempted"]=false;details["cleanup_confirmed"]=false;
             details["cleanup_state"]="unknown";
         }
-        throw HandlerError("game_call_fault","Игровой вызов вызвал native exception; эффект неизвестен",std::move(details));
+        throw HandlerError("game_call_fault","The game call raised a native exception; its effect is unknown",std::move(details));
     }
     string_event_completed=true;
     if(script_errors.exception_count) {
@@ -2148,7 +2143,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             details["cleanup_confirmed"]=cleanup.confirmed;
             details["cleanup_attempted"]=cleanup.attempted;
         }
-        throw HandlerError("angelscript_exception","Во время ProcessEvent зарегистрировано исключение AngelScript",std::move(details));
+        throw HandlerError("angelscript_exception","An AngelScript exception was recorded during ProcessEvent",std::move(details));
     }
     validate_array_inputs();
     validate_string_inputs();
@@ -2157,20 +2152,20 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         if(vector_parameters.empty())return;
         const auto current_target=validate_object(object);
         if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(current_target)))
-            throw HandlerError("stale_handle","Цель изменилась при получении FVector результата");
+            throw HandlerError("stale_handle","The target changed while obtaining the FVector result");
         for(const auto& vector:vector_parameters) {
             if(!vector.output && !vector.returned)continue;
             if(read<int32_t>(vector.field+0x44)!=vector.offset || read<uint64_t>(vector.field+0x38)!=vector.flags)
-                throw HandlerError("vector_metadata_changed","FVector параметр изменился после вызова");
+                throw HandlerError("vector_metadata_changed","The FVector parameter changed after the call");
             const auto before=capture_vector_parameter(vector.field,vector.size,1);
-            if(!(before==vector.layout))throw HandlerError("vector_metadata_changed","FVector layout изменился после вызова");
+            if(!(before==vector.layout))throw HandlerError("vector_metadata_changed","The FVector layout changed after the call");
             std::array<std::byte,24> copied{};
             if(!copy_memory(copied.data(),buffer+vector.offset,static_cast<size_t>(vector.size)))
-                throw HandlerError("invalid_struct_copy","FVector результат не скопирован");
+                throw HandlerError("invalid_struct_copy","The FVector result could not be copied");
             const auto value=vector_arguments::decode(vector.layout.layout,std::span(copied).first(vector.size));
             if(!(capture_vector_parameter(vector.field,vector.size,1)==vector.layout)
                || read<int32_t>(vector.field+0x44)!=vector.offset || read<uint64_t>(vector.field+0x38)!=vector.flags)
-                throw HandlerError("vector_metadata_changed","FVector layout изменился при копировании результата");
+                throw HandlerError("vector_metadata_changed","The FVector layout changed while copying the result");
             if(vector.returned){result=value;result_metadata=vector_snapshot_json(vector.layout,false);}
             else {out_parameters[vector.key]=value;out_parameter_metadata[vector.key]=vector_snapshot_json(vector.layout,false);}
         }
@@ -2180,14 +2175,14 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             if(!color.returned)continue;
             if(read<int32_t>(color.field+0x44)!=color.offset || read<uint64_t>(color.field+0x38)!=color.flags
                || !(capture_linear_color_parameter(color.field,16,1)==color.layout))
-                throw HandlerError("linear_color_metadata_changed","FLinearColor возврат изменился после вызова");
+                throw HandlerError("linear_color_metadata_changed","The FLinearColor return changed after the call");
             std::array<std::byte,16> copied{};
             if(!copy_memory(copied.data(),buffer+color.offset,copied.size()))
-                throw HandlerError("invalid_struct_copy","FLinearColor результат не скопирован");
+                throw HandlerError("invalid_struct_copy","The FLinearColor result could not be copied");
             result=linear_color_arguments::decode(color.layout.layout,copied);
             if(!(capture_linear_color_parameter(color.field,16,1)==color.layout)
                || read<int32_t>(color.field+0x44)!=color.offset || read<uint64_t>(color.field+0x38)!=color.flags)
-                throw HandlerError("linear_color_metadata_changed","FLinearColor metadata изменились при копировании результата");
+                throw HandlerError("linear_color_metadata_changed","FLinearColor metadata changed while copying the result");
             result_metadata=linear_color_snapshot_json(color.layout,false);
         }
     };
@@ -2196,62 +2191,62 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         const auto& saved=*transform_return;
         if(read<int32_t>(saved.field+0x44)!=saved.offset
            || !(capture_transform_parameter(saved.field,96,1)==saved.layout))
-            throw HandlerError("signature_changed","Transform возврат изменился после вызова");
+            throw HandlerError("signature_changed","The Transform return changed after the call");
         std::array<std::byte,96> copied{};
         if(!copy_memory(copied.data(),buffer+saved.offset,copied.size()))
-            throw HandlerError("invalid_struct_copy","Transform результат не скопирован");
+            throw HandlerError("invalid_struct_copy","The Transform result could not be copied");
         const auto value=transform_arguments::decode(saved.layout.layout,copied);
         if(read<int32_t>(saved.field+0x44)!=saved.offset
            || !(capture_transform_parameter(saved.field,96,1)==saved.layout))
-            throw HandlerError("signature_changed","Transform metadata изменились при копировании результата");
+            throw HandlerError("signature_changed","Transform metadata changed while copying the result");
         result=value;result_metadata=transform_snapshot_json(saved.layout,false);
     };
     auto decode_scalar_outputs=[&] {
         if(scalar_parameters.empty())return;
         if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(validate_object(object))))
-            throw HandlerError("stale_handle","Цель изменилась при получении скалярного out результата");
+            throw HandlerError("stale_handle","The target changed while obtaining the scalar output result");
         require_same_function_contract(pod_function_contract,capture_function_contract(object,function_owner,function,target_handle));
         for(const auto& scalar:scalar_parameters) {
             if(read<int32_t>(scalar.field+0x44)!=scalar.offset || read<uint64_t>(scalar.field+0x38)!=scalar.flags)
-                throw HandlerError("signature_changed","Скалярный out параметр изменился после вызова");
+                throw HandlerError("signature_changed","The scalar output parameter changed after the call");
             const auto current_type=field_type(scalar.field,[this](auto value){return name(value);});
             const auto before=capture_scalar_output_layout(scalar.field,current_type,read<int32_t>(scalar.field+0x34),read<int32_t>(scalar.field+0x30));
-            if(!(before==scalar.layout))throw HandlerError("signature_changed","Скалярная out раскладка изменилась после вызова");
+            if(!(before==scalar.layout))throw HandlerError("signature_changed","The scalar output layout changed after the call");
             std::array<std::byte,8> copied{};
             if(!copy_memory(copied.data(),buffer+scalar.offset,static_cast<size_t>(scalar.layout.element_size)))
-                throw HandlerError("invalid_scalar_copy","Скалярный out результат не скопирован");
+                throw HandlerError("invalid_scalar_copy","The scalar output result could not be copied");
             const auto value=scalar_outputs::decode(scalar.layout,std::span(copied).first(scalar.layout.element_size));
             const auto after=capture_scalar_output_layout(scalar.field,field_type(scalar.field,[this](auto packed){return name(packed);}),
                 read<int32_t>(scalar.field+0x34),read<int32_t>(scalar.field+0x30));
             if(!(after==scalar.layout) || read<int32_t>(scalar.field+0x44)!=scalar.offset || read<uint64_t>(scalar.field+0x38)!=scalar.flags)
-                throw HandlerError("signature_changed","Скалярная out раскладка изменилась при копировании результата");
+                throw HandlerError("signature_changed","The scalar output layout changed while copying the result");
             out_parameters[scalar.key]=value;out_parameter_metadata[scalar.key]=scalar_output_metadata(scalar.layout);
         }
         require_same_function_contract(pod_function_contract,capture_function_contract(object,function_owner,function,target_handle));
         if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(validate_object(object))))
-            throw HandlerError("stale_handle","Цель изменилась при копировании скалярного out результата");
+            throw HandlerError("stale_handle","The target changed while copying the scalar output result");
     };
     auto decode_scalar_struct_return=[&] {
         if(!scalar_struct_return)return;
         const auto& saved=*scalar_struct_return;
         if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(validate_object(object))))
-            throw HandlerError("stale_handle","Цель изменилась при получении DTO результата");
+            throw HandlerError("stale_handle","The target changed while obtaining the DTO result");
         const auto before=capture_scalar_struct(saved.field,saved.element_size,saved.array_dim);
-        if(!(before==saved))throw HandlerError("signature_changed","DTO возврат изменился после вызова");
+        if(!(before==saved))throw HandlerError("signature_changed","The DTO return changed after the call");
         std::vector<std::byte> copied(static_cast<size_t>(saved.element_size));
         if(!copy_memory(copied.data(),buffer+saved.offset,copied.size()))
-            throw HandlerError("invalid_struct_copy","DTO результат не скопирован");
+            throw HandlerError("invalid_struct_copy","The DTO result could not be copied");
         const auto value=saved.path=="/Script/CoreUObject.Rotator"?
             rotator_arguments::decode(saved.layout,copied):scalar_struct_values::decode(saved.layout,copied);
         if(!(capture_scalar_struct(saved.field,saved.element_size,saved.array_dim)==saved))
-            throw HandlerError("signature_changed","DTO metadata изменились при копировании результата");
+            throw HandlerError("signature_changed","DTO metadata changed while copying the result");
         result=value;result_metadata=scalar_struct_snapshot_json(saved,false);
     };
     auto decode_pod_outputs=[&] {
         auto require_transform_result_contract=[&] {
             if(!contains_transform && !contains_color && !contains_rotator && !contains_scalar_struct && !contains_string_input && !contains_object_array)return;
             if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(validate_object(object))))
-                throw HandlerError("stale_handle","Цель изменилась при обработке POD результата вызова");
+                throw HandlerError("stale_handle","The target changed while processing the POD call result");
             require_same_function_contract(pod_function_contract,capture_function_contract(object,function_owner,function,target_handle));
         };
         require_transform_result_contract();
@@ -2268,14 +2263,14 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     if(return_type=="StrProperty") {
         StringHeader header{};
         if(!copy_memory(&header,buffer+return_offset,sizeof(header)))
-            throw HandlerError("game_result_error","Вызов выполнен, но FString не прочитан; очистка не подтверждена",
+            throw HandlerError("game_result_error","The call executed but FString could not be read; cleanup is unconfirmed",
                                string_cleanup_details(false,false,"invalid_string_storage"));
         if(contains_string_input) {
             string_ledger.add_return(header);string_return_registered=true;
             result=copied_string(header);
             decode_pod_outputs();validate_string_inputs();
             const auto cleanup=release_strings();
-            if(!cleanup.confirmed)throw HandlerError("game_result_error","Освобождение FString не подтверждено; не повторять запрос");
+            if(!cleanup.confirmed)throw HandlerError("game_result_error","FString release is unconfirmed; do not repeat the request");
             return append_pod_results({{"function",function_name},{"return_type",return_type},{"result",result},{"executed",true},
                 {"thread_id",GetCurrentThreadId()},{"cleanup_confirmed",true},{"input_cleanup_confirmed",true}});
         }
@@ -2283,10 +2278,10 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             [](const StringHeader& copied){return copied_string(copied);},
             [this](uintptr_t memory){return free_string(base_+kFree,reinterpret_cast<void*>(memory));});
         try{decode_pod_outputs();}catch(const HandlerError& error) {
-            throw HandlerError("game_result_error","Вызов выполнен, но POD out не прочитан; не повторять запрос",
+            throw HandlerError("game_result_error","The call executed but POD output could not be read; do not repeat the request",
                 {{"executed",true},{"may_have_executed",true},{"do_not_retry",true},{"cause_code",error.code()},{"cleanup_confirmed",true}});
         } catch(...) {
-            throw HandlerError("game_result_error","Вызов выполнен, но POD out не прочитан; не повторять запрос",
+            throw HandlerError("game_result_error","The call executed but POD output could not be read; do not repeat the request",
                 {{"executed",true},{"may_have_executed",true},{"do_not_retry",true},{"cause_code","result_processing_failed"},{"cleanup_confirmed",true}});
         }
         return append_pod_results({{"function",function_name},{"return_type",return_type},{"result",result},
@@ -2294,7 +2289,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     }
     try {
         if(return_type=="StructProperty") {
-            // POD-результат копируется по сохранённой отражённой раскладке ниже.
+            // The POD result is copied below using its saved reflected layout.
         } else if(return_type=="NameProperty") {
             result=copied_name_return(return_size,1,
                 [&]{return read<uint64_t>(reinterpret_cast<uintptr_t>(buffer+return_offset));},
@@ -2306,22 +2301,22 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         decode_pod_outputs();
     }
     catch(const HandlerError& error) {
-        throw HandlerError("game_result_error","Вызов выполнен, но результат не получен; не повторять запрос",
+        throw HandlerError("game_result_error","The call executed but its result was not obtained; do not repeat the request",
             {{"executed",true},{"may_have_executed",true},{"do_not_retry",true},{"cause_code",error.code()}});
     } catch(...) {
-        throw HandlerError("game_result_error","Вызов выполнен, но результат не получен; не повторять запрос",
+        throw HandlerError("game_result_error","The call executed but its result was not obtained; do not repeat the request",
             {{"executed",true},{"may_have_executed",true},{"do_not_retry",true},{"cause_code","result_processing_failed"}});
     }
     json response={{"function",function_name},{"return_type",return_type},{"result",result},{"executed",true},{"thread_id",GetCurrentThreadId()}};
     if(!return_enum.is_null())response["return_enum"]=return_enum;
     if(contains_string_input) {
         validate_string_inputs();const auto cleanup=release_strings();
-        if(!cleanup.confirmed)throw HandlerError("game_result_error","Освобождение FString входов не подтверждено; не повторять запрос");
+        if(!cleanup.confirmed)throw HandlerError("game_result_error","FString input release is unconfirmed; do not repeat the request");
         response["cleanup_confirmed"]=true;response["input_cleanup_confirmed"]=true;
     }
     if(contains_object_array) {
         validate_array_inputs();const auto cleanup=release_arrays();
-        if(!cleanup.confirmed)throw HandlerError("game_result_error","Освобождение Object array входов не подтверждено; повтор запрещён");
+        if(!cleanup.confirmed)throw HandlerError("game_result_error","Object array input release is unconfirmed; do not repeat the request");
         response["cleanup_confirmed"]=true;response["array_input_cleanup_confirmed"]=true;
     }
     return append_pod_results(std::move(response));
@@ -2343,8 +2338,8 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                 details["script_completion_confirmed"]=false;
             }
             if(string_event_started || !cleanup.confirmed)
-                throw HandlerError("game_result_error",string_event_completed?"Вызов выполнен; обработка или очистка Object array не завершена":
-                    string_event_started?"Эффект вызова неизвестен; владение Object array не подтверждено":"Вызов не выполнен; владение Object array не подтверждено",std::move(details));
+                throw HandlerError("game_result_error",string_event_completed?"The call executed; Object array processing or cleanup is incomplete":
+                    string_event_started?"The call effect is unknown; Object array ownership is unconfirmed":"The call did not execute; Object array ownership is unconfirmed",std::move(details));
             throw HandlerError(error.code(),error.what(),std::move(details));
         }
         if(!contains_string_input)throw;
@@ -2355,7 +2350,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         if(!script_errors.exception_count && string_event_completed && !string_cleanup_done && return_type=="StrProperty" && !string_return_registered && !string_ledger.uncertain()) {
             StringHeader header{};
             try {
-                if(!copy_memory(&header,buffer+return_offset,sizeof(header)))throw HandlerError("invalid_string_storage","FString результат недоступен");
+                if(!copy_memory(&header,buffer+return_offset,sizeof(header)))throw HandlerError("invalid_string_storage","The FString result is unavailable");
                 string_ledger.add_return(header);string_return_registered=true;
             } catch(...) {string_ledger.mark_uncertain();string_quarantine_cause=4;}
         }
@@ -2370,8 +2365,8 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             if(return_type=="StrProperty")details["return_cleanup_confirmed"]=false;
         }
         if(string_event_started || !cleanup.confirmed)
-            throw HandlerError("game_result_error",string_event_completed?"Вызов выполнен; обработка или очистка FString не завершена":
-                string_event_started?"Эффект вызова неизвестен; владение FString не подтверждено":"Вызов не выполнен; владение FString не подтверждено",std::move(details));
+            throw HandlerError("game_result_error",string_event_completed?"The call executed; FString processing or cleanup is incomplete":
+                string_event_started?"The call effect is unknown; FString ownership is unconfirmed":"The call did not execute; FString ownership is unconfirmed",std::move(details));
         throw HandlerError(error.code(),error.what(),std::move(details));
     } catch(...) {
         if(contains_object_array) {
@@ -2381,12 +2376,12 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             }
             const auto cleanup=release_arrays();
             if(script_errors.exception_count)
-                throw HandlerError("angelscript_exception","Исключение AngelScript зарегистрировано; подготовка полного отчёта не завершена",
+                throw HandlerError("angelscript_exception","An AngelScript exception was recorded; the complete report could not be prepared",
                     {{"executed",true},{"may_have_executed",true},{"do_not_retry",true},{"process_event_returned",string_event_completed},
                      {"script_completion_confirmed",false},{"script_errors",{{"source","observed_logging_entry"},
                         {"exception_count",script_errors.exception_count},{"full_capture",false},{"messages",json::array()},{"stack_captured",false}}},
                      {"array_input_cleanup_confirmed",cleanup.confirmed},{"cleanup_confirmed",cleanup.confirmed}});
-            throw HandlerError("game_result_error","Обработка Object array не завершена; повтор запрещён",
+            throw HandlerError("game_result_error","Object array processing is incomplete; do not repeat the request",
                 {{"executed",string_event_completed},{"may_have_executed",string_event_started},{"do_not_retry",true},
                  {"cause_code","result_processing_failed"},{"cleanup_attempted",cleanup.attempted},{"cleanup_confirmed",cleanup.confirmed},
                  {"array_input_cleanup_confirmed",cleanup.confirmed},{"cleanup_state",cleanup.confirmed?"released":"unknown"},
@@ -2394,7 +2389,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         }
         if(!contains_string_input) {
             if(script_errors.exception_count)
-                throw HandlerError("angelscript_exception","Исключение AngelScript зарегистрировано; подготовка полного отчёта не завершена",
+                throw HandlerError("angelscript_exception","An AngelScript exception was recorded; the complete report could not be prepared",
                     {{"executed",true},{"may_have_executed",true},{"do_not_retry",true},{"process_event_returned",string_event_completed},
                      {"script_completion_confirmed",false},{"script_errors",{{"source","observed_logging_entry"},
                         {"exception_count",script_errors.exception_count},{"full_capture",false},{"messages",json::array()},{"stack_captured",false}}}});
@@ -2409,13 +2404,13 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         }
         const auto cleanup=release_strings();
         if(script_errors.exception_count)
-            throw HandlerError("angelscript_exception","Исключение AngelScript зарегистрировано; подготовка полного отчёта не завершена",
+            throw HandlerError("angelscript_exception","An AngelScript exception was recorded; the complete report could not be prepared",
                 {{"executed",true},{"may_have_executed",true},{"do_not_retry",true},{"process_event_returned",string_event_completed},
                  {"script_completion_confirmed",false},{"script_errors",{{"source","observed_logging_entry"},
                     {"exception_count",script_errors.exception_count},{"full_capture",false},{"messages",json::array()},{"stack_captured",false}}},
                  {"input_cleanup_confirmed",cleanup.confirmed},{"cleanup_confirmed",cleanup.confirmed},
                  {"return_cleanup_confirmed",return_type!="StrProperty"}});
-        throw HandlerError("game_result_error","Обработка FString не завершена; повтор запрещён",
+        throw HandlerError("game_result_error","FString processing is incomplete; do not repeat the request",
             {{"executed",string_event_completed},{"may_have_executed",string_event_started},{"do_not_retry",true},{"cause_code","result_processing_failed"},
              {"cleanup_attempted",cleanup.attempted},{"cleanup_confirmed",cleanup.confirmed},{"input_cleanup_confirmed",cleanup.confirmed},
              {"cleanup_state",cleanup.confirmed?"released":"unknown"},{"string_input_quarantined",string_inputs_quarantined_.load()}});
@@ -2428,12 +2423,12 @@ json GameAccess::execute(const json& request) {
     const auto now=static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
     if(op=="snapshot") {
-        if(!params.contains("targets"))throw HandlerError("invalid_snapshot_params","Требуется targets");
+        if(!params.contains("targets"))throw HandlerError("invalid_snapshot_params","targets is required");
         return snapshot(params.at("targets"));
     }
     if(op=="watch_start") {
         if(!params.contains("handle") || !params.contains("properties"))
-            throw HandlerError("invalid_watch_params","Требуются handle и properties");
+            throw HandlerError("invalid_watch_params","handle and properties are required");
         auto targets=json::array({{{"handle",params.at("handle")},{"properties",params.at("properties")}}});
         Observations::validate_targets(targets);
         return observations_.start(session,params.value("client_owner",session),params,snapshot(targets),now,ticks_.load());
@@ -2443,15 +2438,15 @@ json GameAccess::execute(const json& request) {
     if(op=="watch_forget")return observations_.forget(params.value("client_owner",session),params);
     if(op=="watch_list")return observations_.list(session,params.value("client_owner",session));
     if(op=="watch_resume")return observations_.resume(session,params.value("client_owner",session),params);
-    if(op!="objects" && op!="properties" && op!="functions" && op!="invoke" && op!="read_array" && op!="read_struct")throw HandlerError("unknown_operation","Операция не поддержана");
+    if(op!="objects" && op!="properties" && op!="functions" && op!="invoke" && op!="read_array" && op!="read_struct")throw HandlerError("unknown_operation","The operation is unsupported");
     if(op=="objects") {
         auto query=params.value("query",std::string{}),class_query=params.value("class_query",std::string{});const auto limit=limit_of(params);
         if(params.contains("exact_path") && !params.at("exact_path").is_string())
-            throw HandlerError("invalid_query","exact_path требует строку");
+            throw HandlerError("invalid_query","exact_path requires a string");
         const auto exact_path=params.value("exact_path",std::string{});
         if(!object_query::valid_exact_path(exact_path))
             throw HandlerError("invalid_query","exact_path must contain no NUL");
-        auto count=read<int32_t>(base_+kObjects+0x14);if(count<0)throw HandlerError("invalid_registry","Некорректный реестр объектов");
+        auto count=read<int32_t>(base_+kObjects+0x14);if(count<0)throw HandlerError("invalid_registry","Invalid object registry");
         json items=json::array();int scanned=0,skipped=0;
         for(int index=0;index<count;++index){++scanned;
             try {
@@ -2476,7 +2471,7 @@ json GameAccess::execute(const json& request) {
     auto object=resolve(params.at("handle").get<std::string>());
     if(op=="read_struct") {
         if(!params.contains("property_name") || !params.at("property_name").is_string())
-            throw HandlerError("invalid_struct_params","Требуется строковое имя свойства");
+            throw HandlerError("invalid_struct_params","A string property name is required");
         return read_struct(object,params.at("handle").get<std::string>(),params.at("property_name").get<std::string>());
     }
     if(op=="properties") {
@@ -2498,19 +2493,19 @@ json GameAccess::execute(const json& request) {
         const auto before=serial_identity(validate_object(object));
         auto result=selected_properties(object,params.at("property_names"));
         if(resolve(params.at("handle").get<std::string>())!=object || !same_serial_identity(before,serial_identity(validate_object(object))))
-            throw HandlerError("stale_handle","Объект изменился во время чтения выбранных свойств");
+            throw HandlerError("stale_handle","The object changed while reading selected properties");
         result["items"]=std::move(result["properties"]);result.erase("properties");
         result["validation"]="game_thread_memory_read";return result;
     }
     if(op=="functions") {
         if(params.contains("function_query") && !params.at("function_query").is_string())
-            throw HandlerError("invalid_query","function_query требует строку");
+            throw HandlerError("invalid_query","function_query requires a string");
         const auto query=params.value("function_query",std::string{});
         if(!function_query::valid(query))throw HandlerError("invalid_query","function_query must contain no NUL");
         return functions(object,limit_of(params),query,params.at("handle").get<std::string>());
     }
     if(op=="invoke")return invoke(object,params.at("function").get<std::string>(),params.value("arguments",json::object()),
                                   params.at("handle").get<std::string>(),params.contains("expected_signature_token")?&params.at("expected_signature_token"):nullptr);
-    throw HandlerError("unknown_operation","Операция не поддержана");
+    throw HandlerError("unknown_operation","The operation is unsupported");
 }
 }

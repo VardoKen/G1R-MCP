@@ -27,10 +27,10 @@ inline thread_local State* active{};
 class LoggerScope;
 inline thread_local LoggerScope* active_logger{};
 
-// Область существует только вокруг текущего ProcessEvent. Вложенный вызов
-// временно принадлежит своей записи, затем возвращает прежнего владельца.
-// Logger восстанавливается здесь также после native SEH, который при /EHsc
-// может пропустить его собственный C++ деструктор внутри ProcessEvent.
+// This scope exists only around the current ProcessEvent. A nested call
+// temporarily owns its own record, then restores the previous owner.
+// Restore Logger here after native SEH as well; /EHsc can skip
+// the Logger's own C++ destructor inside ProcessEvent.
 class Scope {
 public:
     explicit Scope(State& state) noexcept:previous_(std::exchange(active,&state)),
@@ -43,8 +43,8 @@ private:
     LoggerScope* previous_logger_;
 };
 
-// Logger и вызываемый им formatter разделяют индекс исключения даже тогда,
-// когда сообщение не удалось скопировать. Вложенный logger возвращает владельца.
+// Logger and its formatter share the exception index even
+// when the message cannot be copied. A nested logger restores its owner.
 class LoggerScope {
 public:
     LoggerScope() noexcept:owner_(active),previous_(std::exchange(active_logger,this)) {
@@ -61,9 +61,9 @@ private:
     std::size_t exception_index_{};
 };
 
-// Reader копирует один байт через существующий SEH-reader. Ни указатель logger,
-// ни частично прочитанное сообщение не сохраняются; исходный logger вызывается
-// вызывающей стороной даже при ошибке копирования.
+// Reader copies one byte through the existing SEH reader. Neither the logger pointer
+// nor a partially read message is retained; the caller invokes the original logger
+// even when copying fails.
 template<class Reader>void record(const char* message,Reader&& read) noexcept {
     auto* state=active;
     if(!state)return;
@@ -87,8 +87,8 @@ template<class Reader>void record(const char* message,Reader&& read) noexcept {
     } catch(...) {state->full_capture=false;}
 }
 
-// Вызывающая сторона передаёт собственные UTF-8 строки после копирования
-// borrowed результата formatter. Указатели игрового массива здесь не хранятся.
+// The caller supplies owned UTF-8 strings after copying
+// the formatter's borrowed result. Engine array pointers are not retained here.
 inline void record_stack(std::vector<std::string> frames,bool complete) noexcept {
     if(!active_logger || !active || active_logger->owner()!=active)return;
     try {

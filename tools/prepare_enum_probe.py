@@ -1,4 +1,4 @@
-"""Подготовить собственную enum-fixture внутри artifacts без запуска игры."""
+"""Prepare an isolated enum fixture within artifacts without launching the game."""
 from __future__ import annotations
 
 import argparse
@@ -40,20 +40,20 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
                      "result": "void", "increments": "CallsCount"},
                     {"name": "ResetProbe", "inputs": [], "result": "void"}],
     }
-    result["limitations"] = ["Подготовка не доказывает компиляцию или фактические EnumProperty/UnderlyingProp",
-                             "Вызовы меняют только StoredMode/CallsCount собственного проверочного CDO",
-                             "Отдельные uint8-вызовы не объявлены; числовой размер enum подтверждается runtime-рефлексией"]
+    result["limitations"] = ["Preparation does not prove compilation or the actual EnumProperty/UnderlyingProp",
+                             "Calls change only StoredMode/CallsCount on the fixture CDO",
+                             "Separate uint8 calls are not declared; the numeric enum size must be confirmed by runtime reflection"]
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
     class RussianArgumentParser(argparse.ArgumentParser):
         def format_help(self) -> str:
-            return super().format_help().replace("usage:", "Использование:", 1).replace("options:", "Параметры:", 1)
-    parser = RussianArgumentParser(description="Подготовить собственную enum-fixture внутри artifacts", add_help=False)
-    parser.add_argument("-h", "--help", action="help", help="Показать справку")
+            return super().format_help().replace("usage:", "Usage:", 1).replace("options:", "Options:", 1)
+    parser = RussianArgumentParser(description="Prepare an isolated enum fixture within artifacts", add_help=False)
+    parser.add_argument("-h", "--help", action="help", help="Show help")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT / "artifacts" / "enum-probe-dev8",
-                        help="Отдельный каталог внутри artifacts")
+                        help="A separate directory within artifacts")
     args = parser.parse_args(argv)
     try:
         result = prepare_probe(args.workspace_root)

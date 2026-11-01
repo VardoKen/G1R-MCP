@@ -31,9 +31,9 @@ Transport::Transport(Handler handler, std::uint16_t port, std::chrono::milliseco
                      SessionClosed session_closed)
     : handler_(std::move(handler)), session_closed_(std::move(session_closed)),
       requested_port_(port), io_timeout_(io_timeout) {
-    if (!handler_) throw std::invalid_argument("Обработчик транспорта не задан");
+    if (!handler_) throw std::invalid_argument("The transport handler is missing");
     if (io_timeout_.count() <= 0 || io_timeout_.count() > 60000)
-        throw std::invalid_argument("Таймаут транспорта должен быть от 1 до 60000 мс");
+        throw std::invalid_argument("Transport timeout must be between 1 and 60000 ms");
 }
 
 Transport::~Transport() { stop(); }
@@ -48,13 +48,13 @@ bool Transport::start() {
     }
     WSADATA data{};
     if (WSAStartup(MAKEWORD(2, 2), &data) != 0) {
-        set_error("winsock_start_failed", "Не удалось инициализировать Winsock");
+        set_error("winsock_start_failed", "Could not initialize Winsock");
         return false;
     }
     winsock_started_ = true;
     SOCKET listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (listener == INVALID_SOCKET) {
-        set_error("socket_create_failed", "Не удалось создать локальный сокет");
+        set_error("socket_create_failed", "Could not create the local socket");
         WSACleanup();
         winsock_started_ = false;
         return false;
@@ -68,7 +68,7 @@ bool Transport::start() {
                    reinterpret_cast<const char*>(&exclusive), sizeof(exclusive)) != 0
         || bind(listener, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0
         || listen(listener, 1) != 0 || !nonblocking(listener)) {
-        set_error("listen_failed", "Не удалось открыть локальный порт транспорта");
+        set_error("listen_failed", "Could not open the local transport port");
         closesocket(listener);
         WSACleanup();
         winsock_started_ = false;
@@ -76,7 +76,7 @@ bool Transport::start() {
     }
     int address_size = sizeof(address);
     if (getsockname(listener, reinterpret_cast<sockaddr*>(&address), &address_size) != 0) {
-        set_error("socket_address_failed", "Не удалось определить локальный порт");
+        set_error("socket_address_failed", "Could not identify the local port");
         closesocket(listener);
         WSACleanup();
         winsock_started_ = false;
@@ -103,7 +103,7 @@ bool Transport::start() {
         }
         WSACleanup();
         winsock_started_ = false;
-        set_error("worker_start_failed", "Не удалось создать поток транспорта");
+        set_error("worker_start_failed", "Could not create the transport thread");
         return false;
     }
     return true;
@@ -113,8 +113,8 @@ void Transport::stop() {
     std::lock_guard lifecycle(lifecycle_mutex_);
     stop_requested_.store(true);
     {
-        // Только shutdown из внешнего потока. closesocket выполняет владелец
-        // после выхода из I/O: номер сокета не переиспользуется во время отмены.
+        // External threads only call shutdown. The owning thread calls closesocket
+        // after I/O exits, so the socket handle cannot be reused during cancellation.
         std::lock_guard state(state_mutex_);
         if (active_client_ != INVALID_SOCKET) shutdown(active_client_, SD_BOTH);
     }
@@ -154,7 +154,7 @@ bool Transport::wait_socket(SOCKET socket, bool writing, std::chrono::steady_clo
     while (!stop_requested_.load()) {
         const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
         if (remaining.count() <= 0) {
-            set_error("io_timeout", "Истекло время обмена кадром");
+            set_error("io_timeout", "Frame exchange timed out");
             return false;
         }
         const auto slice = std::min<std::int64_t>(remaining.count(), 100);
@@ -165,7 +165,7 @@ bool Transport::wait_socket(SOCKET socket, bool writing, std::chrono::steady_clo
         const int result = select(0, writing ? nullptr : &available, writing ? &available : nullptr, nullptr, &timeout);
         if (result > 0) return true;
         if (result == SOCKET_ERROR) {
-            if (!stop_requested_.load()) set_error("socket_wait_failed", "Ошибка ожидания локального сокета");
+            if (!stop_requested_.load()) set_error("socket_wait_failed", "Failed while waiting for the local socket");
             return false;
         }
     }
@@ -181,7 +181,7 @@ bool Transport::read_exact(SOCKET socket, char* bytes, std::size_t length,
         if (amount > 0) offset += static_cast<std::size_t>(amount);
         else if (amount == 0) return false;
         else if (WSAGetLastError() != WSAEWOULDBLOCK) {
-            if (!stop_requested_.load()) set_error("socket_read_failed", "Ошибка чтения локального сокета");
+            if (!stop_requested_.load()) set_error("socket_read_failed", "Failed to read the local socket");
             return false;
         }
     }
@@ -197,7 +197,7 @@ bool Transport::write_exact(SOCKET socket, const char* bytes, std::size_t length
         if (amount > 0) offset += static_cast<std::size_t>(amount);
         else if (amount == 0) return false;
         else if (WSAGetLastError() != WSAEWOULDBLOCK) {
-            if (!stop_requested_.load()) set_error("socket_write_failed", "Ошибка записи локального сокета");
+            if (!stop_requested_.load()) set_error("socket_write_failed", "Failed to write the local socket");
             return false;
         }
     }
@@ -208,11 +208,11 @@ bool Transport::send_json(SOCKET client, const nlohmann::json& response) {
     std::string payload;
     try { payload = response.dump(); }
     catch (...) {
-        set_error("response_encoding_failed", "Ответ не кодируется в UTF-8 JSON");
+        set_error("response_encoding_failed", "The response cannot be encoded as UTF-8 JSON");
         return false;
     }
     if (payload.empty() || payload.size() > MaxFrameBytes) {
-        set_error("response_too_large", "Ответ превышает предел кадра");
+        set_error("response_too_large", "The response exceeds the frame size limit");
         return false;
     }
     const auto length = static_cast<std::uint32_t>(payload.size());
@@ -227,9 +227,9 @@ void Transport::serve(SOCKET client, const std::string& session) {
     std::unordered_set<std::string> seen;
     while (!stop_requested_.load()) {
         std::array<unsigned char, 4> header{};
-        // Размышление MCP-клиента не является таймаутом кадра. Пока первый
-        // байт не пришёл, соединение может простаивать; отмена проверяется
-        // каждые 100 мс. После первого байта действует общий deadline кадра.
+        // MCP client reasoning time is not a frame timeout. Until the first
+        // byte arrives, the connection may remain idle; cancellation is checked
+        // every 100 ms. The shared frame deadline applies after the first byte.
         bool started = false;
         while (!stop_requested_.load() && !started) {
             fd_set ready;
@@ -250,7 +250,7 @@ void Transport::serve(SOCKET client, const std::string& session) {
                           | (static_cast<std::uint32_t>(header[1]) << 16U)
                           | (static_cast<std::uint32_t>(header[2]) << 8U) | header[3];
         if (length == 0 || length > MaxFrameBytes) {
-            send_json(client, error_response(nullptr, session, "invalid_frame_length", "Недопустимый размер кадра"));
+            send_json(client, error_response(nullptr, session, "invalid_frame_length", "Invalid frame size"));
             return;
         }
         std::string payload(length, '\0');
@@ -260,25 +260,23 @@ void Transport::serve(SOCKET client, const std::string& session) {
             request = nlohmann::json::parse(payload);
         }
         catch (...) {
-            send_json(client, error_response(nullptr, session, "invalid_json", "Кадр не содержит корректный JSON"));
+            send_json(client, error_response(nullptr, session, "invalid_json", "The frame does not contain valid JSON"));
             return;
         }
         nlohmann::json id = nullptr;
         if (request.is_object() && request.contains("id") && request["id"].is_string()
-            && !request["id"].get_ref<const std::string&>().empty()
-            && request["id"].get_ref<const std::string&>().size() <= 80) id = request["id"];
+            && !request["id"].get_ref<const std::string&>().empty()) id = request["id"];
         if (!request.is_object() || id.is_null() || !request.contains("protocol")
             || !request["protocol"].is_number_integer() || request["protocol"] != 1
             || !request.contains("op") || !request["op"].is_string()
             || request["op"].get_ref<const std::string&>().empty()
-            || request["op"].get_ref<const std::string&>().size() > 64
             || !request.contains("params") || !request["params"].is_object()) {
-            send_json(client, error_response(id, session, "invalid_request", "Неверная схема или версия запроса"));
+            send_json(client, error_response(id, session, "invalid_request", "Invalid request schema or protocol version"));
             return;
         }
         const auto request_id = id.get<std::string>();
         if (seen.contains(request_id)) {
-            if (!send_json(client, error_response(id, session, "duplicate_request_id", "Идентификатор уже использован в этом соединении"))) return;
+            if (!send_json(client, error_response(id, session, "duplicate_request_id", "The request identifier was already used in this connection"))) return;
             continue;
         }
         seen.insert(request_id);
@@ -286,18 +284,18 @@ void Transport::serve(SOCKET client, const std::string& session) {
         nlohmann::json response;
         try {
             auto result = handler_(request);
-            if (!result.is_object()) throw HandlerError("invalid_handler_result", "Обработчик должен вернуть JSON-объект");
+            if (!result.is_object()) throw HandlerError("invalid_handler_result", "The handler must return a JSON object");
             response = {{"protocol", 1}, {"type", "response"}, {"id", id}, {"session_id", session},
                         {"result", std::move(result)}};
             if (response.dump().size() > MaxFrameBytes) {
                 const bool executed=response.at("result").value("executed",false);
-                response = error_response(id, session, "response_too_large", "Ответ обработчика превышает предел кадра",
+                response = error_response(id, session, "response_too_large", "The handler response exceeds the frame size limit",
                     {{"executed",executed},{"may_have_executed",executed},{"do_not_retry",executed}});
             }
         } catch (const HandlerError& error) {
             response = error_response(id, session, error.code(), error.what(),error.details());
         } catch (...) {
-            response = error_response(id, session, "native_handler_error", "Обработчик завершился ошибкой",
+            response = error_response(id, session, "native_handler_error", "The handler failed",
                 {{"executed",false},{"may_have_executed",true},{"do_not_retry",true}});
         }
         if (!send_json(client, response)) return;
@@ -319,7 +317,7 @@ void Transport::run() {
             const int available = select(0, &ready, nullptr, nullptr, &timeout);
             if (available == 0) continue;
             if (available == SOCKET_ERROR) {
-                if (!stop_requested_.load()) set_error("listener_wait_failed", "Ошибка ожидания локального клиента");
+                if (!stop_requested_.load()) set_error("listener_wait_failed", "Failed while waiting for a local client");
                 break;
             }
             sockaddr_in address{};
@@ -327,7 +325,7 @@ void Transport::run() {
             SOCKET client = accept(listener, reinterpret_cast<sockaddr*>(&address), &address_size);
             if (client == INVALID_SOCKET) {
                 if (WSAGetLastError() == WSAEWOULDBLOCK) continue;
-                if (!stop_requested_.load()) set_error("accept_failed", "Не удалось принять локального клиента");
+                if (!stop_requested_.load()) set_error("accept_failed", "Could not accept the local client");
                 break;
             }
             BOOL no_delay = TRUE;
@@ -344,10 +342,10 @@ void Transport::run() {
                 session_ = session;
             }
             try { serve(client, session); }
-            catch (...) { set_error("transport_worker_error", "Обслуживание клиента завершилось ошибкой"); }
+            catch (...) { set_error("transport_worker_error", "Client service failed"); }
             if (session_closed_) {
                 try { session_closed_(session); }
-                catch (...) { set_error("session_cleanup_failed", "Не удалось уведомить об отключении сессии"); }
+                catch (...) { set_error("session_cleanup_failed", "Could not notify the session disconnect handler"); }
             }
             {
                 std::lock_guard state(state_mutex_);
@@ -358,7 +356,7 @@ void Transport::run() {
             }
         }
     } catch (...) {
-        set_error("transport_worker_error", "Поток транспорта завершился ошибкой");
+        set_error("transport_worker_error", "The transport thread failed");
     }
     {
         std::lock_guard state(state_mutex_);

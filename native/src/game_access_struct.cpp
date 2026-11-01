@@ -31,14 +31,14 @@ json GameAccess::read_struct(void* object,const std::string& handle,const std::s
                 if(name(read<uint64_t>(field+0x20))==property_name){selected=field;result.owner=klass;break;}
             }
         }
-        if(!selected)throw HandlerError("property_not_found","Свойство структуры не найдено");
+        if(!selected)throw HandlerError("property_not_found","Struct property not found");
         result.owner_identity=validate_object(reinterpret_cast<void*>(result.owner));
         if(game_memory::field_type(selected,[this](uint64_t value){return name(value);})!="StructProperty")
-            throw HandlerError("unsupported_struct_type","Выбранное свойство не является точным StructProperty");
+            throw HandlerError("unsupported_struct_type","The selected property is not an exact StructProperty");
         const auto size=read<int32_t>(selected+0x34),dim=read<int32_t>(selected+0x30);
         result.owner_size=read<int32_t>(result.owner+0x58);
         if(dim!=1 || size<1)
-            throw HandlerError("unsupported_struct_layout","Внешнее свойство структуры не поддержано");
+            throw HandlerError("unsupported_struct_layout","The outer struct property is unsupported");
         result.structure=scalar_struct_values::capture(selected,size,dim,
             []<class Value>(uintptr_t address){return read<Value>(address);},
             [this](uint64_t value){return name(value);},
@@ -46,7 +46,7 @@ json GameAccess::read_struct(void* object,const std::string& handle,const std::s
             [this](uintptr_t value){validate_class(reinterpret_cast<void*>(value));},
             [this](uintptr_t value){return object_path(reinterpret_cast<void*>(value));});
         if(result.structure.offset<0 || result.owner_size<size || result.structure.offset>result.owner_size-size)
-            throw HandlerError("unsupported_struct_layout","Внешнее свойство структуры не поддержано");
+            throw HandlerError("unsupported_struct_layout","The outer struct property is unsupported");
         return result;
     };
     const auto before=capture();
@@ -54,7 +54,7 @@ json GameAccess::read_struct(void* object,const std::string& handle,const std::s
     const auto address=reinterpret_cast<uintptr_t>(object)+static_cast<uintptr_t>(before.structure.offset);
     if(address<reinterpret_cast<uintptr_t>(object)
        || !game_memory::copy(bytes.data(),reinterpret_cast<void*>(address),bytes.size()))
-        throw HandlerError("invalid_memory","Байты структуры недоступны");
+        throw HandlerError("invalid_memory","Struct bytes are unavailable");
     const auto values=scalar_struct_values::decode(before.structure.layout,bytes);
     json components=json::array();
     for(const auto& component:before.structure.layout.components)
@@ -64,8 +64,8 @@ json GameAccess::read_struct(void* object,const std::string& handle,const std::s
     if(before.owner!=after.owner || before.owner_size!=after.owner_size || !(before.structure==after.structure)
        || !same_serial_identity(serial_identity(before.owner_identity),serial_identity(after.owner_identity))
        || !same_serial_identity(serial_identity(initial),serial_identity(validate_object(object))))
-        throw HandlerError("struct_metadata_changed","Метаданные или identity структуры изменились при копировании");
-    if(resolve(handle)!=object)throw HandlerError("stale_handle","Ссылка структуры изменилась");
+        throw HandlerError("struct_metadata_changed","Struct metadata or identity changed while being copied");
+    if(resolve(handle)!=object)throw HandlerError("stale_handle","The struct handle changed");
     return {{"source","live_native"},{"session_id",handle_session_},{"handle",handle},{"property_name",property_name},
             {"struct_path",before.structure.path},{"properties_size",before.structure.layout.properties_size},
             {"min_alignment",before.structure.layout.min_alignment},{"components",components},

@@ -97,16 +97,16 @@ Observations::Json Observations::start(const std::string& connection_session,
                                       const std::string& client_owner, const Json& params,
                                       const Json& baseline, std::uint64_t now_ms,
                                       std::uint64_t tick) {
-    if (client_owner.empty()) throw HandlerError("invalid_owner", "Владелец наблюдения отсутствует");
+    if (client_owner.empty()) throw HandlerError("invalid_owner", "The watch owner is missing");
     if (!params.is_object() || !params.contains("handle") || !params.contains("properties"))
-        throw HandlerError("invalid_watch_params", "Наблюдение требует handle и properties");
+        throw HandlerError("invalid_watch_params", "A watch requires handle and properties");
     Json targets = Json::array({{{"handle", params.at("handle")}, {"properties", params.at("properties")}}});
     validate_targets(targets);
     const auto duration = integer(params, "duration_ms", 1, std::numeric_limits<std::uint64_t>::max() - now_ms);
     const auto interval = integer(params, "interval_ms", 1, std::numeric_limits<std::uint64_t>::max());
     const auto capacity = integer(params, "capacity", 1, std::numeric_limits<std::size_t>::max());
     if (!complete_snapshot(baseline))
-        throw HandlerError("unsupported_watch_target", "Исходный снимок должен содержать полностью поддержанные значения");
+        throw HandlerError("unsupported_watch_target", "The initial snapshot must contain fully supported values");
     Watch watch;
     watch.id = "watch-" + std::to_string(++next_id_);
     watch.connection_session = connection_session;
@@ -131,8 +131,8 @@ Observations::Json Observations::start(const std::string& connection_session,
 
 const Observations::Watch& Observations::find(const std::string& owner, const Json& params) const {
     auto found = watches_.find(watch_id(params));
-    if (found == watches_.end()) throw HandlerError("unknown_watch", "Наблюдение отсутствует в текущей среде");
-    if (found->second.client_owner != owner) throw HandlerError("foreign_watch", "Наблюдение принадлежит другому клиенту");
+    if (found == watches_.end()) throw HandlerError("unknown_watch", "The watch does not exist in the current environment");
+    if (found->second.client_owner != owner) throw HandlerError("foreign_watch", "The watch belongs to a different client");
     return found->second;
 }
 Observations::Watch& Observations::find(const std::string& owner, const Json& params) {
@@ -196,7 +196,7 @@ Observations::Json Observations::stop(const std::string& owner, const Json& para
 }
 Observations::Json Observations::forget(const std::string& owner, const Json& params) {
     const auto& watch = find(owner, params);
-    if (watch.state == "running") throw HandlerError("watch_running", "Сначала остановить наблюдение");
+    if (watch.state == "running") throw HandlerError("watch_running", "Stop the watch first");
     const auto id = watch.id;
     watches_.erase(id);
     order_.erase(std::remove(order_.begin(), order_.end(), id), order_.end());

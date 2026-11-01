@@ -1,4 +1,4 @@
-"""Подготовить собственную POD-fixture внутри artifacts без запуска игры."""
+"""Prepare an isolated POD fixture within artifacts without launching the game."""
 from __future__ import annotations
 
 import argparse
@@ -36,23 +36,23 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
                        "StoredRotation": {"Pitch": 10.0, "Yaw": -20.0, "Roll": 30.0}},
         "control_methods": ["ReadMarker", "ReadNumberCount", "ReadEmptyCount", "ReadNameCount", "ReadNumberAt",
                             "ReadNameAt", "ReadVectorX", "ReadVectorY", "ReadVectorZ", "ReadPitch", "ReadYaw", "ReadRoll"],
-        "mutations": {"SetupFixture": "заполнить только Numbers собственного CDO",
-                      "ClearFixture": "очистить только Numbers собственного CDO"},
+        "mutations": {"SetupFixture": "populate only Numbers on the fixture CDO",
+                      "ClearFixture": "clear only Numbers on the fixture CDO"},
     }
-    result["limitations"] = ["Подготовка не доказывает компиляцию или фактическую раскладку FScriptArray/FVector/FRotator",
-                             "Массивы читаются отдельными страницами; атомарность между страницами не обещается",
-                             "Fixtures не создают игровые объекты, callbacks, контент или сохранения"]
+    result["limitations"] = ["Preparation does not prove compilation or the actual FScriptArray/FVector/FRotator layout",
+                             "Arrays are read in separate pages; atomicity across pages is not guaranteed",
+                             "Fixtures do not create game objects, callbacks, content, or saved games"]
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
     class RussianArgumentParser(argparse.ArgumentParser):
         def format_help(self) -> str:
-            return super().format_help().replace("usage:", "Использование:", 1).replace("options:", "Параметры:", 1)
-    parser = RussianArgumentParser(description="Подготовить собственную POD-fixture внутри artifacts", add_help=False)
-    parser.add_argument("-h", "--help", action="help", help="Показать справку")
+            return super().format_help().replace("usage:", "Usage:", 1).replace("options:", "Options:", 1)
+    parser = RussianArgumentParser(description="Prepare an isolated POD fixture within artifacts", add_help=False)
+    parser.add_argument("-h", "--help", action="help", help="Show help")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT / "artifacts" / "pod-read-probe-dev10",
-                        help="Отдельный каталог внутри artifacts")
+                        help="A separate directory within artifacts")
     args = parser.parse_args(argv)
     try:
         result = prepare_probe(args.workspace_root)

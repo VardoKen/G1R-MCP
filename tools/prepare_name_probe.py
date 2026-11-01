@@ -1,4 +1,4 @@
-"""Подготовить FName-fixture внутри artifacts без запуска игры или DLL."""
+"""Prepare an FName fixture within artifacts without launching the game or DLL."""
 from __future__ import annotations
 
 import argparse
@@ -20,7 +20,7 @@ FIXTURE_ROOT = REPOSITORY_ROOT / "tests" / "fixtures" / "name_probe"
 
 
 def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_ROOT) -> dict:
-    # Повторно использовать ограниченную подготовку, не меняя globals другого инструмента.
+    # Reuse bounded preparation without changing another tool's globals.
     spec = importlib.util.spec_from_file_location("_g1r_name_preparation", REPOSITORY_ROOT / "tools" / "prepare_class_probe.py")
     implementation = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(implementation)
@@ -44,14 +44,14 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
                     {"name": "ReadCallsCount", "inputs": [], "result": "int"},
                     {"name": "ResetProbe", "inputs": [], "result": "void"}],
     }
-    result["limitations"] = ["Подготовка не доказывает компиляцию, загрузку класса или runtime-значения FName",
-                             "FName входы копируются из собственных подтверждённых NameProperty; FString входы не используются",
-                             "EchoName меняет только CallsCount собственного CDO; ResetProbe восстанавливает его в ноль"]
+    result["limitations"] = ["Preparation does not prove compilation, class loading, or runtime FName values",
+                             "FName inputs are copied from verified NameProperty values on the fixture; FString inputs are not used",
+                             "EchoName changes only CallsCount on the fixture CDO; ResetProbe restores it to zero"]
     return result
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Подготовить собственную FName-fixture внутри artifacts")
+    parser = argparse.ArgumentParser(description="Prepare an isolated FName fixture within artifacts")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT / "artifacts" / "name-probe-dev7")
     args = parser.parse_args()
     try:

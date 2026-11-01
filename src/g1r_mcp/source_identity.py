@@ -1,4 +1,4 @@
-"""Текущие read-only Git-факты выбранного каталога исходников Modkit."""
+"""Current read-only Git facts for the selected Modkit source directory."""
 
 from datetime import datetime, timezone
 from pathlib import Path
@@ -6,7 +6,7 @@ import subprocess
 
 
 def inspect(root: Path, configured_revision: str | None) -> dict:
-    """Последовательно прочитать Git без обхода исходников и проверки игры."""
+    """Read Git sequentially without traversing sources or checking the game."""
     git = {
         "available": True,
         "repository_root": None,

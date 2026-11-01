@@ -1,4 +1,4 @@
-"""Проверить токен reflection и выборочные свойства своего NameProbe через MCP."""
+"""Check the reflection token and selected properties of the owned NameProbe through MCP."""
 from __future__ import annotations
 
 import argparse
@@ -27,7 +27,7 @@ def check_token(functions: dict, method: str) -> str:
     signature = check_input_signature(functions, method)
     token = signature.get("signature_token")
     if not isinstance(token, str) or not TOKEN.fullmatch(token):
-        raise ProbeError("probe_signature_token_absent", "Полная сигнатура собственного метода не получила корректный токен")
+        raise ProbeError("probe_signature_token_absent", "The full signature of the owned method did not receive a valid token")
     return token
 
 
@@ -37,7 +37,7 @@ def check_selected(response: dict, names: list[str], *, include_missing: bool) -
             or [field.get("name") for field in fields] != names
             or response.get("truncated") is not False
             or response.get("partial") is not include_missing):
-        raise ProbeError("probe_property_selection_invalid", "Выборка свойств не сохранила порядок или полноту")
+        raise ProbeError("probe_property_selection_invalid", "The property selection did not preserve order or completeness")
     expected = {"StoredNone": ("NameProperty", "None"),
                 "StoredEntry": ("NameProperty", "Entry"), "CallsCount": ("IntProperty", 0)}
     values = {}
@@ -47,13 +47,13 @@ def check_selected(response: dict, names: list[str], *, include_missing: bool) -
             if (field.get("type") is not None or field.get("supported") is not False
                     or field.get("error", {}).get("code") != "property_not_found"
                     or "value" in field):
-                raise ProbeError("probe_missing_property_invalid", "Отсутствующее свойство не получило явный отказ")
+                raise ProbeError("probe_missing_property_invalid", "The missing property did not receive an explicit rejection")
             continue
         field_type, value = expected[name]
         if (field.get("type") != field_type or field.get("supported") is not True
                 or "error" in field or type(field.get("value")) is not type(value)
                 or field["value"] != value):
-            raise ProbeError("probe_property_value_invalid", "Собственные имена или нулевой счётчик изменились")
+            raise ProbeError("probe_property_value_invalid", "Owned names or the zero counter changed")
         values[name] = field["value"]
     return values
 
@@ -61,26 +61,26 @@ def check_selected(response: dict, names: list[str], *, include_missing: bool) -
 def check_invocation(result: dict, value: int) -> None:
     if (result.get("executed") is not True or type(result.get("result")) is not int
             or result["result"] != value):
-        raise ProbeError("probe_contract_call_unconfirmed", "Вызов с проверенным токеном не подтверждён")
+        raise ProbeError("probe_contract_call_unconfirmed", "The call with the verified token was not confirmed")
 
 
 def check_rejection(result: dict, code: str) -> None:
     if (result.get("code") != code or result.get("may_have_executed") is not False
             or result.get("executed") is True):
-        raise ProbeError("probe_contract_rejection_unconfirmed", "Не доказан отказ токена до исполнения")
+        raise ProbeError("probe_contract_rejection_unconfirmed", "Token rejection before execution was not proven")
 
 
 async def _exercise(call, cleanup_state: dict) -> dict:
-    """Все EchoName должны быть отвергнуты; Reset восстанавливает CDO после проб."""
+    """All EchoName calls must be rejected; Reset restores the CDO after the probes."""
     status = await call("g1r_native_status", {})
     session_id = status.get("session_id")
     if status.get("ready") is not True or not isinstance(session_id, str) or not session_id:
-        raise ProbeError("game_not_ready", "Не подтверждены готовая очередь и владелец native-сессии")
+        raise ProbeError("game_not_ready", "The ready queue and native session owner were not confirmed")
     found = await call("g1r_find_objects", {"query": "Default__" + HOST, "class_query": HOST, "limit": 50})
     exact = [item for item in found.get("items", [])
              if isinstance(item, dict) and item.get("name") == "Default__" + HOST]
     if len(exact) != 1:
-        raise ProbeError("probe_object_absent", "Собственный NameProbe CDO не найден однозначно")
+        raise ProbeError("probe_object_absent", "The owned NameProbe CDO was not uniquely found")
     target = check_target(exact[0])
     handle = target["handle"]
     tokens = {}
@@ -88,7 +88,7 @@ async def _exercise(call, cleanup_state: dict) -> dict:
         functions = await call("g1r_object_functions", {"handle": handle, "function_query": method, "limit": 10})
         tokens[method] = check_token(functions, method)
     if len(set(tokens.values())) != len(tokens):
-        raise ProbeError("probe_signature_token_alias", "Разные функции получили один токен контракта")
+        raise ProbeError("probe_signature_token_alias", "Different functions received the same contract token")
 
     async def read_count():
         result = await call("g1r_invoke", {"handle": handle, "function": "ReadCallsCount", "arguments": {},
@@ -134,7 +134,7 @@ async def _exercise(call, cleanup_state: dict) -> dict:
 
 
 async def exercise(call) -> dict:
-    """Проверить готовую fixture без запуска игры; один Reset с защитой отмены."""
+    """Check a ready fixture without starting the game; perform one cancellation-protected Reset."""
     cleanup_state = {"attempted": False}
     failure = None
     try:
@@ -150,7 +150,7 @@ async def exercise(call) -> dict:
                 result = await call("g1r_invoke", {"handle": handle, "function": "ResetProbe", "arguments": {},
                                                   "expected_signature_token": tokens["ResetProbe"]})
                 if result.get("executed") is not True or result.get("result") is not None:
-                    raise ProbeError("probe_contract_cleanup_unconfirmed", "Собственный ResetProbe не подтверждён")
+                    raise ProbeError("probe_contract_cleanup_unconfirmed", "The owned ResetProbe was not confirmed")
                 fields = await call("g1r_object_properties", {"handle": handle, "limit": 200, "property_names": KNOWN_NAMES})
                 check_selected(fields, KNOWN_NAMES, include_missing=False)
                 count = await call("g1r_invoke", {"handle": handle, "function": "ReadCallsCount", "arguments": {},
@@ -161,7 +161,7 @@ async def exercise(call) -> dict:
             except BaseException as error:
                 if failure is None:
                     raise
-                failure.add_note("Не подтверждена очистка NameProbe: " + str(error))
+                failure.add_note("NameProbe cleanup was not confirmed: " + str(error))
 
 
 def make_caller(session):
@@ -170,14 +170,14 @@ def make_caller(session):
         if expected_error is not None:
             error = error_payload(result)
             if result.is_error is not True:
-                raise ProbeError("probe_contract_rejection_unconfirmed", "Ожидаемый отказ MCP отсутствует")
+                raise ProbeError("probe_contract_rejection_unconfirmed", "The expected MCP rejection is missing")
             check_rejection(error, expected_error)
             return error
         if result.is_error:
             error = error_payload(result)
-            raise ProbeError(error.get("code", "mcp_error"), error.get("message", "Ошибка MCP"))
+            raise ProbeError(error.get("code", "mcp_error"), error.get("message", "MCP error"))
         if not isinstance(result.structured_content, dict):
-            raise ProbeError("mcp_result_invalid", "Ожидается структурированный ответ MCP")
+            raise ProbeError("mcp_result_invalid", "A structured MCP response is expected")
         return result.structured_content
     return call
 
@@ -185,7 +185,7 @@ def make_caller(session):
 async def run(args):
     if args.mcp_url:
         if args.mcp_url not in {"http://127.0.0.1:27124/mcp", "http://localhost:27124/mcp"}:
-            raise ProbeError("invalid_mcp_url", "Проба собственного CDO использует только настроенный локальный MCP")
+            raise ProbeError("invalid_mcp_url", "The owned CDO probe uses only the configured local MCP")
         async with streamable_http_client(args.mcp_url) as connection:
             async with ClientSession(connection[0], connection[1]) as session:
                 initialized = await session.initialize()
@@ -201,7 +201,7 @@ async def run(args):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Проверить dev.14 контракты на уже загруженной собственной NameProbe")
+    parser = argparse.ArgumentParser(description="Check dev.14 contracts on an already loaded owned NameProbe")
     parser.add_argument("--mcp-url")
     parser.add_argument("--modkit-root", type=Path, default=REPOSITORY_ROOT.parent / "G1R-Modkit")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT)

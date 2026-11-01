@@ -4,8 +4,8 @@
 #include <string_view>
 
 namespace g1r_mcp {
-// Наблюдаемые значения FUObjectItem::SerialNumber. Никаких вызовов
-// AllocateSerialNumber или изменения реестра этот контракт не выполняет.
+// Observed FUObjectItem::SerialNumber values. This contract never calls
+// AllocateSerialNumber or modifies the registry.
 struct ObjectSerialIdentity {
     std::uintptr_t object{};
     std::uintptr_t object_class{};
@@ -22,8 +22,8 @@ inline bool valid_observed_serial(std::int32_t serial) noexcept {
     return serial>=0;
 }
 
-// Строгое равенство, включая нули: появившийся serial инвалидирует старую
-// ссылку. Совпадение нулей не доказывает защиту от повторного использования.
+// Strict equality includes zero; an observed serial change invalidates
+// the old handle. Matching zeros do not prove protection against object reuse.
 inline bool same_serial_identity(const ObjectSerialIdentity& left,
                                  const ObjectSerialIdentity& right) noexcept {
     return valid_observed_serial(left.serial) && valid_observed_serial(left.class_serial)

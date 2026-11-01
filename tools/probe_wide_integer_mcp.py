@@ -1,4 +1,4 @@
-"""Проверить широкие целые числа только на собственном загруженном CDO через MCP."""
+"""Check wide integers only on an owned loaded CDO through MCP."""
 from __future__ import annotations
 
 import argparse
@@ -43,7 +43,7 @@ def check_target(item: dict) -> dict:
     if (not isinstance(item, dict) or item.get("name") != "Default__" + HOST
             or item.get("class") != HOST or item.get("path") != "/Script/Angelscript.Default__" + HOST
             or not isinstance(item.get("handle"), str) or not item["handle"].startswith("obj-")):
-        raise ProbeError("unsafe_probe_target", "Не подтверждён собственный CDO широких целых чисел")
+        raise ProbeError("unsafe_probe_target", "Owned wide-integer CDO is not confirmed")
     return item
 
 
@@ -51,27 +51,27 @@ def check_signature(functions: dict, method_name: str) -> tuple[dict, str]:
     if (method_name not in METHODS or not isinstance(functions, dict)
             or functions.get("truncated") is not False or functions.get("scan_complete") is not True
             or functions.get("scan_truncated") is not False or not isinstance(functions.get("items"), list)):
-        raise ProbeError("probe_signature_invalid", "Не подтверждён полный каталог методов проверки")
+        raise ProbeError("probe_signature_invalid", "Complete probe method catalog is not confirmed")
     matches = [item for item in functions["items"] if isinstance(item, dict) and item.get("name") == method_name]
     if len(matches) != 1:
-        raise ProbeError("probe_signature_absent", "Собственный метод не найден однозначно")
+        raise ProbeError("probe_signature_absent", "Owned method was not found uniquely")
     method = matches[0]
     parameters, size = method.get("parameters"), method.get("parameter_size")
     inputs, returned = METHODS[method_name]
     if (not isinstance(parameters, list) or any(not isinstance(item, dict) for item in parameters)
             or method.get("parameters_truncated") is not False or type(size) is not int or not 0 <= size <= 32):
-        raise ProbeError("probe_signature_mismatch", "Не подтверждён полный ограниченный буфер метода")
+        raise ProbeError("probe_signature_mismatch", "Complete bounded method buffer is not confirmed")
     actual_inputs = [item for item in parameters if item.get("return") is False]
     actual_returns = [item for item in parameters if item.get("return") is True]
     if (len(actual_inputs) != len(inputs) or len(actual_returns) != (returned is not None)
             or len(parameters) != len(actual_inputs) + len(actual_returns)
             or type(method.get("parameter_count")) is not int or method["parameter_count"] != len(parameters)):
-        raise ProbeError("probe_signature_mismatch", "Не совпали число входов и возвратов")
+        raise ProbeError("probe_signature_mismatch", "Input and return counts do not match")
     for parameter, expected in zip(actual_inputs, inputs):
         if (parameter.get("name"), parameter.get("type"), parameter.get("element_size")) != expected:
-            raise ProbeError("probe_signature_mismatch", "Не совпало точное имя, тип или размер целого входа")
+            raise ProbeError("probe_signature_mismatch", "Exact integer input name, type, or size does not match")
     if returned is not None and (actual_returns[0].get("type"), actual_returns[0].get("element_size")) != returned:
-        raise ProbeError("probe_signature_mismatch", "Не совпал точный тип или размер целого возврата")
+        raise ProbeError("probe_signature_mismatch", "Exact integer return type or size does not match")
     for parameter in parameters:
         offset, element_size = parameter.get("offset"), parameter.get("element_size")
         if (type(offset) is not int or type(element_size) is not int or offset < 0 or element_size < 1
@@ -79,10 +79,10 @@ def check_signature(functions: dict, method_name: str) -> tuple[dict, str]:
                 or parameter["array_dim"] != 1 or parameter.get("reference") is not False
                 or type(parameter.get("out")) is not bool
                 or parameter["return"] is False and (parameter["out"] is not False or offset + element_size > size)):
-            raise ProbeError("probe_signature_mismatch", "Не подтверждены ArrayDim=1, out/ref или границы буфера")
+            raise ProbeError("probe_signature_mismatch", "ArrayDim=1, out/ref flags, or buffer bounds are not confirmed")
     token = method.get("signature_token")
     if not isinstance(token, str) or not TOKEN.fullmatch(token):
-        raise ProbeError("probe_signature_token_absent", "Собственный метод не получил полный токен сигнатуры")
+        raise ProbeError("probe_signature_token_absent", "Owned method did not receive a complete signature token")
     return method, token
 
 
@@ -92,7 +92,7 @@ def check_result(result: dict, method_name: str, expected: int | None) -> None:
     if (result.get("executed") is not True or result.get("return_type") != expected_type
             or "result" not in result or (expected is None and result["result"] is not None)
             or (expected is not None and (type(result.get("result")) is not int or result["result"] != expected))):
-        raise ProbeError("probe_integer_result", "Целое значение или тип возврата изменились при MCP-вызове")
+        raise ProbeError("probe_integer_result", "Integer value or return type changed during the MCP call")
 
 
 def check_integer_rejection(result: dict, method_name: str, value) -> None:
@@ -107,11 +107,11 @@ def check_integer_rejection(result: dict, method_name: str, value) -> None:
             or "may_have_executed" in nested and nested["may_have_executed"] is not False):
         diagnostic = json.dumps({"method": method_name, "input": value, "payload": result}, ensure_ascii=False)
         raise ProbeError("probe_integer_rejection_unconfirmed",
-                         "Неверный integer не подтверждён как отказ до исполнения: " + diagnostic)
+                         "Invalid integer rejection before execution is not confirmed: " + diagnostic)
 
 
 async def exercise(call) -> dict:
-    """Границы JSON-integer, отказ неверных типов и один защищённый Reset собственного CDO."""
+    """JSON integer bounds, invalid-type rejection, and one protected Reset on the owned CDO."""
     cleanup_required = False
     failure = None
     report = {"checks": [], "successes": {}, "rejections": {}, "cleanup": [],
@@ -120,12 +120,12 @@ async def exercise(call) -> dict:
         status = await call("g1r_native_status", {})
         session_id = status.get("session_id")
         if status.get("ready") is not True or not isinstance(session_id, str) or not session_id:
-            raise ProbeError("game_not_ready", "Не подтверждён готовый игровой поток текущей native-сессии")
+            raise ProbeError("game_not_ready", "Ready game thread in the current native session is not confirmed")
         found = await call("g1r_find_objects", {"query": "Default__" + HOST, "class_query": HOST,
                                                 "path_query": "/Script/Angelscript.Default__" + HOST, "limit": 2})
         if (not isinstance(found.get("items"), list) or len(found["items"]) != 1
                 or found.get("truncated") is not False):
-            raise ProbeError("probe_object_absent", "Собственный CDO не найден однозначно и полностью")
+            raise ProbeError("probe_object_absent", "Owned CDO was not found uniquely and completely")
         target = check_target(found["items"][0])
         handle = target["handle"]
         tokens = {}
@@ -133,7 +133,7 @@ async def exercise(call) -> dict:
             functions = await call("g1r_object_functions", {"handle": handle, "function_query": method_name, "limit": 10})
             _, tokens[method_name] = check_signature(functions, method_name)
         if len(set(tokens.values())) != len(tokens):
-            raise ProbeError("probe_signature_token_alias", "Разные собственные методы получили один токен")
+            raise ProbeError("probe_signature_token_alias", "Different owned methods received the same token")
 
         async def invoke(method_name, value=None, *, expected_error=None):
             return await call("g1r_invoke", {"handle": handle, "function": method_name,
@@ -179,13 +179,13 @@ async def exercise(call) -> dict:
             except BaseException as error:
                 if failure is None:
                     raise
-                failure.add_note("Не подтверждена очистка широких целых чисел: " + str(error))
+                failure.add_note("Wide-integer cleanup is not confirmed: " + str(error))
 
 
 async def run(args) -> dict:
     if args.mcp_url:
         if args.mcp_url not in {"http://127.0.0.1:27124/mcp", "http://localhost:27124/mcp"}:
-            raise ProbeError("invalid_mcp_url", "Проверка собственного CDO использует только локальный MCP")
+            raise ProbeError("invalid_mcp_url", "Owned CDO probe uses only local MCP")
         async with streamable_http_client(args.mcp_url) as connection:
             async with ClientSession(connection[0], connection[1]) as session:
                 initialized = await session.initialize()
@@ -201,7 +201,7 @@ async def run(args) -> dict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Проверить dev.15 integer-вызовы уже загруженной собственной fixture")
+    parser = argparse.ArgumentParser(description="Check dev.15 integer calls on an owned loaded fixture")
     parser.add_argument("--mcp-url")
     parser.add_argument("--modkit-root", type=Path, default=REPOSITORY_ROOT.parent / "G1R-Modkit")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT)

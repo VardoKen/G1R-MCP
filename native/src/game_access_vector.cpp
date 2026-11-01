@@ -16,7 +16,7 @@ vector_layout::Snapshot GameAccess::capture_vector_parameter(std::uintptr_t fiel
     const auto before=capture();
     const auto after=capture();
     if(before!=after)
-        throw HandlerError("vector_metadata_changed", "Отражённые метаданные FVector изменились при проверке");
+        throw HandlerError("vector_metadata_changed", "Reflected FVector metadata changed during validation");
     return before;
 }
 

@@ -1,4 +1,4 @@
-"""CLI сверки явно указанной игры и Modkit; логика доступна из общего модуля."""
+"""CLI for inspecting the explicitly selected game and Modkit; logic is available from the shared module."""
 
 import argparse
 import json
@@ -12,27 +12,27 @@ from g1r_mcp.game_environment import (
 
 
 class JsonArgumentParser(argparse.ArgumentParser):
-    """Не выводить введённые пути и значения при ошибках аргументов."""
+    """Do not expose supplied paths or values when arguments are invalid."""
 
     def format_help(self):
-        return super().format_help().replace("usage: ", "Вызов: ", 1)
+        return super().format_help().replace("usage: ", "Usage: ", 1)
 
     def error(self, message: str) -> None:
-        raise InspectionError("invalid_arguments", "Некорректные параметры; используйте --help")
+        raise InspectionError("invalid_arguments", "Invalid arguments; use --help")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = JsonArgumentParser(
-        description="Сверить явно указанные Steam, игру и Modkit без изменения файлов",
-        add_help=False, usage="%(prog)s [параметры]",
+        description="Inspect the explicitly selected Steam installation, game, and Modkit without changing files",
+        add_help=False, usage="%(prog)s [options]",
     )
-    parser._optionals.title = "Параметры"
-    parser.add_argument("-h", "--help", action="help", help="Показать справку")
-    parser.add_argument("--game-root", type=Path, required=True, help="Установочный каталог игры")
-    parser.add_argument("--modkit-root", type=Path, required=True, help="Каталог официального Modkit")
-    parser.add_argument("--steam-manifest", type=Path, required=True, help="Конкретный Steam appmanifest .acf")
-    parser.add_argument("--hash-executable", action="store_true", help="Потоково вычислить SHA-256 известного игрового EXE")
-    parser.add_argument("--max-list-entries", type=int, default=100, help="Предел элементов каждого списка различий; по умолчанию 100")
+    parser._optionals.title = "Options"
+    parser.add_argument("-h", "--help", action="help", help="Show help")
+    parser.add_argument("--game-root", type=Path, required=True, help="Game installation directory")
+    parser.add_argument("--modkit-root", type=Path, required=True, help="Official Modkit directory")
+    parser.add_argument("--steam-manifest", type=Path, required=True, help="Specific Steam appmanifest .acf file")
+    parser.add_argument("--hash-executable", action="store_true", help="Stream the SHA-256 calculation for the known game EXE")
+    parser.add_argument("--max-list-entries", type=int, default=100, help="Maximum entries in each difference list; default: 100")
     try:
         result = inspect_environment(InspectionOptions(**vars(parser.parse_args(argv))))
     except InspectionError as error:

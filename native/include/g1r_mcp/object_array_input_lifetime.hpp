@@ -15,7 +15,7 @@ class InputBudget {
 public:
     void add(std::size_t count) {
         if (count > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
-            throw HandlerError("invalid_array_count", "Длина объектного массива не представима в int32 TArray");
+            throw HandlerError("invalid_array_count", "The object array length is not representable by int32 TArray");
         const auto bytes = count * element_size;
         ++count_;
         bytes_ += bytes;
@@ -33,9 +33,9 @@ struct Cleanup {
     std::size_t released_count{};
 };
 
-// Ledger владеет только выделенными игровым Realloc буферами указателей.
-// Сами UObject не приобретают владельца и никогда не передаются в Free.
-// Проверку байтов элементов и serial identity выполняет вызывающий код.
+// Ledger owns only pointer buffers allocated by the engine Realloc function.
+// It never owns UObject instances and never passes them to Free.
+// The caller validates element bytes and serial identity.
 class Ledger {
 public:
     Ledger() = default;
@@ -44,7 +44,7 @@ public:
     Ledger(Ledger&&) = delete;
     Ledger& operator=(Ledger&&) = delete;
 
-    // Вызывающий код резервирует записи до первого игрового Realloc.
+    // The caller reserves records before the first engine Realloc.
     void reserve_inputs(std::size_t count) {
         inputs_.reserve(count);
         allocations_.reserve(count);
@@ -53,7 +53,7 @@ public:
     void add_input(const ArrayHeader& header, std::size_t expected_count) {
         if (uncertain_) throw_unknown();
         if (release_started_)
-            fail("array_lifetime_unknown", "Массив нельзя регистрировать после начала очистки");
+            fail("array_lifetime_unknown", "An array cannot be registered after cleanup starts");
         validate_header(header, expected_count);
         if (header.data) add_allocation(header);
         inputs_.push_back(header);
@@ -62,7 +62,7 @@ public:
     void validate_unchanged_input(std::size_t index, const ArrayHeader& current) {
         if (uncertain_) throw_unknown();
         if (index >= inputs_.size() || !same_array_header(inputs_[index], current))
-            fail("array_lifetime_unknown", "Заголовок const объектного массива изменился");
+            fail("array_lifetime_unknown", "The const object array header changed");
     }
 
     void mark_uncertain() noexcept {uncertain_ = true;}
@@ -106,7 +106,7 @@ private:
     bool uncertain_{}, release_started_{};
 
     [[noreturn]] static void throw_unknown() {
-        throw HandlerError("array_lifetime_unknown", "Владение буфером массива не подтверждено; освобождение запрещено");
+        throw HandlerError("array_lifetime_unknown", "Array buffer ownership is unconfirmed; release is prohibited");
     }
 
     [[noreturn]] void fail(const char* code, const char* message) {
@@ -120,15 +120,15 @@ private:
 
     void validate_header(const ArrayHeader& header, std::size_t expected_count) {
         if (expected_count > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
-            fail("invalid_array_header", "Длина объектного массива не представима в int32 TArray");
+            fail("invalid_array_header", "The object array length is not representable by int32 TArray");
         const auto count = static_cast<std::int32_t>(expected_count);
         if (header.count != count || header.capacity != count
             || (!count && header.data) || (count && !header.data)
             || (header.data && header.data % element_size))
-            fail("invalid_array_header", "Объектный массив требует точный count/capacity и выровненный игровой буфер");
+            fail("invalid_array_header", "An object array requires exact count/capacity and an aligned engine buffer");
         const auto bytes = expected_count * element_size;
         if (header.data > std::numeric_limits<std::uintptr_t>::max() - bytes)
-            fail("invalid_array_header", "Адресный диапазон объектного массива переполняется");
+            fail("invalid_array_header", "The object array address range overflows");
     }
 
     void add_allocation(const ArrayHeader& header) {
@@ -138,7 +138,7 @@ private:
             const auto& original = allocations_[i].header;
             const auto original_end = original.data + allocation_size(original);
             if (header.data >= original_end || original.data >= end) continue;
-            fail("array_lifetime_unknown", "Объектные массивы имеют неподтверждённый алиас буфера");
+            fail("array_lifetime_unknown", "Object arrays have an unconfirmed buffer alias");
         }
         allocations_.push_back({header,false});
         allocation_bytes_ += bytes;

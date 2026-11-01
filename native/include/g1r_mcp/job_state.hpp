@@ -2,7 +2,7 @@
 #include <atomic>
 
 namespace g1r_mcp {
-// Только queued может стать running или cancelled. Отменённая работа не исполняется.
+// Only queued jobs can become running or cancelled. Cancelled jobs never execute.
 class JobState {
 public:
     enum State { queued, running, cancelled, completed };

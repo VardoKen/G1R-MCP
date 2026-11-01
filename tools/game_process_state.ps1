@@ -15,14 +15,14 @@ try {
         if ($allowed -contains $identity.executable) {
             $processes += $identity
         } else {
-            throw 'Обнаружен одноимённый процесс вне выбранного каталога игры.'
+            throw 'A process with the same name was found outside the selected game directory.'
         }
     }
     $result = [pscustomobject]@{ processes = @($processes); source = 'native_process_handle_snapshot' }
     if ($Json) { $result | ConvertTo-Json -Depth 5 -Compress } else { $result }
 } catch {
     if ($Json) {
-        [pscustomobject]@{ state = 'failed'; message = 'Не удалось однозначно проверить процессы выбранной игры.'; outcome_unknown = $false } | ConvertTo-Json -Compress
+        [pscustomobject]@{ state = 'failed'; message = 'Could not unambiguously verify processes of the selected game.'; outcome_unknown = $false } | ConvertTo-Json -Compress
         exit 2
     }
     throw

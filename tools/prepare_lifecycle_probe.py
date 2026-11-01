@@ -1,4 +1,4 @@
-"""Подготовить lifecycle-fixture внутри artifacts; игру и DLL не запускать."""
+"""Prepare a lifecycle fixture within artifacts without launching the game or DLL."""
 from __future__ import annotations
 
 import argparse
@@ -34,16 +34,16 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
         "world_lifecycle": "not_tested_runtime_callback_signature_rejected",
     }
     result["limitations"] = [
-        "Initialize не вызывается MCP-пробой вручную",
-        "Подготовка не доказывает создание живого экземпляра или выполнение callback",
-        "WorldSubsystem fixture исключена после отказа текущего игрового компилятора от BlueprintOverride; world lifecycle не проверяется",
-        "Мир, новая игра и сохранения не загружаются; собственное окно инструмента закрыто",
+        "The MCP probe does not call Initialize manually",
+        "Preparation does not prove live instance creation or callback execution",
+        "The WorldSubsystem fixture was removed after the current game compiler rejected BlueprintOverride; world lifecycle is not tested",
+        "The world, a new game, and saved games are not loaded; the tool's own window is closed",
     ]
     return result
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Подготовить счётчики lifecycle в изолированном пакете")
+    parser = argparse.ArgumentParser(description="Prepare lifecycle counters in an isolated package")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT / "artifacts" / "lifecycle-probe-dev9")
     args = parser.parse_args()
     try:

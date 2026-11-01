@@ -50,7 +50,7 @@ inline std::wstring process_image(HANDLE process) {
     return std::wstring(text.data(), length);
 }
 
-// Здесь сравниваются уже разрешённые пути, без повторного поиска процесса по PID.
+// Compare already resolved paths without looking up the process by PID again.
 inline std::wstring comparable_path(std::wstring text) {
     std::replace(text.begin(), text.end(), L'/', L'\\');
     if (text.starts_with(L"\\\\?\\UNC\\")) text = L"\\\\" + text.substr(8);

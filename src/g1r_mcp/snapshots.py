@@ -1,7 +1,7 @@
-"""Сравнение копий снимков без обращения к игровой среде.
+"""Compare snapshot copies without accessing the game environment.
 
-Переданные клиентом поля происхождения являются заявлениями клиента.
-Равенство выбранных значений не доказывает неизменность игрового мира.
+Client-supplied provenance fields are client claims.
+Equality of selected values does not prove that the game world is unchanged.
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ ENUM_INTEGER_RANGES = {
 
 
 class SnapshotError(Exception):
-    """Некорректная копия снимка."""
+    """Invalid snapshot copy."""
 
     def __init__(self, code: str, message: str):
         super().__init__(message)
@@ -34,38 +34,38 @@ def _text(value: Any, label: str, *, optional: bool = False) -> None:
     if optional and value is None:
         return
     if not isinstance(value, str) or not value:
-        _invalid(f"{label}: требуется непустая строка")
+        _invalid(f"{label}: a nonempty string is required")
 
 
 def _integer(value: Any, label: str, *, positive: bool = False) -> None:
     if type(value) is not int or value < (1 if positive else 0):
-        _invalid(f"{label}: требуется {'положительное' if positive else 'неотрицательное'} целое число")
+        _invalid(f"{label}: a {'positive' if positive else 'nonnegative'} integer is required")
 
 
 def _error(value: Any) -> None:
     if not isinstance(value, dict) or set(value) != {"code", "message"}:
-        _invalid("Ошибка объекта или свойства должна содержать code и message")
-    _text(value["code"], "Код ошибки")
+        _invalid("An object or property error must contain code and message")
+    _text(value["code"], "Error code")
     if not isinstance(value["message"], str):
-        _invalid("Сообщение ошибки должно быть строкой")
+        _invalid("The error message must be a string")
 
 
 def _object_value(value: Any, session_id: str, property_type: str) -> None:
-    """Проверить копию непрозрачной ссылки, не разрешая её в игровой среде."""
+    """Validate an opaque reference copy without resolving it in the game environment."""
     if value is None:
         return
     expected = {"handle", "index", "name", "path", "class", "session_id"}
     if not isinstance(value, dict) or set(value) != expected:
-        _invalid(f"{property_type} должен содержать null или точный дескриптор объекта")
-    _text(value["handle"], f"Ссылка значения {property_type}")
-    _integer(value["index"], f"Индекс значения {property_type}")
+        _invalid(f"{property_type} must contain null or an exact object descriptor")
+    _text(value["handle"], f"Value reference for {property_type}")
+    _integer(value["index"], f"Value index for {property_type}")
     if value["index"] > MAX_OBJECT_INDEX:
-        _invalid(f"Индекс значения {property_type} не представим неотрицательным int32")
+        _invalid(f"Value index for {property_type} cannot be represented as a nonnegative int32")
     for key in ("name", "class", "path"):
         _text(value[key], f"{property_type}.{key}")
-    _text(value["session_id"], f"Сессия значения {property_type}")
+    _text(value["session_id"], f"Value session for {property_type}")
     if value["session_id"] != session_id:
-        _invalid(f"Дескриптор {property_type} принадлежит другой сессии снимка")
+        _invalid(f"Descriptor {property_type} belongs to another snapshot session")
 
 
 def _value_kind(prop: dict[str, Any]) -> str:
@@ -77,43 +77,43 @@ def _value_kind(prop: dict[str, Any]) -> str:
 def _enum_metadata(metadata: Any, prop: dict[str, Any]) -> None:
     expected = {"path", "underlying_type", "name_status", "value_name", "matched_count", "ambiguous", "reason"}
     if not isinstance(metadata, dict) or set(metadata) != expected:
-        _invalid("Неверный набор метаданных enum")
+        _invalid("Invalid enum metadata field set")
     if prop.get("type") not in {"EnumProperty", "ByteProperty"}:
-        _invalid("Метаданные enum допускаются только для EnumProperty или ByteProperty")
+        _invalid("Enum metadata is allowed only for EnumProperty or ByteProperty")
     underlying = metadata["underlying_type"]
     if not isinstance(underlying, str) or underlying not in ENUM_INTEGER_RANGES:
-        _invalid("Неизвестный числовой тип enum")
+        _invalid("Unknown enum numeric type")
     if prop["type"] == "ByteProperty" and underlying != "ByteProperty":
-        _invalid("ByteProperty требует соответствующий базовый тип enum")
+        _invalid("ByteProperty requires a matching enum underlying type")
     if prop["supported"]:
         minimum, maximum = ENUM_INTEGER_RANGES[underlying]
         if type(prop.get("value")) is not int or not minimum <= prop["value"] <= maximum:
-            _invalid("Числовое значение enum не соответствует базовому типу")
+            _invalid("The enum numeric value does not match its underlying type")
     for key in ("path", "value_name", "reason"):
         if metadata[key] is not None:
             _text(metadata[key], f"enum.{key}")
             if "\0" in metadata[key]:
-                _invalid(f"enum.{key}: строка содержит NUL")
+                _invalid(f"enum.{key}: the string contains NUL")
     count = metadata["matched_count"]
-    _integer(count, "Число совпадений enum")
+    _integer(count, "Enum match count")
     if type(metadata["ambiguous"]) is not bool or metadata["ambiguous"] != (count > 1):
-        _invalid("Неверные сведения о совпадениях enum")
+        _invalid("Invalid enum match information")
     status = metadata["name_status"]
     if not isinstance(status, str) or status not in {"matched", "not_found", "unavailable", "value_unrepresentable"}:
-        _invalid("Неизвестный статус имени enum")
+        _invalid("Unknown enum name status")
     if status == "matched":
         if count == 0 or metadata["value_name"] is None or metadata["path"] is None or metadata["reason"] is not None:
-            _invalid("matched требует имя, путь и совпадение без ошибки")
+            _invalid("matched requires a name, path, and match without an error")
     elif metadata["value_name"] is not None:
-        _invalid("Непрочитанное имя enum должно быть null")
+        _invalid("An unread enum name must be null")
     if status in {"not_found", "value_unrepresentable"} and count != 0:
-        _invalid("Статус enum без совпадений требует matched_count=0")
+        _invalid("An enum status without matches requires matched_count=0")
     if status == "not_found" and metadata["path"] is None:
-        _invalid("not_found требует известный путь enum")
+        _invalid("not_found requires a known enum path")
     if status == "value_unrepresentable" and (
         underlying != "UInt64Property" or not prop["supported"] or prop["value"] <= 2**63 - 1
     ):
-        _invalid("value_unrepresentable требует uint64 за пределом int64")
+        _invalid("value_unrepresentable requires a uint64 outside the int64 range")
 
 
 def _encoded_size(value: Any) -> int:
@@ -121,18 +121,18 @@ def _encoded_size(value: Any) -> int:
         return len(json.dumps(value, ensure_ascii=False, allow_nan=False,
                               separators=(",", ":")).encode("utf-8"))
     except (TypeError, ValueError, UnicodeError, RecursionError):
-        _invalid("Снимок должен быть конечным UTF-8 JSON без NaN и Infinity")
+        _invalid("The snapshot must be finite UTF-8 JSON without NaN or Infinity")
 
 
 def _snapshot(value: Any) -> dict[str, dict[str, Any]]:
     if not isinstance(value, dict):
-        _invalid("Снимок должен быть JSON-объектом")
+        _invalid("The snapshot must be a JSON object")
     _encoded_size(value)
     allowed = {"snapshot_id", "source", "session_id", "process_id", "thread_id", "tick_count",
                "consistency", "objects", "truncated", "partial", "limits"}
     required = allowed - {"source", "limits"}
     if not required <= value.keys() or not value.keys() <= allowed:
-        _invalid("Неверный набор полей снимка")
+        _invalid("Invalid snapshot field set")
     for key in ("snapshot_id", "session_id", "consistency"):
         _text(value[key], key)
     if "source" in value:
@@ -142,28 +142,28 @@ def _snapshot(value: Any) -> dict[str, dict[str, Any]]:
     _integer(value["tick_count"], "tick_count")
     for key in ("truncated", "partial"):
         if type(value[key]) is not bool:
-            _invalid(f"{key}: требуется логическое значение")
+            _invalid(f"{key}: a boolean value is required")
     if "limits" in value:
         limits = value["limits"]
         expected = {"objects", "properties_per_object", "scan_fields_per_object",
                     "property_value_bytes", "snapshot_bytes"}
         if not isinstance(limits, dict) or set(limits) != expected:
-            _invalid("Неверный набор заявленных лимитов снимка")
+            _invalid("Invalid snapshot declared limit field set")
         for key in expected:
             if limits[key] is not None:
                 _integer(limits[key], f"limits.{key}", positive=True)
     objects = value["objects"]
     if not isinstance(objects, list):
-        _invalid("Выбранные объекты снимка должны быть списком")
+        _invalid("Selected snapshot objects must be a list")
     result: dict[str, dict[str, Any]] = {}
     for obj in objects:
         if not isinstance(obj, dict) or not obj.keys() <= {
             "handle", "path", "class", "properties", "error", "partial", "truncated"
         }:
-            _invalid("Неверная форма объекта в снимке")
+            _invalid("Invalid object shape in the snapshot")
         _text(obj.get("handle"), "handle")
         if obj["handle"] in result:
-            _invalid("Снимок содержит повторяющуюся ссылку объекта")
+            _invalid("The snapshot contains a duplicate object reference")
         if "error" in obj:
             _error(obj["error"])
         else:
@@ -174,53 +174,53 @@ def _snapshot(value: Any) -> dict[str, dict[str, Any]]:
                 _text(obj[key], key)
         for key in ("partial", "truncated"):
             if key in obj and type(obj[key]) is not bool:
-                _invalid(f"Сведения объекта {key}: требуется логическое значение")
+                _invalid(f"Object information {key}: a boolean value is required")
         properties = obj.get("properties", [] if "error" in obj else None)
         if not isinstance(properties, list):
-            _invalid("Выбранные свойства объекта должны быть списком")
+            _invalid("Selected object properties must be a list")
         names: set[str] = set()
         for prop in properties:
             if not isinstance(prop, dict) or not prop.keys() <= {"name", "type", "supported", "value", "error", "enum"}:
-                _invalid("Неверная форма свойства в снимке")
-            _text(prop.get("name"), "Имя свойства")
+                _invalid("Invalid property shape in the snapshot")
+            _text(prop.get("name"), "Property name")
             if prop["name"] in names:
-                _invalid("Объект содержит повторяющееся имя свойства")
+                _invalid("The object contains a duplicate property name")
             names.add(prop["name"])
             if type(prop.get("supported")) is not bool:
-                _invalid("supported: требуется логическое значение")
+                _invalid("supported: a boolean value is required")
             if "type" in prop:
-                _text(prop["type"], "Тип свойства", optional=not prop["supported"])
+                _text(prop["type"], "Property type", optional=not prop["supported"])
             if "error" in prop:
                 _error(prop["error"])
             if prop["supported"]:
                 if "value" not in prop or "type" not in prop or "error" in prop:
-                    _invalid("Поддержанное свойство должно иметь тип и значение без ошибки")
+                    _invalid("A supported property must have a type and value without an error")
                 if prop["type"] in {"ObjectProperty", "ClassProperty"}:
                     _object_value(prop["value"], value["session_id"], prop["type"])
                 elif type(prop["value"]) not in {bool, int, float, str}:
-                    _invalid("Поддержанное значение должно быть скаляром")
+                    _invalid("A supported value must be a scalar")
             elif "value" in prop and prop["value"] is not None:
-                _invalid("Неподдержанное свойство не должно выдавать значение за прочитанное")
+                _invalid("An unsupported property must not claim that a value was read")
             if "enum" in prop:
                 _enum_metadata(prop["enum"], prop)
             elif prop.get("type") == "EnumProperty" and prop["supported"] and (
                 type(prop["value"]) is not int or not -(2**63) <= prop["value"] <= 2**64 - 1
             ):
-                _invalid("Значение EnumProperty должно быть целым числом в пределах int64/uint64")
+                _invalid("An EnumProperty value must be an integer within the int64/uint64 range")
             if prop.get("type") == "NameProperty" and prop["supported"] and not isinstance(prop["value"], str):
-                _invalid("Значение NameProperty должно быть строкой")
+                _invalid("A NameProperty value must be a string")
             if prop.get("type") == "ByteProperty" and prop["supported"] and (
                 type(prop["value"]) is not int or not 0 <= prop["value"] <= 255
             ):
-                _invalid("Значение ByteProperty должно быть целым числом от 0 до 255")
+                _invalid("A ByteProperty value must be an integer between 0 and 255")
         result[obj["handle"]] = obj
     return result
 
 
 def compare_snapshots(before: dict[str, Any], after: dict[str, Any], limit: int = 100) -> dict[str, Any]:
-    """Сравнить выбранные скалярные поля копий; не проверяет их игровое происхождение."""
+    """Compare selected scalar fields of copies without verifying their game provenance."""
     if type(limit) is not int or limit < 1:
-        raise SnapshotError("invalid_limit", "Предел сравнения должен быть положительным целым числом")
+        raise SnapshotError("invalid_limit", "The comparison limit must be a positive integer")
     old = _snapshot(before)
     new = _snapshot(after)
     old_incomplete = sum(bool(obj.get("partial") or obj.get("truncated")) for obj in old.values())
@@ -335,6 +335,6 @@ def compare_snapshots(before: dict[str, Any], after: dict[str, Any], limit: int 
     result["metadata_annotations"] = annotations[:remaining]
     result["truncated"] = (len(result["items"]) < len(entries)
                            or len(result["metadata_annotations"]) < len(annotations))
-    # Все вложенные значения ответа копируются: вызывающий код не получает
-    # изменяемые элементы входных снимков даже для записей об ошибках.
+    # Copy all nested response values: the caller does not receive
+    # mutable input snapshot elements, including error records.
     return json.loads(json.dumps(result, ensure_ascii=False, allow_nan=False))

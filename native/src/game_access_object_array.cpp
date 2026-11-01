@@ -16,7 +16,7 @@ nlohmann::json GameAccess::capture_object_array_parameter(std::uintptr_t field,i
     const auto before=capture();
     const auto after=capture();
     if(before!=after)
-        throw HandlerError("object_array_metadata_changed","Отражённые метаданные массива UObject изменились при проверке");
+        throw HandlerError("object_array_metadata_changed","Reflected UObject array metadata changed during validation");
     return before;
 }
 

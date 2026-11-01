@@ -1,9 +1,9 @@
 <#
 .SYNOPSIS
-Остановить только сохранённый процесс общего MCP-сервера.
+Stop only the recorded shared MCP server process.
 .DESCRIPTION
-Сверяет командную строку, PID, время создания и EXE; завершает удерживаемый
-HANDLE этого процесса. Чужой процесс не становится целью остановки.
+Checks the command line, PID, creation time, and EXE; terminates the process
+through its retained HANDLE. Another process never becomes the stop target.
 #>
 [CmdletBinding()]
 param(

@@ -12,9 +12,9 @@ inline constexpr auto reference_parm = parameter_direction::reference_parm;
 
 using Direction = parameter_direction::Direction;
 
-// Const FVector input подтверждён по форме const T& в reflection: ConstParm
-// задаёт const, ReferenceParm либо OutParm задают ссылку. Для ProcessEvent
-// аргумент остаётся собственным inline POD. Mutable ref/inout запрещены.
+// Const FVector input was confirmed by the reflected const T& form: ConstParm
+// supplies constness; ReferenceParm or OutParm supplies reference semantics. For ProcessEvent,
+// the argument remains an owned inline POD. Mutable references and inout are unsupported.
 inline Direction classify(std::uint64_t flags) {
     if((flags & parm) && (flags & const_parm)
        && (flags & (reference_parm | out_parm)) && !(flags & return_parm))

@@ -1,4 +1,4 @@
-"""Подготовить WorldSubsystem и явную пробу reload/watch внутри artifacts, не запускать игру."""
+"""Prepare a WorldSubsystem and an explicit reload/watch probe within artifacts without launching the game."""
 from __future__ import annotations
 
 import argparse
@@ -39,16 +39,16 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
         "loading_screen_type": "ELoadingScreenType::BlackScreen",
         "destination": "current_map",
     }
-    result["limitations"] = ["PostInitialize не вызывается проверкой вручную",
-                             "Подготовка не доказывает создание живой подсистемы или выполнение callback",
-                             "Главное меню может не создать подсистему; отсутствие и нулевой счётчик не выдаются за успех",
-                             "Подготовка не загружает мир, новую игру или сохранения",
-                             "Перезагрузка текущей карты и watch выполняются только с явным --reload-and-watch"]
+    result["limitations"] = ["The probe does not call PostInitialize manually",
+                             "Preparation does not prove live subsystem creation or callback execution",
+                             "The main menu may not create the subsystem; absence and a zero counter are not reported as success",
+                             "Preparation does not load a world, a new game, or saved games",
+                             "Current-map reload and watch run only with explicit --reload-and-watch"]
     return result
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Подготовить собственный PostInitialize-счётчик")
+    parser = argparse.ArgumentParser(description="Prepare an isolated PostInitialize counter")
     parser.add_argument("--workspace-root", type=Path, default=REPOSITORY_ROOT / "artifacts" / "world-lifecycle-dev11")
     args = parser.parse_args()
     try:

@@ -1,9 +1,9 @@
 <#
 .SYNOPSIS
-Запустить один общий MCP-сервер на 127.0.0.1:27124.
+Start one shared MCP server at 127.0.0.1:27124.
 .DESCRIPTION
-Повторный запуск проверяет сохранённый процесс. Чужой порт или изменившаяся
-идентичность являются ошибкой. Игра не запускается; автозапуск не создаётся.
+Repeated launch checks the recorded process. A port owned by another process
+or changed identity is an error. Does not start the game or create autostart.
 #>
 [CmdletBinding()]
 param(
@@ -23,7 +23,7 @@ function Get-G1RSharedConfiguration {
     foreach ($path in @($resolved, $artifactRoot)) {
         if (Test-Path -LiteralPath $path) {
             if (((Get-Item -LiteralPath $path -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-                throw 'shared_unsafe_path: каталог сервера является ссылкой.'
+                throw 'shared_unsafe_path: server directory is a symlink.'
             }
         }
     }
@@ -32,7 +32,7 @@ function Get-G1RSharedConfiguration {
     $venvConfiguration = Join-Path $resolved '.venv\pyvenv.cfg'
     if (Test-Path -LiteralPath $venvConfiguration -PathType Leaf) {
         $homes = @(Get-Content -LiteralPath $venvConfiguration -Encoding UTF8 | Where-Object { $_ -match '^home\s*=\s*(.+)$' })
-        if ($homes.Count -ne 1 -or $homes[0] -notmatch '^home\s*=\s*(.+)$') { throw 'shared_invalid_venv: не определён базовый Python.' }
+        if ($homes.Count -ne 1 -or $homes[0] -notmatch '^home\s*=\s*(.+)$') { throw 'shared_invalid_venv: base Python is not defined.' }
         $basePython = [IO.Path]::GetFullPath((Join-Path $Matches[1].Trim() 'python.exe'))
     }
     $modkit = [IO.Path]::GetFullPath((Join-Path $resolved '..\G1R-Modkit'))
@@ -54,7 +54,7 @@ function Assert-G1RSharedFile {
     if (Test-Path -LiteralPath $Path) {
         $item = Get-Item -LiteralPath $Path -Force
         if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw 'shared_unsafe_path: служебный файл является каталогом или ссылкой.'
+            throw 'shared_unsafe_path: service file is a directory or symlink.'
         }
     }
 }
@@ -64,18 +64,18 @@ function Read-G1RSharedManifest {
     Assert-G1RSharedFile $Configuration.manifest
     if (-not (Test-Path -LiteralPath $Configuration.manifest)) { return $null }
     if ((Get-Item -LiteralPath $Configuration.manifest).Length -gt 65536) {
-        throw 'shared_invalid_manifest: слишком большой файл состояния.'
+        throw 'shared_invalid_manifest: state file is too large.'
     }
     $record = Get-Content -LiteralPath $Configuration.manifest -Raw -Encoding UTF8 | ConvertFrom-Json
     foreach ($name in @('schema_version', 'owner', 'repository_root', 'server_script', 'host', 'port', 'native_port', 'arguments', 'command_line', 'pid', 'creation_time', 'executable', 'launcher')) {
-        if ($null -eq $record.PSObject.Properties[$name]) { throw 'shared_invalid_manifest: неполная идентичность.' }
+        if ($null -eq $record.PSObject.Properties[$name]) { throw 'shared_invalid_manifest: incomplete identity.' }
     }
     if ($record.creation_time -is [DateTime]) {
         $record.creation_time = $record.creation_time.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'", [Globalization.CultureInfo]::InvariantCulture)
     }
-    if ($null -eq $record.launcher) { throw 'shared_invalid_manifest: отсутствует загрузчик.' }
+    if ($null -eq $record.launcher) { throw 'shared_invalid_manifest: launcher is missing.' }
     foreach ($name in @('pid', 'creation_time', 'executable', 'command_line')) {
-        if ($null -eq $record.launcher.PSObject.Properties[$name]) { throw 'shared_invalid_manifest: неполная идентичность загрузчика.' }
+        if ($null -eq $record.launcher.PSObject.Properties[$name]) { throw 'shared_invalid_manifest: incomplete launcher identity.' }
     }
     if ($record.launcher.creation_time -is [DateTime]) {
         $record.launcher.creation_time = $record.launcher.creation_time.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'", [Globalization.CultureInfo]::InvariantCulture)
@@ -96,7 +96,7 @@ function Read-G1RSharedManifest {
         (($record.pid -eq $record.launcher.pid) -and ($record.creation_time -cne $record.launcher.creation_time -or
             $record.executable -ine $record.launcher.executable)) -or
         [string]::IsNullOrWhiteSpace($record.command_line)) {
-        throw 'shared_invalid_manifest: запись не принадлежит этому серверу.'
+        throw 'shared_invalid_manifest: record does not belong to this server.'
     }
     return $record
 }
@@ -110,7 +110,7 @@ function Assert-G1RSharedPort {
     param($Configuration, $Listeners, [uint32]$ProcessId = 0)
     foreach ($listener in @($Listeners)) {
         if ($ProcessId -eq 0 -or $listener.OwningProcess -ne $ProcessId -or $listener.LocalAddress -cne $Configuration.host) {
-            throw 'shared_port_conflict: порт 27124 занят другим процессом или адресом.'
+            throw 'shared_port_conflict: port 27124 is occupied by another process or address.'
         }
     }
 }
@@ -120,7 +120,7 @@ function Assert-G1RSharedNoUntrackedProcess {
     foreach ($candidate in @(Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction Stop)) {
         if (($candidate.ExecutablePath -ieq $Configuration.python -or $candidate.ExecutablePath -ieq $Configuration.base_python) -and
             $candidate.CommandLine -ceq $Configuration.command_line) {
-            throw 'shared_untracked_process: сервер уже запущен без проверяемой записи состояния.'
+            throw 'shared_untracked_process: server is already running without a verifiable state record.'
         }
     }
 }
@@ -131,7 +131,7 @@ function Open-G1RSharedProcess {
     if ($candidate.Count -eq 0) { return $null }
     if ($candidate.Count -ne 1 -or $candidate[0].ExecutablePath -ine $Record.executable -or
         $candidate[0].CommandLine -cne $Record.command_line) {
-        throw 'shared_process_changed: PID или командная строка отличаются от сохранённых.'
+        throw 'shared_process_changed: PID or command line differs from the recorded values.'
     }
     $lease = Open-G1RCheckedProcess -ExpectedPid $Record.pid -ExpectedCreationTime $Record.creation_time `
         -ExpectedExecutable $Record.executable -ForTermination:$ForTermination
@@ -139,7 +139,7 @@ function Open-G1RSharedProcess {
         $fresh = @(Get-CimInstance Win32_Process -Filter ('ProcessId=' + [uint32]$Record.pid) -ErrorAction Stop)
         if ($fresh.Count -ne 1 -or $fresh[0].CommandLine -cne $Record.command_line -or
             $fresh[0].ExecutablePath -ine $Record.executable) {
-            throw 'shared_process_changed: процесс изменился во время проверки.'
+            throw 'shared_process_changed: process changed during verification.'
         }
         return $lease
     } catch { $lease.Dispose(); throw }
@@ -157,13 +157,13 @@ function Find-G1RSharedChild {
     $candidates = @(Get-CimInstance Win32_Process -Filter ('ParentProcessId=' + $parent.pid) -ErrorAction Stop | Where-Object {
         $_.ExecutablePath -ieq $Configuration.base_python -and $_.CommandLine -ceq $Configuration.command_line
     })
-    if ($candidates.Count -gt 1) { throw 'shared_launch_children: загрузчик создал несколько серверных процессов.' }
+    if ($candidates.Count -gt 1) { throw 'shared_launch_children: launcher created multiple server processes.' }
     if ($candidates.Count -eq 0) { return $null }
     $lease = [G1RMCP.ProcessControl.ProcessLease]::Open([uint32]$candidates[0].ProcessId, $true)
     try {
         if ($lease.Identity.Executable -ine $Configuration.base_python -or
             [string]::CompareOrdinal($lease.Identity.CreationTime, $parent.creation_time) -lt 0 -or $LauncherLease.Wait(0)) {
-            throw 'shared_launch_child_changed: дочерний Python не принадлежит живому загрузчику.'
+            throw 'shared_launch_child_changed: child Python does not belong to the live launcher.'
         }
         $fresh = @(Get-CimInstance Win32_Process -Filter ('ProcessId=' + $lease.Identity.Pid) -ErrorAction Stop)
         $created = [DateTime]::ParseExact($lease.Identity.CreationTime, "yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'",
@@ -171,7 +171,7 @@ function Find-G1RSharedChild {
         if ($fresh.Count -ne 1 -or $fresh[0].ParentProcessId -ne $parent.pid -or
             $fresh[0].ExecutablePath -ine $Configuration.base_python -or $fresh[0].CommandLine -cne $Configuration.command_line -or
             $null -eq $fresh[0].CreationDate -or [Math]::Abs(($fresh[0].CreationDate.ToUniversalTime() - $created).TotalMilliseconds) -gt 1) {
-            throw 'shared_launch_child_changed: дочерний Python изменился во время проверки.'
+            throw 'shared_launch_child_changed: child Python changed during verification.'
         }
         return $lease
     } catch { $lease.Dispose(); throw }
@@ -194,9 +194,9 @@ function Write-G1RSharedManifest {
 function Invoke-G1RSharedStart {
     param($Configuration, [int]$TimeoutSeconds)
     foreach ($path in @($Configuration.python, $Configuration.script)) {
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'shared_dependency_absent: отсутствует Python или код сервера.' }
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'shared_dependency_absent: Python or server code is missing.' }
     }
-    if (-not (Test-Path -LiteralPath $Configuration.modkit -PathType Container)) { throw 'shared_modkit_absent: официальный Modkit не найден.' }
+    if (-not (Test-Path -LiteralPath $Configuration.modkit -PathType Container)) { throw 'shared_modkit_absent: official Modkit was not found.' }
     if (-not (Test-Path -LiteralPath $Configuration.artifacts)) { $null = New-Item -ItemType Directory -Path $Configuration.artifacts }
     $record = Read-G1RSharedManifest $Configuration
     $lease = $null
@@ -208,10 +208,10 @@ function Invoke-G1RSharedStart {
             if ($null -ne $lease) {
                 $listeners = @(Get-G1RSharedListeners $Configuration)
                 Assert-G1RSharedPort $Configuration $listeners $record.pid
-                if ($listeners.Count -eq 0) { throw 'shared_not_listening: сохранённый процесс ещё не слушает порт.' }
+                if ($listeners.Count -eq 0) { throw 'shared_not_listening: recorded process is not yet listening on the port.' }
                 return [pscustomobject]@{ state = 'already_running'; process = $record; url = 'http://127.0.0.1:27124/mcp' }
             }
-            if ($null -ne $launcherLease) { throw 'shared_launcher_still_running: загрузчик остался без серверного процесса.' }
+            if ($null -ne $launcherLease) { throw 'shared_launcher_still_running: launcher remains without a server process.' }
         }
         Assert-G1RSharedPort $Configuration @(Get-G1RSharedListeners $Configuration)
         Assert-G1RSharedNoUntrackedProcess $Configuration
@@ -227,17 +227,17 @@ function Invoke-G1RSharedStart {
             $candidate = @(Get-CimInstance Win32_Process -Filter ('ProcessId=' + $child.Id) -ErrorAction Stop)
             if ($launcherIdentity.executable -ine $Configuration.python -or $candidate.Count -ne 1 -or
                 $candidate[0].CommandLine -cne $Configuration.command_line) {
-                throw 'shared_launch_identity: запущенный процесс не соответствует команде.'
+                throw 'shared_launch_identity: launched process does not match the command.'
             }
             $launcher = [pscustomobject]@{ pid = $launcherIdentity.pid; creation_time = $launcherIdentity.creation_time
                 executable = $launcherIdentity.executable; command_line = $candidate[0].CommandLine }
             $childDeadline = [Diagnostics.Stopwatch]::StartNew()
             while ($null -eq $lease -and $childDeadline.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
-                if ($launcherLease.Wait(0)) { throw 'shared_launch_exited: загрузчик завершился при запуске.' }
+                if ($launcherLease.Wait(0)) { throw 'shared_launch_exited: launcher exited during startup.' }
                 $lease = Find-G1RSharedChild $Configuration $launcherLease
                 if ($null -eq $lease) { Start-Sleep -Milliseconds 50 }
             }
-            if ($null -eq $lease) { throw 'shared_child_timeout: дочерний сервер не появился.' }
+            if ($null -eq $lease) { throw 'shared_child_timeout: child server did not appear.' }
             $identity = ConvertTo-G1RProcessIdentity $lease.Identity
             $record = [pscustomobject]@{
                 schema_version = 1; owner = 'G1R_MCP_shared_server'; repository_root = $Configuration.root
@@ -249,7 +249,7 @@ function Invoke-G1RSharedStart {
             Write-G1RSharedManifest $Configuration $record
             $deadline = [Diagnostics.Stopwatch]::StartNew()
             while ($deadline.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
-                if ($lease.Wait(0)) { throw 'shared_launch_exited: сервер завершился до открытия порта; проверьте stderr.' }
+                if ($lease.Wait(0)) { throw 'shared_launch_exited: server exited before opening the port; check stderr.' }
                 $listeners = @(Get-G1RSharedListeners $Configuration)
                 Assert-G1RSharedPort $Configuration $listeners $record.pid
                 if ($listeners.Count -gt 0) {
@@ -257,7 +257,7 @@ function Invoke-G1RSharedStart {
                 }
                 Start-Sleep -Milliseconds 100
             }
-            throw 'shared_launch_timeout: сервер не открыл порт за отведённое время.'
+            throw 'shared_launch_timeout: server did not open the port within the allotted time.'
         } catch {
             $launchError = $_
             if ($null -ne $lease) {
@@ -281,7 +281,7 @@ function Invoke-G1RSharedLocked {
     $held = $false
     try {
         try { $held = $mutex.WaitOne(15000) } catch [Threading.AbandonedMutexException] { $held = $true }
-        if (-not $held) { throw 'shared_operation_busy: другая операция с сервером ещё выполняется.' }
+        if (-not $held) { throw 'shared_operation_busy: another server operation is still running.' }
         & $Action
     } finally { if ($held) { $mutex.ReleaseMutex() }; $mutex.Dispose() }
 }
