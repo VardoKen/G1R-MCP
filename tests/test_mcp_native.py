@@ -120,7 +120,17 @@ class MCPNativeTests(unittest.IsolatedAsyncioTestCase):
         status = {"ready": True, "game_thread_id": 123, "tick_count": 42, "version": "1.0.0-dev.3"}
         found = {"items": [{"handle": "obj-1", "name": "ТестовыйОбъект"}], "truncated": False}
         properties = {"items": [{"name": "Enabled", "type": "BoolProperty", "value": True}], "truncated": False}
-        functions = {"items": [{"name": "ReadOnlyProbe", "parameters": []}], "truncated": False}
+        functions = {"items": [{"name": "ReadOnlyProbe", "parameters": [
+            {"name": "Target", "type": "ObjectProperty",
+             "declared_type": {"name": "Actor", "path": "/Script/Engine.Actor"}},
+            {"name": "Kind", "type": "ClassProperty",
+             "declared_type": {"name": "Class", "path": "/Script/CoreUObject.Class"},
+             "meta_class": {"name": "Actor", "path": "/Script/Engine.Actor"}},
+            {"name": "Mode", "type": "EnumProperty", "enum": {
+                "path": "/Script/Probe.EMode", "underlying_type": "ByteProperty",
+                "entries": [{"name": "EMode::Default", "value": 0},
+                            {"name": "EMode::Alias", "value": 0}]}}
+        ]}], "truncated": False}
         invocation = {"executed": True, "result": False, "thread_id": 123}
         timeout = {"code": "game_timeout", "message": "Исход уже принятого вызова неизвестен"}
         replies = [

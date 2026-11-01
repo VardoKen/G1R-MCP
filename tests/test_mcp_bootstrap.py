@@ -101,6 +101,14 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                         "item_fields": ["name", "owner", "namespace", "kind", "prototype", "path",
                                         "start_line", "end_line", "file_sha256", "root_kind"],
                         "runtime_signature_confirmed": False})
+                    self.assertEqual(catalog["source_types"]["base_type"], "unresolved_source")
+                    self.assertFalse(catalog["source_types"]["runtime_type_confirmed"])
+                    source_types = await self.call_ok(client, "g1r_list_source_types", {"query": "UOfficial"})
+                    self.assertEqual(source_types["parser_kind"], "lexical")
+                    self.assertEqual(source_types["items"][0]["declaration"], "class UOfficial")
+                    self.assertIsNone(source_types["items"][0]["base_type"])
+                    self.assertEqual(source_types["items"][0]["file_sha256"], hashlib.sha256(before).hexdigest())
+                    self.assertEqual(catalog["function_parameter_types"]["enum_entry_fields"], ["name", "value"])
                     functions = await self.call_ok(client, "g1r_list_source_functions", {
                         "query": "ReadValue", "relative_path": "Script/Official.as", "limit": 500, "offset": 0})
                     self.assertEqual(functions["parser_kind"], "lexical")

@@ -32,6 +32,27 @@ inline const nlohmann::json& checked_function_contract(const std::map<std::strin
 inline void require_same_function_contract(const nlohmann::json& expected,const nlohmann::json& actual) {
     if(expected!=actual)throw HandlerError("signature_changed","Отражённая сигнатура изменилась после чтения; вызов не выполнен");
 }
+inline nlohmann::json public_parameter_type_metadata(const std::string& type,const nlohmann::json& auxiliary) {
+    nlohmann::json result=nlohmann::json::object();
+    auto descriptor=[](const nlohmann::json& value) {
+        return nlohmann::json{{"name",value.at("name")},{"path",value.at("path")}};
+    };
+    if(type=="ObjectProperty" || type=="ClassProperty") {
+        result["declared_type"]=descriptor(auxiliary.at("declared_type"));
+        if(type=="ClassProperty")result["meta_class"]=descriptor(auxiliary.at("meta_type"));
+    } else if(type=="EnumProperty" || type=="ByteProperty") {
+        nlohmann::json enumeration={{"path",nullptr},{"underlying_type",auxiliary.at("underlying_type")},
+                                   {"entries",nlohmann::json::array()}};
+        if(auxiliary.contains("enum") && !auxiliary.at("enum").is_null()) {
+            const auto& captured=auxiliary.at("enum");
+            enumeration["path"]=captured.at("path");
+            for(const auto& entry:captured.at("entries"))
+                enumeration["entries"].push_back({{"name",entry.at("label")},{"value",entry.at("value")}});
+        }
+        result["enum"]=std::move(enumeration);
+    }
+    return result;
+}
 inline std::string store_function_contract(std::map<std::string,nlohmann::json>& saved,std::uint64_t& sequence,
                                          const nlohmann::json& contract) {
     if(contract.dump().size()>MaxFunctionContractBytes)

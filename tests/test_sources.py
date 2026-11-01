@@ -219,6 +219,52 @@ class Outside {}
         self.assertEqual(result["parser_kind"], "lexical")
         self.assertEqual(self.catalog().list_types("data")["total_matches"], 1)
 
+    def test_type_headers_preserve_raw_multiline_bom_crlf_and_unresolved_base(self):
+        declaration = "shared\r\nclass UChild\r\n    : Outer::UBase /* inherited source type */"
+        text = ('namespace A {\r\nnamespace B::C {\r\nUCLASS()\r\n' + declaration +
+                '\r\n{ string S = "class UWrong : Wrong {}"; }\r\n}}\r\n')
+        raw = b"\xef\xbb\xbf" + text.encode("utf-8")
+        self.write("Script/Inherited.as", raw)
+        result = self.catalog().list_types("UChild")
+        self.assertEqual(result["validation"], "source_only")
+        self.assertEqual(result["parser_kind"], "lexical")
+        self.assertEqual(result["items"], [{
+            "path": "Script/Inherited.as", "root_kind": "game_script",
+            "kind": "class", "name": "UChild", "qualified_name": "A::B::C::UChild", "line": 5,
+            "declaration": declaration,
+            "base_type": "Outer::UBase", "start_line": 4, "end_line": 6,
+            "file_sha256": hashlib.sha256(raw).hexdigest()}])
+
+    def test_type_headers_handle_forward_types_enum_underlying_and_comments(self):
+        raw = (b"namespace N {\nclass UForward;\n"
+               b"struct FData\n : Types::TBase<FValue> { }\n"
+               b"enum EState : uint8 { Ready }\n"
+               b"class UComment : /* lead comment */ N::Base /*middle*/ :: Type { }\n"
+               b"class Plain {}\n}\n")
+        self.write("Examples/Example/Script/Types.as", raw)
+        items = self.catalog().list_types()["items"]
+        self.assertEqual([item["declaration"] for item in items], [
+            "class UForward", "struct FData\n : Types::TBase<FValue>", "enum EState : uint8",
+            "class UComment : /* lead comment */ N::Base /*middle*/ :: Type", "class Plain"])
+        self.assertEqual([item["base_type"] for item in items], [
+            None, "Types::TBase<FValue>", None, "N::Base /*middle*/ :: Type", None])
+        self.assertEqual([(item["start_line"], item["end_line"]) for item in items],
+                         [(2, 2), (3, 4), (5, 5), (6, 6), (7, 7)])
+        self.assertTrue(all(item["root_kind"] == "example_script" for item in items))
+        self.assertTrue(all(item["file_sha256"] == hashlib.sha256(raw).hexdigest() for item in items))
+
+    def test_type_headers_hash_current_file_bytes_and_keep_duplicate_declarations(self):
+        raw = b"class Same : BaseA {}\nclass Same : BaseB {}\n"
+        path = self.write("Script/Changed.as", raw)
+        before = self.catalog().list_types("Same")["items"]
+        self.assertEqual([item["base_type"] for item in before], ["BaseA", "BaseB"])
+        replacement = raw.replace(b"BaseA", b"BaseC")
+        path.write_bytes(replacement)
+        after = self.catalog().list_types("Same")["items"]
+        self.assertEqual(after[0]["declaration"], "class Same : BaseC")
+        self.assertEqual(after[0]["file_sha256"], hashlib.sha256(replacement).hexdigest())
+        self.assertNotEqual(before[0]["file_sha256"], after[0]["file_sha256"])
+
     def test_invalid_arguments_and_empty_source_do_not_fake_success(self):
         with self.assertRaises(SourceError) as captured:
             self.catalog().search_files("x")

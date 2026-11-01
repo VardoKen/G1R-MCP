@@ -154,7 +154,11 @@ def _mask_noncode(text: str) -> str:
 def _types(text: str) -> Iterator[dict]:
     """Извлечь объявления class/struct/enum с best-effort namespace."""
     masked = _mask_noncode(text)
-    tokens = re.finditer(r"\bnamespace\s+([A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\s*\{|\b(class|struct|enum)\s+([A-Za-z_]\w*)|[{}]", masked)
+    tokens = re.finditer(
+        r"\bnamespace\s+(?P<namespace>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\s*\{"
+        r"|(?P<declaration>\b(?:(?:shared|external|abstract|final)\s+)*"
+        r"(?P<kind>class|struct|enum)\s+(?P<name>[A-Za-z_]\w*))|[{}]", masked)
+    header_delimiters = re.compile(r"[{};]")
     namespace_stack: list[tuple[int, str]] = []
     depth = 0
     line_number = 1
@@ -162,15 +166,30 @@ def _types(text: str) -> Iterator[dict]:
     for token in tokens:
         line_number += masked.count("\n", previous_offset, token.start())
         previous_offset = token.start()
-        if token.group(1):
+        if token.group("namespace"):
             depth += 1
-            namespace_stack.append((depth, token.group(1)))
-        elif token.group(2):
-            name = token.group(3)
+            namespace_stack.append((depth, token.group("namespace")))
+        elif token.group("kind"):
+            name = token.group("name")
             namespace = "::".join(item[1] for item in namespace_stack)
-            yield {"kind": token.group(2), "name": name,
+            delimiter = header_delimiters.search(masked, token.end())
+            header_end = token.end() if delimiter is None else delimiter.start()
+            base_end = token.end() + len(masked[token.end():header_end].rstrip())
+            header_end = token.end() + len(text[token.end():header_end].rstrip())
+            base_type = None
+            if token.group("kind") != "enum":
+                colon = re.search(r"(?<!:):(?!:)", masked[token.end():base_end])
+                if colon is not None:
+                    base_start = token.end() + colon.end()
+                    first_code = re.search(r"\S", masked[base_start:base_end])
+                    if first_code is not None:
+                        base_type = text[base_start + first_code.start():base_end]
+            yield {"kind": token.group("kind"), "name": name,
                    "qualified_name": f"{namespace}::{name}" if namespace else name,
-                   "line": line_number}
+                   "line": line_number + masked.count("\n", token.start(), token.start("kind")),
+                   "declaration": text[token.start():header_end], "base_type": base_type,
+                   "start_line": line_number,
+                   "end_line": line_number + masked.count("\n", token.start(), header_end)}
         elif token.group() == "{":
             depth += 1
         else:
@@ -370,7 +389,7 @@ class SourceCatalog:
         skipped = []
         for file in files:
             try:
-                text = _read_text(file, self.root)
+                text, file_sha256 = _read_source(file, self.root)
             except SourceError as error:
                 if error.code == "unsafe_path":
                     raise
@@ -380,7 +399,7 @@ class SourceCatalog:
                 if needle in declaration["qualified_name"].casefold():
                     total += 1
                     if total > offset and len(items) < limit:
-                        items.append(self._item(file, **declaration))
+                        items.append(self._item(file, **declaration, file_sha256=file_sha256))
         return self._scan_result(items, total, files, skipped, parser_kind="lexical",
                             limitations=["Неполный лексический индекс, не AST компилятора", "Native bindings не включены", "Вызовы в игре не проверены"],
                             **_page(total, offset, len(items)))

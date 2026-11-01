@@ -59,6 +59,52 @@ int main() {
         reject("unsupported_signature",[&]{capture_function_field_chain(1,[](std::uintptr_t pointer){return json{{"next",pointer+1}};});});
         reject("unsupported_signature",[&]{capture_function_field_chain(1,[](std::uintptr_t){return json{{"next",std::uintptr_t{1}}};});});
         require(capture_function_field_chain(0,[](std::uintptr_t){return json{};}).empty(),"Пустая цепь допустима");
+        const json class_aux={{"declared",{{"object",std::uint64_t{0x12345678}},{"name",99}}},
+            {"declared_type",{{"name","Class"},{"path","/Script/CoreUObject.Class"},{"object",std::uint64_t{0x12345678}}}},
+            {"meta",{{"object",std::uint64_t{0x87654321}},{"name",100}}},
+            {"meta_type",{{"name","GothicCharacter"},{"path","/Script/G1R.GothicCharacter"},{"object",std::uint64_t{0x87654321}}}}};
+        const auto class_copy=class_aux;
+        const json declared_type={{"name","Class"},{"path","/Script/CoreUObject.Class"}};
+        const json meta_class={{"name","GothicCharacter"},{"path","/Script/G1R.GothicCharacter"}};
+        require(public_parameter_type_metadata("ObjectProperty",class_aux)==json{{"declared_type",declared_type}},
+                "UObject должен публиковать только имя и путь объявленного класса");
+        require(public_parameter_type_metadata("ClassProperty",class_aux)==json{{"declared_type",declared_type},{"meta_class",meta_class}},
+                "UClass должен публиковать объявленный класс и MetaClass без raw identity");
+        require(class_aux==class_copy,"Публичная проекция не должна менять внутренний контракт класса");
+        const json enum_aux={{"underlying_type","UInt64Property"},{"size",8},
+            {"enum",{{"identity",{{"object",std::uint64_t{0xabcdef12}},{"name",101}}},
+                {"path","/Script/Angelscript.EProbe"},{"data",std::uint64_t{0x11112222}},{"count",3},{"capacity",8},
+                {"entries",json::array({{{"name",std::uint64_t{102}},{"label","EProbe::First"},{"value",std::uint64_t{0}}},
+                    {{"name",std::uint64_t{103}},{"label","EProbe::Alias"},{"value",std::uint64_t{0}}},
+                    {{"name",std::uint64_t{104}},{"label","EProbe::Largest"},{"value",std::numeric_limits<std::uint64_t>::max()}}})}}}};
+        const auto enum_copy=enum_aux;
+        const json enumeration={{"path","/Script/Angelscript.EProbe"},{"underlying_type","UInt64Property"},
+            {"entries",json::array({{{"name","EProbe::First"},{"value",std::uint64_t{0}}},
+                {{"name","EProbe::Alias"},{"value",std::uint64_t{0}}},
+                {{"name","EProbe::Largest"},{"value",std::numeric_limits<std::uint64_t>::max()}}})}};
+        const auto enum_public=public_parameter_type_metadata("EnumProperty",enum_aux);
+        require(enum_public==json{{"enum",enumeration}},"Enum должен сохранять все подписи, aliases и точные значения");
+        require(enum_public.at("enum").at("entries")[2].at("value").is_number_unsigned(),"UInt64 enum не должен сужаться до int64");
+        require(public_parameter_type_metadata("ByteProperty",enum_aux)==enum_public,"Byte enum должен публиковать ту же таблицу");
+        require(enum_aux==enum_copy,"Публичная проекция не должна менять внутренний enum контракт");
+        const json plain_byte={{"underlying_type","ByteProperty"},{"size",1},{"enum",nullptr}};
+        require(public_parameter_type_metadata("ByteProperty",plain_byte)==json{{"enum",{{"path",nullptr},
+                    {"underlying_type","ByteProperty"},{"entries",json::array()}}}},"Обычный ByteProperty должен явно показывать отсутствие enum");
+        require(public_parameter_type_metadata("IntProperty",json::object()).empty(),"Скалярный параметр не должен получать чужую type metadata");
+        auto typed_contract=base;
+        typed_contract["fields"][0]["aux"]=enum_aux;
+        typed_contract["public_function"]={{"parameters",json::array({enum_public})}};
+        std::map<std::string,json> typed_saved;std::uint64_t typed_sequence{};
+        const auto typed_token=store_function_contract(typed_saved,typed_sequence,typed_contract);
+        require(store_function_contract(typed_saved,typed_sequence,typed_contract)==typed_token && typed_sequence==1,
+                "Публичная metadata не должна менять токен неизменного полного контракта");
+        for(const char* path:{"/fields/0/aux/enum/path","/fields/0/aux/enum/entries/0/label"}) {
+            auto changed=typed_contract;changed[json::json_pointer(path)]="changed";
+            reject("signature_changed",[&]{require_same_function_contract(typed_contract,changed);});
+        }
+        auto changed_class=base;changed_class["fields"][0]["aux"]=class_aux;
+        auto moved_class=changed_class;moved_class["fields"][0]["aux"]["declared_type"]["path"]="/Script/Other.Class";
+        reject("signature_changed",[&]{require_same_function_contract(changed_class,moved_class);});
         std::cout<<"function_contract: "<<checks<<" checks passed\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<"\n";return 1;}
 }

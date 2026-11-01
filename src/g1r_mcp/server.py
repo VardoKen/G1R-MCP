@@ -37,7 +37,7 @@ LOCAL_TOOLS = (
     ("g1r_search_source", "Буквальный поиск строк AngelScript"),
     ("g1r_read_source", "Ограниченное чтение исходника Modkit"),
     ("g1r_read_source_exact", "Полный текст исходника с сохранением BOM, переводов строк и SHA-256"),
-    ("g1r_list_source_types", "Лексический поиск объявлений типов"),
+    ("g1r_list_source_types", "Лексический поиск объявлений типов и базовых классов с SHA-256 исходника"),
     ("g1r_list_source_functions", "Лексический индекс исходных функций с прототипами и SHA-256"),
     ("g1r_validate_package", "Структурная проверка официального пакета"),
     ("g1r_build_script_patch", "Unified diff из проверенных байтов Modkit без изменения файлов"),
@@ -231,6 +231,16 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                  "item_fields": ["name", "owner", "namespace", "kind", "prototype", "path",
                                                  "start_line", "end_line", "file_sha256", "root_kind"],
                                  "runtime_signature_confirmed": False},
+            "source_types": {"tool": "g1r_list_source_types", "parser_kind": "lexical",
+                             "declaration": "raw_source", "base_type": "unresolved_source",
+                             "item_fields": ["kind", "name", "qualified_name", "line", "declaration", "base_type",
+                                             "start_line", "end_line", "path", "file_sha256", "root_kind"],
+                             "runtime_type_confirmed": False},
+            "function_parameter_types": {"tool": "g1r_object_functions", "source": "runtime_reflection",
+                                         "object_property": "declared_type", "class_property": "meta_class",
+                                         "enum_property": "enum", "descriptor_fields": ["name", "path"],
+                                         "enum_fields": ["path", "underlying_type", "entries"],
+                                         "enum_entry_fields": ["name", "value"]},
             "source_identity": {"tool": "g1r_source_identity", "snapshot_kind": "sequential_git_reads",
                                 "source_only": True, "revision_source": "caller_label",
                                 "worktree_scope": "repository", "game_compatibility_checked": False},
@@ -413,7 +423,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_list_source_types(query: str = "", limit: int = 50, offset: int = 0) -> dict[str, Any]:
-        """Найти лексические объявления class/struct/enum; не считать их компиляцией или reflection."""
+        """Найти исходные объявления class/struct/enum, базовые типы, строки и SHA-256; это лексические данные."""
         try:
             return sources.list_types(query, limit, offset)
         except SourceError as error:
@@ -698,7 +708,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_object_functions(handle: str, limit: int = 50, function_query: str = "") -> dict[str, Any]:
-        """Получить отражённые UFunction объекта и размеры их параметров."""
+        """Получить UFunction, параметры, объявленные классы и enum с допустимыми значениями."""
         params = {"handle": handle, "limit": limit}
         if function_query:
             params["function_query"] = function_query

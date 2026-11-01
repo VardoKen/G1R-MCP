@@ -335,7 +335,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.36"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.37"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
             {"pump",{{"state",!observed?"not_observed":recent?"recent_tick":"tick_stale"},
                      {"last_tick_monotonic_ms",observed?json(observed):json(nullptr)},
@@ -1012,10 +1012,14 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         else if(type=="ClassProperty" || type=="ObjectProperty") {
             const auto declared=read<uintptr_t>(field+0x70);
             validate_class(reinterpret_cast<void*>(declared));
-            captured["aux"]={{"declared",identity(validate_object(reinterpret_cast<void*>(declared)))}};
+            captured["aux"]={{"declared",identity(validate_object(reinterpret_cast<void*>(declared)))},
+                {"declared_type",{{"name",object_name(reinterpret_cast<void*>(declared))},
+                                  {"path",object_path(reinterpret_cast<void*>(declared))}}}};
             if(type=="ClassProperty") {
                 const auto meta=read<uintptr_t>(field+0x78);validate_class(reinterpret_cast<void*>(meta));
                 captured["aux"]["meta"]=identity(validate_object(reinterpret_cast<void*>(meta)));
+                captured["aux"]["meta_type"]={{"name",object_name(reinterpret_cast<void*>(meta))},
+                                              {"path",object_path(reinterpret_cast<void*>(meta))}};
             }
             supported=size==8;
         } else if(type=="EnumProperty" || type=="ByteProperty") {
@@ -1032,9 +1036,10 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
             }
             if(layout.object) {
                 const auto table=enum_table(layout.object);json entries=json::array();
-                for(const auto& entry:table.entries)entries.push_back({{"name",entry.name},{"value",entry.value}});
+                for(const auto& entry:table.entries)
+                    entries.push_back({{"name",entry.name},{"label",name(entry.name)},{"value",entry.value}});
                 const auto enum_address=reinterpret_cast<uintptr_t>(layout.object);
-                captured["aux"]["enum"]={{"identity",identity(table.identity)},{"entries",std::move(entries)},
+                captured["aux"]["enum"]={{"identity",identity(table.identity)},{"path",table.path},{"entries",std::move(entries)},
                     {"data",read<uintptr_t>(enum_address+0x40)},{"count",read<int32_t>(enum_address+0x48)},
                     {"capacity",read<int32_t>(enum_address+0x4c)}};
             } else captured["aux"]["enum"]=nullptr;
@@ -1044,6 +1049,7 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         json public_parameter={{"name",name(field_name)},{"type",type},{"offset",offset},{"element_size",size},
             {"array_dim",array_dim},{"flags",flags},{"return",returned},{"out",(flags&0x100)!=0},
             {"reference",(flags&kReferenceParm)!=0},{"const",(flags&kConstParm)!=0}};
+        if(captured.contains("aux"))public_parameter.update(public_parameter_type_metadata(type,captured.at("aux")));
         if(!vector_public.is_null()) {
             public_parameter["struct"]=vector_public;public_parameter["direction"]=vector_direction;
             if(vector_direction=="input")public_parameter["passing"]=(flags&kConstParm)?"const_reference":"value";
@@ -1147,8 +1153,17 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
             const auto declared=read<uintptr_t>(field+0x70);
             if(identity(validate_object(reinterpret_cast<void*>(declared)))!=auxiliary.at("declared"))
                 throw HandlerError("signature_changed","Объявленный класс аргумента изменился при чтении сигнатуры");
-            if(type=="ClassProperty" && identity(validate_object(reinterpret_cast<void*>(read<uintptr_t>(field+0x78))))!=auxiliary.at("meta"))
-                throw HandlerError("signature_changed","Метакласс аргумента изменился при чтении сигнатуры");
+            if(json{{"name",object_name(reinterpret_cast<void*>(declared))},
+                    {"path",object_path(reinterpret_cast<void*>(declared))}}!=auxiliary.at("declared_type"))
+                throw HandlerError("signature_changed","Имя или путь объявленного класса изменились");
+            if(type=="ClassProperty") {
+                const auto meta=read<uintptr_t>(field+0x78);
+                if(identity(validate_object(reinterpret_cast<void*>(meta)))!=auxiliary.at("meta"))
+                    throw HandlerError("signature_changed","Метакласс аргумента изменился при чтении сигнатуры");
+                if(json{{"name",object_name(reinterpret_cast<void*>(meta))},
+                        {"path",object_path(reinterpret_cast<void*>(meta))}}!=auxiliary.at("meta_type"))
+                    throw HandlerError("signature_changed","Имя или путь метакласса изменились");
+            }
         } else if(type=="EnumProperty" || type=="ByteProperty") {
             const auto declared=enum_layout(type,captured.at("size").get<int>(),field);
             if(declared.underlying_type!=auxiliary.at("underlying_type").get<std::string>() || declared.size!=auxiliary.at("size").get<int>())
@@ -1165,8 +1180,10 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
             }
             if(declared.object) {
                 const auto table=enum_table(declared.object);const auto enum_address=reinterpret_cast<uintptr_t>(declared.object);
-                json entries=json::array();for(const auto& entry:table.entries)entries.push_back({{"name",entry.name},{"value",entry.value}});
-                const json current={{"identity",identity(table.identity)},{"entries",std::move(entries)},
+                json entries=json::array();
+                for(const auto& entry:table.entries)
+                    entries.push_back({{"name",entry.name},{"label",name(entry.name)},{"value",entry.value}});
+                const json current={{"identity",identity(table.identity)},{"path",table.path},{"entries",std::move(entries)},
                     {"data",read<uintptr_t>(enum_address+0x40)},{"count",read<int32_t>(enum_address+0x48)},
                     {"capacity",read<int32_t>(enum_address+0x4c)}};
                 if(current!=auxiliary.at("enum"))throw HandlerError("signature_changed","UEnum изменился при чтении сигнатуры");
