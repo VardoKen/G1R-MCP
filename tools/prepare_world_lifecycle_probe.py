@@ -1,4 +1,4 @@
-"""Подготовить одно событие WorldSubsystem внутри artifacts, не запускать игру."""
+"""Подготовить WorldSubsystem и явную пробу reload/watch внутри artifacts, не запускать игру."""
 from __future__ import annotations
 
 import argparse
@@ -30,10 +30,20 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
                           "class": "G1RMCPWorldPostInitializeProbe", "marker": 111,
                           "count": "PostInitializeCount", "read_method": "ReadPostInitializeCount",
                           "cdo_count": 0, "callback": "PostInitialize"}
+    result["reload_and_watch"] = {
+        "enabled_by_default": False,
+        "probe_option": "--reload-and-watch",
+        "methods": {"GetCurrentMapName": "FString", "GetCurrentLoadingScreenType": "ELoadingScreenType",
+                    "ReloadCurrentMap": "void"},
+        "watched_property": "PostInitializeCount",
+        "loading_screen_type": "ELoadingScreenType::BlackScreen",
+        "destination": "current_map",
+    }
     result["limitations"] = ["PostInitialize не вызывается проверкой вручную",
                              "Подготовка не доказывает создание живой подсистемы или выполнение callback",
                              "Главное меню может не создать подсистему; отсутствие и нулевой счётчик не выдаются за успех",
-                             "Мир, новая игра и сохранения не загружаются; игровой контент не меняется"]
+                             "Подготовка не загружает мир, новую игру или сохранения",
+                             "Перезагрузка текущей карты и watch выполняются только с явным --reload-and-watch"]
     return result
 
 

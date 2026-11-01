@@ -1,4 +1,4 @@
-// Один callback производственного AS-контракта; изменяется только собственный счётчик.
+// PostInitialize изменяет только свой счётчик; переход карты вызывается явно через MCP.
 UCLASS()
 class UG1RMCPWorldPostInitializeProbe : UScriptWorldSubsystem
 {
@@ -21,5 +21,24 @@ class UG1RMCPWorldPostInitializeProbe : UScriptWorldSubsystem
     int ReadMarker()
     {
         return 111;
+    }
+
+    UFUNCTION(BlueprintCallable)
+    FString GetCurrentMapName()
+    {
+        return Gameplay::GetCurrentLevelName(true);
+    }
+
+    UFUNCTION(BlueprintCallable)
+    ELoadingScreenType GetCurrentLoadingScreenType()
+    {
+        return ULoadingScreenHelperSubsystem::Get().GetCurrentLoadingScreenType();
+    }
+
+    UFUNCTION(BlueprintCallable)
+    void ReloadCurrentMap()
+    {
+        ULoadingScreenHelperSubsystem::Get().SetCurrentLoadingScreenType(ELoadingScreenType::BlackScreen);
+        Gameplay::OpenLevel(FName(Gameplay::GetCurrentLevelName(true)), true, "");
     }
 }
