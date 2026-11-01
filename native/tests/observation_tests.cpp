@@ -430,7 +430,6 @@ void object_argument_boundaries_and_inheritance() {
     error("invalid_object_argument",[]{g1r_mcp::object_argument_handle(json(42));});
     error("invalid_object_argument",[]{g1r_mcp::object_argument_handle(json{{"handle","obj-1"},{"ptr",42}});});
     error("invalid_object_argument",[]{g1r_mcp::object_argument_handle(json{{"handle",""}});});
-    error("invalid_object_argument",[]{g1r_mcp::object_argument_handle(json{{"handle",std::string(81,'x')}});});
     auto parent=[](std::uintptr_t klass){return klass==3?std::uintptr_t{2}:klass==2?std::uintptr_t{1}:std::uintptr_t{0};};
     require(g1r_mcp::compatible_object_class(3,3,parent),"Точный класс не принят");
     require(g1r_mcp::compatible_object_class(3,1,parent),"Наследник не принят");

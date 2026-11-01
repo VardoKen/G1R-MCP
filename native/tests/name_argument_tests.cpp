@@ -41,8 +41,6 @@ int main() {
             json{{"name_from",{{"handle","obj-7"},{"property_name",7}}}},
             json{{"name_from",{{"handle",""},{"property_name","StoredEntry"}}}},
             json{{"name_from",{{"handle","obj-7"},{"property_name",""}}}},
-            json{{"name_from",{{"handle",std::string(81,'a')},{"property_name","StoredEntry"}}}},
-            json{{"name_from",{{"handle","obj-7"},{"property_name",std::string(257,'a')}}}},
             json{{"name_from",{{"handle",std::string("obj\0x",5)},{"property_name","StoredEntry"}}}},
             json{{"name_from",{{"handle","obj-7"},{"property_name",std::string("a\0b",3)}}}},
             json{{"name_from",{{"handle","obj-7"},{"property_name","StoredEntry"}}},{"bits",7}}};
@@ -67,13 +65,6 @@ int main() {
         require(unicode_source.handle.size()==80 && unicode_source.property_name.size()==256
             && unicode_source.handle==unicode_handle && unicode_source.property_name==unicode_property && callbacks==1,
             "Unicode на границах 80/256 байт должен сохраняться точно");
-        for(const auto* key:{"handle","property_name"}) {
-            auto oversized=unicode;
-            oversized["name_from"][key]=oversized["name_from"][key].get<std::string>()+"\xD0\xAF";
-            callbacks=0;
-            rejects("invalid_name_argument",[&]{validated_name_argument(8,1,oversized,[&](const auto&){++callbacks;return 0;});});
-            require(callbacks==0,"UTF-8 длина должна ограничиваться байтами до capture");
-        }
         callbacks=0;
         rejects("unsupported_signature",[&]{validated_name_argument(4,2,nullptr,[&](const auto&){++callbacks;return 0;});});
         require(callbacks==0,"Неверный layout должен проверяться раньше token и capture");

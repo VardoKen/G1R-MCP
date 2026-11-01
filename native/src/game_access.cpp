@@ -551,7 +551,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.61"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.62"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -1529,14 +1529,14 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         auto object=resolve(source.handle);
         result.object_identity=serial_identity(validate_object(object));
         auto klass=result.object_identity.object_class;
-        std::set<uintptr_t> classes,fields;int scanned=0;
-        for(int depth=0;klass && !result.field;klass=read<uintptr_t>(klass+0x40),++depth) {
-            if(depth>=64 || !classes.insert(klass).second)
-                throw HandlerError("name_source_scan_incomplete","Цепочка классов источника FName не завершена");
+        std::set<uintptr_t> classes,fields;
+        for(;klass && !result.field;klass=read<uintptr_t>(klass+0x40)) {
+            if(!classes.insert(klass).second)
+                throw HandlerError("name_source_scan_incomplete","FName source class chain contains a cycle");
             validate_class(reinterpret_cast<void*>(klass));
             for(auto field=read<uintptr_t>(klass+0x50);field;field=read<uintptr_t>(field+0x18)) {
-                if(++scanned>4096 || !fields.insert(field).second)
-                    throw HandlerError("name_source_scan_incomplete","Список свойств источника FName не завершён");
+                if(!fields.insert(field).second)
+                    throw HandlerError("name_source_scan_incomplete","FName source property chain contains a cycle");
                 if(name(read<uint64_t>(field+0x20))==source.property_name){result.field=field;result.owner=klass;break;}
             }
         }
@@ -2087,12 +2087,12 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     if(expected_token || strict_pod_contract) {
         auto current_class=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);
         uintptr_t current_function{},current_owner{};std::set<uintptr_t> current_classes;
-        for(int depth=0;current_class && !current_function;current_class=read<uintptr_t>(current_class+0x40),++depth) {
-            if(depth>=64 || !current_classes.insert(current_class).second)
+        for(;current_class && !current_function;current_class=read<uintptr_t>(current_class+0x40)) {
+            if(!current_classes.insert(current_class).second)
                 throw HandlerError("signature_changed","Цепочка владельцев функции изменилась до вызова");
             auto field=read<uintptr_t>(current_class+0x48);std::set<uintptr_t> current_fields;
             for(;field;field=read<uintptr_t>(field+0x28)) {
-                if(current_fields.size()>=4096 || !current_fields.insert(field).second)
+                if(!current_fields.insert(field).second)
                     throw HandlerError("signature_changed","Цепочка функций изменилась до вызова");
                 if(object_name(reinterpret_cast<void*>(field))==function_name
                    && contains(object_name(reinterpret_cast<void*>(read<uintptr_t>(field+0x10))),"Function")) {

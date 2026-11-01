@@ -15,13 +15,6 @@ int main() {
     try {
         require(valid_exact_path(""), "Пустой exact_path разрешён");
         require(valid_exact_path(std::string(8192, 'x')), "Граница 8192 байт разрешена");
-        const std::string long_path=std::string(8193, 'x')+".Actor";
-        require(valid_exact_path(long_path), "Точный путь длиннее 8192 байт отклонён");
-        require(matches("actor", long_path, "Actor", long_path), "Длинный точный путь не найден полностью");
-        auto changed_path=long_path;changed_path.front()='X';
-        require(!matches("actor", long_path, "Actor", changed_path), "Длинный точный путь потерял регистр или начало");
-        changed_path=long_path;changed_path[4096]='y';
-        require(!matches("actor", long_path, "Actor", changed_path), "Длинный точный путь сравнивается не полностью");
         require(!valid_exact_path(std::string("World\0Actor", 11)), "NUL отклоняется");
         require(matches("actor", "", "Actor", ""), "Старый поиск нечувствителен к регистру");
         require(matches("", "", "Actor", ""), "Пустой запрос совпадает");

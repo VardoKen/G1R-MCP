@@ -7,8 +7,8 @@ namespace g1r_mcp {
 using json=nlohmann::json;
 using game_memory::read;
 json GameAccess::read_struct(void* object,const std::string& handle,const std::string& property_name) {
-    if(property_name.empty() || property_name.size()>256 || property_name.find('\0')!=std::string::npos)
-        throw HandlerError("invalid_struct_params","Имя свойства требует 1..256 байтов без NUL");
+    if(property_name.empty() || property_name.find('\0')!=std::string::npos)
+        throw HandlerError("invalid_struct_params","property_name must be nonempty and contain no NUL");
     const auto initial=validate_object(object);
     struct Metadata {
         uintptr_t owner{};

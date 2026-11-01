@@ -23,8 +23,7 @@ inline bool same_object_identity(const ObjectIdentity& left,const ObjectIdentity
 inline std::string object_argument_handle(const nlohmann::json& value) {
     if (value.is_null()) return {};
     if (!value.is_object() || value.size()!=1 || !value.contains("handle")
-        || !value.at("handle").is_string() || value.at("handle").get_ref<const std::string&>().empty()
-        || value.at("handle").get_ref<const std::string&>().size()>80)
+        || !value.at("handle").is_string() || value.at("handle").get_ref<const std::string&>().empty())
         throw HandlerError("invalid_object_argument", "Объектный аргумент требует null или только {handle}");
     return value.at("handle").get<std::string>();
 }

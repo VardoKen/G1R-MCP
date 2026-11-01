@@ -24,9 +24,9 @@ inline NameArgumentSource name_argument_source(const nlohmann::json& value) {
        || !source.at("handle").is_string() || !source.at("property_name").is_string())
         throw HandlerError("invalid_name_argument","Источник FName требует только handle и property_name");
     auto handle=source.at("handle").get<std::string>(),property=source.at("property_name").get<std::string>();
-    if(handle.empty() || handle.size()>80 || handle.find('\0')!=std::string::npos
-       || property.empty() || property.size()>256 || property.find('\0')!=std::string::npos)
-        throw HandlerError("invalid_name_argument","Handle и имя свойства FName пусты или превышают предел");
+    if(handle.empty() || handle.find('\0')!=std::string::npos
+       || property.empty() || property.find('\0')!=std::string::npos)
+        throw HandlerError("invalid_name_argument","FName source handle and property_name must be nonempty and contain no NUL");
     return {std::move(handle),std::move(property)};
 }
 template<class Capture>
