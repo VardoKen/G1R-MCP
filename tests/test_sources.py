@@ -116,6 +116,41 @@ class SourceCatalogTests(unittest.TestCase):
         self.assertEqual(self.catalog().search_text("мир", 1)["total_matches"], 2)
         self.assertEqual(self.catalog().search_text("Мир", 20, True)["total_matches"], 1)
 
+    def test_long_query_revision_and_matching_line_are_returned_without_internal_cuts(self):
+        query = "q" * 513
+        line = "// " + query + " М" * 2500 + " end-marker"
+        path = self.write("Script/LongSearch.as", line + "\n")
+        before = path.read_bytes()
+        revision = "source-label-" + "r" * 257
+        catalog = SourceCatalog(self.root, revision=revision)
+        result = catalog.search_text(query)
+        self.assertEqual(result["total_matches"], 1)
+        self.assertEqual(result["revision"], revision)
+        self.assertEqual(result["items"][0]["text"], line)
+        self.assertFalse(result["items"][0]["text_truncated"])
+        self.assertEqual(catalog.list_types(query)["items"], [])
+        self.assertEqual(catalog.search_files(query)["items"], [])
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_all_skipped_source_files_are_reported_without_a_diagnostic_list_cut(self):
+        self.write("Script/Good.as", "class Good {}\n")
+        bad_paths = [f"Script/Bad{index:03}.as" for index in range(101)]
+        for path in bad_paths:
+            self.write(path, b"\xff")
+        before = {path.relative_to(self.root): path.read_bytes()
+                  for path in self.root.rglob("*") if path.is_file()}
+        for operation in (lambda: self.catalog().search_text("Good"), lambda: self.catalog().list_types("Good")):
+            result = operation()
+            self.assertFalse(result["scan_complete"])
+            self.assertIsNone(result["total_matches"])
+            self.assertEqual(result["total_matches_lower_bound"], 1)
+            self.assertEqual(result["skipped_count"], 101)
+            self.assertEqual([item["path"] for item in result["skipped_files"]], bad_paths)
+            self.assertFalse(result["skipped_list_truncated"])
+            self.assertEqual({item["error_code"] for item in result["skipped_files"]}, {"invalid_encoding"})
+        self.assertEqual({path.relative_to(self.root): path.read_bytes()
+                          for path in self.root.rglob("*") if path.is_file()}, before)
+
     def test_read_slice_bom_end_and_partial_metadata(self):
         self.write("Script/Test.as", b"\xef\xbb\xbfline1\nline2\nline3\n")
         catalog = self.catalog()
@@ -344,7 +379,7 @@ class Outside {}
         self.assertEqual(captured.exception.code, "no_sources")
         self.write("Script/Test.as", "test")
         catalog = self.catalog()
-        for operation in (lambda: catalog.search_files(""), lambda: catalog.search_text("x", 0), lambda: catalog.list_types("", 201), lambda: catalog.read_file("Script/Test.as", 0), lambda: catalog.read_file("Script/Test.as", 1, 0), lambda: catalog.read_file("Script/Test.as", 1, True), lambda: catalog.search_files("x", True)):
+        for operation in (lambda: catalog.search_files(""), lambda: catalog.search_text("x", 0), lambda: catalog.read_file("Script/Test.as", 0), lambda: catalog.read_file("Script/Test.as", 1, 0), lambda: catalog.read_file("Script/Test.as", 1, True), lambda: catalog.search_files("x", True)):
             with self.assertRaises(SourceError):
                 operation()
 

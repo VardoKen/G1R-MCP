@@ -19,11 +19,6 @@ from .source_functions import declarations as function_declarations
 from .source_identity import inspect as inspect_source_identity
 
 
-MAX_FILES = 100_000
-MAX_QUERY_CHARS = 512
-MAX_MATCH_OFFSET = 1_000_000
-
-
 class SourceError(Exception):
     """Предсказуемая ошибка источника без пользовательских абсолютных путей."""
 
@@ -33,18 +28,17 @@ class SourceError(Exception):
 
 
 def _offset(value: int) -> int:
-    if type(value) is not int or not 0 <= value <= MAX_MATCH_OFFSET:
-        raise SourceError("invalid_arguments", "Смещение должно быть целым числом от 0 до 1000000")
+    if type(value) is not int or value < 0:
+        raise SourceError("invalid_arguments", "Смещение должно быть неотрицательным целым числом")
     return value
 
 
 def _page(total: int, offset: int, returned: int) -> dict:
     next_index = offset + returned
     has_more = next_index < total
-    limited = has_more and next_index > MAX_MATCH_OFFSET
-    return {"offset": offset, "next_offset": next_index if has_more and not limited else None,
-            "has_more": has_more, "pagination_limit_reached": limited,
-            "max_offset": MAX_MATCH_OFFSET}
+    return {"offset": offset, "next_offset": next_index if has_more else None,
+            "has_more": has_more, "pagination_limit_reached": False,
+            "max_offset": None}
 
 
 @dataclass(frozen=True)
@@ -130,15 +124,15 @@ def _discovered_file(path: Path, boundary: Path) -> Path:
         raise SourceError("source_unavailable", "Источник отсутствует или недоступен") from None
 
 
-def _limit(value: int, maximum: int = 200) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= maximum:
-        raise SourceError("invalid_arguments", f"Предел должен быть целым числом от 1 до {maximum}")
+def _limit(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise SourceError("invalid_arguments", "Предел должен быть положительным целым числом")
     return value
 
 
 def _query(value: str, *, empty: bool = False) -> str:
-    if not isinstance(value, str) or len(value) > MAX_QUERY_CHARS or "\0" in value or (not empty and not value):
-        raise SourceError("invalid_arguments", "Запрос должен быть непустой строкой длиной не более 512 символов")
+    if not isinstance(value, str) or "\0" in value or (not empty and not value):
+        raise SourceError("invalid_arguments", "Запрос должен быть непустой строкой без NUL")
     return value
 
 
@@ -201,7 +195,7 @@ class SourceCatalog:
     def __init__(self, modkit_root: str | Path, *, revision: str | None = None):
         self.root = _check_path(Path(modkit_root), directory=True)
         self.script_root = _check_path(self.root / "Script", self.root, directory=True)
-        if revision is not None and (not isinstance(revision, str) or len(revision) > 256 or any(ord(c) < 32 for c in revision)):
+        if revision is not None and (not isinstance(revision, str) or any(ord(c) < 32 for c in revision)):
             raise SourceError("invalid_arguments", "Метка ревизии имеет неподдерживаемый формат")
         self.revision = revision
 
@@ -239,8 +233,6 @@ class SourceCatalog:
                         continue
                     path = _discovered_file(parent / name, self.root)
                     result.append(SourceFile(path, path.relative_to(self.root).as_posix(), kind))
-                    if len(result) > MAX_FILES:
-                        raise SourceError("limit_exceeded", "Превышен предел количества исходников")
         if not result:
             raise SourceError("no_sources", "В разрешённых каталогах не найдены исходники AngelScript")
         return sorted(result, key=lambda file: file.relative)
@@ -254,7 +246,7 @@ class SourceCatalog:
 
     def _scan_result(self, items: list[dict], total: int, files: list[SourceFile], skipped: list[dict], **extra) -> dict:
         result = self._result(items, total, len(files), **extra)
-        result.update(skipped_files=skipped[:100], skipped_count=len(skipped), skipped_list_truncated=len(skipped) > 100)
+        result.update(skipped_files=skipped, skipped_count=len(skipped), skipped_list_truncated=False)
         if skipped:
             result["scan_complete"] = False
             result["total_matches"] = None
@@ -302,7 +294,7 @@ class SourceCatalog:
                 if needle in (line if case_sensitive else line.casefold()):
                     total += 1
                     if total > offset and len(items) < limit:
-                        items.append(self._item(file, line=line_number, text=line[:4096], text_truncated=len(line) > 4096))
+                        items.append(self._item(file, line=line_number, text=line, text_truncated=False))
         return self._scan_result(items, total, files, skipped, query_kind="literal", **_page(total, offset, len(items)))
 
     def _source_file(self, relative_path: str) -> SourceFile:

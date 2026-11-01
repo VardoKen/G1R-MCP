@@ -5,7 +5,6 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -37,7 +36,7 @@ class SourcePaginationTests(unittest.TestCase):
             ("types", lambda limit, offset: self.catalog.list_types("SharedType", limit, offset)),
         )
 
-    def test_all_three_searches_recover_identical_matches_beyond_first_200(self):
+    def test_all_three_searches_accept_requested_201_item_page_and_recover_remaining_matches(self):
         content = "class USharedType {}\n// shared needle\n"
         for index in reversed(range(205)):
             self.write(f"Script/Entry{index:03}.as", content)
@@ -45,16 +44,16 @@ class SourcePaginationTests(unittest.TestCase):
         expected = [f"Script/Entry{index:03}.as" for index in range(205)]
         for operation, request in self.operations():
             with self.subTest(operation=operation):
-                first = request(200, 0)
-                final = request(200, first["next_offset"])
+                first = request(201, 0)
+                final = request(201, first["next_offset"])
                 self.assertEqual(first["offset"], 0)
-                self.assertEqual(first["next_offset"], 200)
+                self.assertEqual(first["next_offset"], 201)
                 self.assertTrue(first["has_more"])
                 self.assertTrue(first["truncated"])
-                self.assertEqual(final["offset"], 200)
+                self.assertEqual(final["offset"], 201)
                 self.assertIsNone(final["next_offset"])
                 self.assertFalse(final["has_more"])
-                self.assertEqual([len(first["items"]), len(final["items"])], [200, 5])
+                self.assertEqual([len(first["items"]), len(final["items"])], [201, 4])
                 paths = [item["path"] for page in (first, final) for item in page["items"]]
                 self.assertEqual(paths, expected)
                 self.assertEqual(len(set(paths)), 205)
@@ -69,7 +68,7 @@ class SourcePaginationTests(unittest.TestCase):
                     self.assertTrue(all(item["line"] == 2 for item in first["items"] + final["items"]))
                 elif operation == "types":
                     self.assertTrue(all(item["qualified_name"] == "USharedType" for item in first["items"] + final["items"]))
-                exhausted = request(200, 205)
+                exhausted = request(201, 205)
                 self.assertEqual(exhausted["items"], [])
                 self.assertEqual(exhausted["total_matches"], 205)
                 self.assertFalse(exhausted["has_more"])
@@ -92,7 +91,7 @@ class SourcePaginationTests(unittest.TestCase):
         self.write("Script/Valid.as", "class USharedType {} // shared needle\n")
         before = self.file_hashes()
         for label, request in self.operations():
-            for value in (True, False, -1, 1_000_001, 1.5, "0", None):
+            for value in (True, False, -1, 1.5, "0", None):
                 with self.subTest(operation=label, offset=value), self.assertRaises(SourceError) as caught:
                     request(10, value)
                 self.assertEqual(caught.exception.code, "invalid_arguments")
@@ -126,20 +125,27 @@ class SourcePaginationTests(unittest.TestCase):
                                  [f"Script/Good{index:03}.as" for index in range(205)])
         self.assertEqual(self.file_hashes(), before)
 
-    def test_limit_reached_never_returns_a_cursor_outside_accepted_range(self):
+    def test_cursor_follows_requested_page_and_offset_beyond_total_is_empty(self):
         for index in range(6):
             self.write(f"Script/Entry{index}.as", "class USharedType {} // shared needle\n")
-        with patch("g1r_mcp.sources.MAX_MATCH_OFFSET", 3):
-            for operation, request in self.operations():
-                with self.subTest(operation=operation):
-                    page = request(2, 3)
-                    self.assertEqual(page["offset"], 3)
-                    self.assertEqual(len(page["items"]), 2)
-                    self.assertTrue(page["has_more"])
-                    self.assertTrue(page["pagination_limit_reached"])
-                    self.assertEqual(page["max_offset"], 3)
-                    self.assertIsNone(page["next_offset"])
-                    self.assertEqual(page["total_matches"], 6)
+        for operation, request in self.operations():
+            with self.subTest(operation=operation):
+                page = request(2, 3)
+                self.assertEqual(page["offset"], 3)
+                self.assertEqual(len(page["items"]), 2)
+                self.assertTrue(page["has_more"])
+                self.assertEqual(page["next_offset"], 5)
+                self.assertFalse(page["pagination_limit_reached"])
+                self.assertIsNone(page["max_offset"])
+                self.assertEqual(page["total_matches"], 6)
+                final = request(2, page["next_offset"])
+                self.assertEqual(len(final["items"]), 1)
+                self.assertFalse(final["has_more"])
+                exhausted = request(201, 1_000_001)
+                self.assertEqual(exhausted["items"], [])
+                self.assertEqual(exhausted["total_matches"], 6)
+                self.assertFalse(exhausted["has_more"])
+                self.assertIsNone(exhausted["next_offset"])
 
 
 if __name__ == "__main__":
