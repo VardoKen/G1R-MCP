@@ -665,7 +665,7 @@ class DevelopmentService:
                     raise DevelopmentError("invalid_arguments", "Expected source and staging SHA-256 values are required")
             try:
                 parts = self.workspace._file_parts(file_path)
-                if parts[0] != "Script":
+                if parts[0] != "Script" or Path(parts[-1]).suffix.lower() != ".as":
                     raise DevelopmentError("unsupported_file", "Staged application accepts only Script/**/*.as files")
                 with self.workspace._lock:
                     source = self.workspace.read_package_file_exact(relative_package, file_path)

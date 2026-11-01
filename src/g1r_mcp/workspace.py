@@ -1,7 +1,7 @@
 """Create and edit official packages in the selected workspace.
 
 This module does not determine game directories or the official Modkit. Access
-is limited to GothicMod.json, Script/**/*.as, and ScriptPatches/*.patch;
+covers GothicMod.json and files in the five official package components;
 compilation, patch application, and loading are not performed.
 """
 from __future__ import annotations
@@ -18,7 +18,7 @@ import tempfile
 import threading
 from typing import Iterable, Iterator
 
-from .packages import MAX_DESCRIPTOR_BYTES, PackageError, validate_package
+from .packages import COMPONENTS, MAX_DESCRIPTOR_BYTES, PackageError, validate_package
 
 MAX_FILE_BYTES = None
 MAX_READ_BYTES = None
@@ -139,7 +139,7 @@ def _destination_lock(path: Path) -> Iterator[None]:
 def _read_bytes(path: Path, boundary: Path, maximum: int | None) -> bytes:
     checked = _checked(path, boundary)
     if not checked.is_file():
-        raise WorkspaceError("invalid_path", "The source must be a regular file")
+        raise WorkspaceError("invalid_path", "The package entry must be a regular file")
     try:
         before = checked.stat()
         if maximum is not None and before.st_size > maximum:
@@ -192,11 +192,9 @@ class PackageWorkspace:
         parts = _parts(file_path)
         if parts == ("GothicMod.json",):
             return parts
-        if len(parts) >= 2 and parts[0] == "Script" and Path(parts[-1]).suffix.lower() == ".as":
+        if len(parts) >= 2 and parts[0] in COMPONENTS:
             return parts
-        if len(parts) == 2 and parts[0] == "ScriptPatches" and Path(parts[-1]).suffix.lower() == ".patch":
-            return parts
-        raise WorkspaceError("unsupported_file", "GothicMod.json, Script/**/*.as, and ScriptPatches/*.patch are allowed")
+        raise WorkspaceError("unsupported_file", "GothicMod.json and files in Script, ScriptPatches, Config, Content, or Story are allowed")
 
     @contextmanager
     def _write_parent(self, package: Path, parts: tuple[str, ...]) -> Iterator[Path]:
@@ -270,12 +268,12 @@ class PackageWorkspace:
                            sha256=hashlib.sha256(raw).hexdigest(), validation=report)
 
     def create_package_directory(self, relative_path: str, directory_path: str) -> dict:
-        """Create only source directories of an existing official package."""
+        """Create component directories of an existing official package."""
         parts = _parts(directory_path)
         if len(parts) > MAX_DIRECTORY_PARTS:
             raise WorkspaceError("limit_exceeded", "The directory path exceeds the 32 component limit")
-        if parts[0] != "Script" and parts != ("ScriptPatches",):
-            raise WorkspaceError("unsupported_directory", "Script[/subdirectories] and ScriptPatches are allowed")
+        if parts[0] not in COMPONENTS:
+            raise WorkspaceError("unsupported_directory", "Directories in Script, ScriptPatches, Config, Content, or Story are allowed")
         with self._lock:
             package, name = self._package(relative_path)
             created: list[tuple[Path, tuple[int, int]]] = []
@@ -353,39 +351,24 @@ class PackageWorkspace:
                 if not file.is_file():
                     raise WorkspaceError("invalid_path", "The descriptor must be a regular file")
                 files.append({"path": "GothicMod.json", "bytes": file.stat().st_size})
-            script = package / "Script"
-            if os.path.lexists(script):
-                self._unprotected(_checked(script, package, directory=True))
+            for component in COMPONENTS:
+                directory_root = package / component
+                if not os.path.lexists(directory_root):
+                    continue
+                self._unprotected(_checked(directory_root, package, directory=True))
                 def walk_error(error: OSError) -> None:
                     raise WorkspaceError("access_error", "Could not read the source directory")
-                for directory, dirs, names in os.walk(script, followlinks=False, onerror=walk_error):
+                for directory, dirs, names in os.walk(directory_root, followlinks=False, onerror=walk_error):
                     parent = self._unprotected(_checked(Path(directory), package, directory=True))
                     for child in dirs:
                         self._unprotected(_checked(parent / child, package, directory=True))
                     for child in names:
-                        if Path(child).suffix.lower() != ".as":
-                            continue
                         file = self._unprotected(_checked(parent / child, package))
                         if not file.is_file():
-                            raise WorkspaceError("invalid_path", "The source must be a regular file")
+                            raise WorkspaceError("invalid_path", "The package entry must be a regular file")
                         files.append({"path": file.relative_to(package).as_posix(), "bytes": file.stat().st_size})
                         if len(files) > MAX_FILES:
                             raise WorkspaceError("limit_exceeded", "The file count limit was exceeded")
-            patches = package / "ScriptPatches"
-            if os.path.lexists(patches):
-                checked = self._unprotected(_checked(patches, package, directory=True))
-                try:
-                    for child in checked.iterdir():
-                        self._unprotected(_checked(child, package))
-                        if child.suffix.lower() != ".patch":
-                            continue
-                        if not child.is_file():
-                            raise WorkspaceError("invalid_path", "The patch must be a regular file")
-                        files.append({"path": child.relative_to(package).as_posix(), "bytes": child.stat().st_size})
-                        if len(files) > MAX_FILES:
-                            raise WorkspaceError("limit_exceeded", "The file count limit was exceeded")
-                except OSError:
-                    raise WorkspaceError("access_error", "Could not read the patch directory") from None
             files.sort(key=lambda item: item["path"])
             items = files[offset:offset + limit]
             has_more = offset + len(items) < len(files)

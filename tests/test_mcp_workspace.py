@@ -176,7 +176,7 @@ class MCPWorkspaceTests(unittest.IsolatedAsyncioTestCase):
                     for arguments in (
                         {"relative_path": "../Modkit", "file_path": "Script/Official.as", "content": "overwrite"},
                         {"relative_path": "Example", "file_path": "../GothicMod.json", "content": "overwrite"},
-                        {"relative_path": "Example", "file_path": "Content/private.dat", "content": "overwrite"},
+                        {"relative_path": "Example", "file_path": "Script/Example.as", "content": "overwrite"},
                     ):
                         denied = await client.call_tool("g1r_write_package_file", arguments)
                         self.assertTrue(denied.is_error)
@@ -270,7 +270,7 @@ class MCPWorkspaceTests(unittest.IsolatedAsyncioTestCase):
                     listing = await client.call_tool("g1r_list_package_files", {"relative_path": "PatchExample"})
                     self.assertEqual([item["path"] for item in listing.structured_content["items"]],
                                      ["GothicMod.json", "ScriptPatches/Changes.patch"])
-                    for file_path in ("ScriptPatches/Nested.patch.json", "ScriptPatches/nested/Changes.patch"):
+                    for file_path in ("Outside/Nested.patch.json", "ScriptPatches/missing/nested/Changes.patch"):
                         denied = await client.call_tool("g1r_write_package_file", {
                             "relative_path": "PatchExample", "file_path": file_path, "content": diff,
                         })

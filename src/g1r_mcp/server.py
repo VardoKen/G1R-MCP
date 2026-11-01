@@ -47,11 +47,11 @@ LOCAL_TOOLS = (
 )
 WORKSPACE_TOOLS = (
     ("g1r_create_package", "Create an official package in the selected workspace", "local_write"),
-    ("g1r_create_package_directory", "Create Script or ScriptPatches directories inside a workspace package", "local_write"),
-    ("g1r_list_package_files", "List a workspace package's descriptor and source files", "read_only"),
-    ("g1r_read_package_file", "Read a workspace file with SHA-256 for change verification", "read_only"),
-    ("g1r_read_package_file_exact", "Exact workspace-file text for editing without normalization", "read_only"),
-    ("g1r_write_package_file", "Write source or descriptor files with conflict detection", "local_write"),
+    ("g1r_create_package_directory", "Create Script, ScriptPatches, Config, Content, or Story directories inside a workspace package", "local_write"),
+    ("g1r_list_package_files", "List the descriptor and files from all five official package components", "read_only"),
+    ("g1r_read_package_file", "Read a UTF-8 descriptor or component file with SHA-256 for change verification", "read_only"),
+    ("g1r_read_package_file_exact", "Exact UTF-8 text from a descriptor or official package component without normalization", "read_only"),
+    ("g1r_write_package_file", "Write UTF-8 descriptor or official component files with conflict detection", "local_write"),
     ("g1r_export_package", "Export a complete workspace package to a new directory containing a ZIP and SHA-256 manifest", "local_write"),
     ("g1r_verify_package_export", "Verify the package ZIP and manifest in a workspace export directory", "read_only"),
 )
@@ -186,7 +186,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             "sources": {"kind": "official_modkit_static", "root": str(sources.root), "revision": source_revision,
                         "revision_source": "caller_label", "validation": "source_only",
                         "identity_tool": "g1r_source_identity"},
-            "workspace": {"root": str(workspace.root), "format": "GothicMod.json/Script/ScriptPatches",
+            "workspace": {"root": str(workspace.root), "format": "GothicMod.json/Script/ScriptPatches/Config/Content/Story",
                           "installed_game_deployment": False},
             "game_session": ownership.status(),
             "game": {
@@ -342,7 +342,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                 "ownership": "one_native_tcp_client_session",
                 "reconnect": "discard_old_handles_and_watches_then_find_objects_again",
                 "uncertain_effect": "never_automatically_retry_outcome_unknown_may_have_executed_do_not_retry",
-                "package_format": "GothicMod.json/Script/ScriptPatches",
+                "package_format": "GothicMod.json/Script/ScriptPatches/Config/Content/Story",
                 "script_patch_engine_apply_confirmed": True,
             },
             "invoke_arguments": {
@@ -550,7 +550,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=True, openWorldHint=False))
     def g1r_create_package_directory(relative_path: str, directory_path: str) -> dict[str, Any]:
-        """Create allowed Script directories inside a package; preserve an existing directory."""
+        """Create allowed Script, ScriptPatches, Config, Content, or Story directories inside a package; preserve an existing directory."""
         try:
             return workspace.create_package_directory(relative_path, directory_path)
         except WorkspaceError as error:
@@ -558,7 +558,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_list_package_files(relative_path: str, limit: int = 100, offset: int = 0) -> dict[str, Any]:
-        """Get a page of descriptor, .as, and ScriptPatches/*.patch files; continue through next_offset."""
+        """List descriptor and Script, ScriptPatches, Config, Content, or Story files regardless of encoding; continue through next_offset."""
         try:
             return workspace.list_package_files(relative_path, limit, offset)
         except WorkspaceError as error:
@@ -567,7 +567,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     @server.tool(annotations=read_only)
     def g1r_read_package_file(relative_path: str, file_path: str, start_line: int = 1,
                               line_count: int = 100) -> dict[str, Any]:
-        """Read a UTF-8 workspace file and the SHA-256 of its complete bytes for a subsequent write."""
+        """Read a UTF-8 descriptor or Script, ScriptPatches, Config, Content, or Story file and its complete-byte SHA-256."""
         try:
             return workspace.read_package_file(relative_path, file_path, start_line, line_count)
         except WorkspaceError as error:
@@ -577,7 +577,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                             idempotentHint=False, openWorldHint=False))
     def g1r_write_package_file(relative_path: str, file_path: str, content: str,
                                expected_sha256: str | None = None) -> dict[str, Any]:
-        """Write a workspace file: replacement requires SHA-256; without a hash, only a new file can be created."""
+        """Write UTF-8 descriptor or component text; replacement requires SHA-256, while omitting the hash creates only a new file."""
         try:
             return workspace.write_package_file(relative_path, file_path, content, expected_sha256)
         except WorkspaceError as error:
@@ -623,7 +623,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_read_package_file_exact(relative_path: str, file_path: str) -> dict[str, Any]:
-        """Read a complete workspace file without changing bytes during UTF-8 decode/encode."""
+        """Read complete UTF-8 descriptor or official component text without changing BOM, line endings, or EOF."""
         try:
             return workspace.read_package_file_exact(relative_path, file_path)
         except WorkspaceError as error:

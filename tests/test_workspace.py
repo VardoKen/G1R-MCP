@@ -100,8 +100,8 @@ class WorkspaceTests(unittest.TestCase):
     def test_patch_allowlist_refusals_leave_no_directory(self):
         self.create()
         before = self.state()
-        for path in ("ScriptPatches/Changes.json", "ScriptPatches/Changes.diff", "ScriptPatches/nested/Changes.patch",
-                     "ScriptPatches/main.as", "ScriptPatches"):
+        for path in ("Other/Changes.json", "Other/Changes.diff", "Other/nested/Changes.patch",
+                     "Other/main.as", "ScriptPatches"):
             self.assert_error("unsupported_file", lambda: self.workspace.write_package_file("Example", path, "new"))
         self.assert_error("conflict", lambda: self.workspace.write_package_file("Example", "ScriptPatches/Changes.patch", "new", "0" * 64))
         self.assert_error("invalid_arguments", lambda: self.workspace.write_package_file("Example", "ScriptPatches/Changes.patch", "before\0after"))
@@ -267,14 +267,16 @@ class WorkspaceTests(unittest.TestCase):
         content.mkdir()
         (content / "private.txt").write_text("private", encoding="utf-8")
         before = self.state()
-        for path in ("README.md", "Config/settings.ini", "Content/private.txt", "Scripts/main.lua", "Script/not_source.txt"):
+        for path in ("README.md", "Other/settings.ini", "Scripts/main.lua", "Other/not_source.txt"):
             self.assert_error("unsupported_file", lambda: self.workspace.read_package_file("Example", path))
             self.assert_error("unsupported_file", lambda: self.workspace.write_package_file("Example", path, "overwrite"))
+        self.assertEqual(self.workspace.read_package_file("Example", "Content/private.txt")["text"], "private")
+        self.assert_error("conflict", lambda: self.workspace.write_package_file("Example", "Content/private.txt", "overwrite"))
         self.assert_error("access_error", lambda: self.workspace.write_package_file("Example", "Script/new/A.as", "new"))
         self.assertEqual(self.state(), before)
         listed = self.workspace.list_package_files("Example")
-        self.assertEqual(listed["items"], [{"path": "GothicMod.json", "bytes": (self.root / "Example/GothicMod.json").stat().st_size}])
-        self.assertNotIn("private", repr(listed))
+        self.assertEqual(listed["items"], [{"path": "Content/private.txt", "bytes": len(b"private")},
+                                          {"path": "GothicMod.json", "bytes": (self.root / "Example/GothicMod.json").stat().st_size}])
 
     def test_list_order_limit_and_workspace_root_package(self):
         self.create()
@@ -356,7 +358,7 @@ class WorkspaceTests(unittest.TestCase):
         self.create()
         self.workspace.write_package_file("Example", "Script/File.as", "preserve")
         before = self.state()
-        for path in ("Content", "Config/New", "Story", "ScriptPatches/Nested", "Scripts/New", "GothicMod.json"):
+        for path in ("Other", "Other/New", "Scripts/New", "GothicMod.json"):
             self.assert_error("unsupported_directory", lambda: self.workspace.create_package_directory("Example", path))
         for path in ("Script/../Other", "Script/CON", "/Script/New"):
             self.assert_error("unsafe_path", lambda: self.workspace.create_package_directory("Example", path))
@@ -577,7 +579,7 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_exact_read_uses_allowlist_protected_roots_and_utf8(self):
         self.create()
-        self.assert_error("unsupported_file", lambda: self.workspace.read_package_file_exact("Example", "Content/private.txt"))
+        self.assert_error("unsupported_file", lambda: self.workspace.read_package_file_exact("Example", "Other/private.txt"))
         self.assert_error("unsafe_path", lambda: self.workspace.read_package_file_exact("Example", "Script/../private.as"))
         protected = PackageWorkspace(self.root, protected_roots=[self.root / "Example"])
         self.assert_error("unsafe_path", lambda: protected.read_package_file_exact("Example", "GothicMod.json"))
