@@ -18,8 +18,6 @@
 namespace g1r::enum_values {
 
 // Читаются только переданные копии. Проверка UObject/UEnum остаётся у вызывающего кода.
-inline constexpr std::size_t MaxEntries = 4096;
-inline constexpr std::size_t MaxLabelBytes = 4096;
 using Integer = std::variant<std::int64_t, std::uint64_t>;
 
 struct IntegerLayout {
@@ -77,17 +75,16 @@ struct Entry {
 };
 static_assert(sizeof(Entry) == 16 && offsetof(Entry, value) == 8);
 
-inline std::size_t table_byte_size(std::int32_t count, std::int32_t capacity, bool has_data,
-                                  std::size_t entry_limit = MaxEntries) {
-    if (!entry_limit || entry_limit > MaxEntries || count < 0 || capacity < count ||
-        static_cast<std::size_t>(count) > entry_limit || (count > 0 && !has_data))
+inline std::size_t table_byte_size(std::int32_t count, std::int32_t capacity, bool has_data) {
+    if (count < 0 || capacity < count || (count > 0 && !has_data)
+        || static_cast<std::size_t>(count) > std::numeric_limits<std::size_t>::max() / sizeof(Entry))
         throw std::invalid_argument("invalid_enum_names_table");
     return static_cast<std::size_t>(count) * sizeof(Entry);
 }
 
 inline std::vector<Entry> decode_entries(std::span<const std::byte> bytes, std::int32_t count,
-                                         std::int32_t capacity, std::size_t entry_limit = MaxEntries) {
-    const auto expected = table_byte_size(count, capacity, !bytes.empty(), entry_limit);
+                                         std::int32_t capacity) {
+    const auto expected = table_byte_size(count, capacity, !bytes.empty());
     if (bytes.size() != expected) throw std::invalid_argument("invalid_enum_names_bytes");
     std::vector<Entry> result(static_cast<std::size_t>(count));
     if (expected) std::memcpy(result.data(), bytes.data(), expected);
@@ -95,7 +92,7 @@ inline std::vector<Entry> decode_entries(std::span<const std::byte> bytes, std::
 }
 
 inline bool valid_label(std::string_view value) noexcept {
-    if (value.empty() || value.size() > MaxLabelBytes) return false;
+    if (value.empty()) return false;
     std::size_t position = 0;
     while (position < value.size()) {
         const auto first = static_cast<unsigned char>(value[position++]);
@@ -128,7 +125,6 @@ struct LabelMatch {
 
 template<class NameDecoder>
 inline LabelMatch find_label(const Integer& value, std::span<const Entry> entries, NameDecoder&& decode_name) {
-    if (entries.size() > MaxEntries) throw std::invalid_argument("invalid_enum_names_table");
     std::int64_t signed_value{};
     if (!label_value(value, signed_value)) return {"value_unrepresentable", "", 0, false, "unsigned_outside_int64"};
     std::size_t first_match = 0, count = 0;

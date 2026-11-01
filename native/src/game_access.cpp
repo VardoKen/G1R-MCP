@@ -400,7 +400,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.55"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.56"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
@@ -424,15 +424,15 @@ json GameAccess::status() const {
                 {"retained_bytes",object_array_inputs_retained_bytes_.load()},
                 {"max_inputs",nullptr},{"max_elements",std::numeric_limits<int32_t>::max()},{"max_input_bytes",nullptr}}},
             {"operations",{"status","enable_game","compile_diagnostics","objects","properties","functions","invoke","read_array","read_struct",
-                           "snapshot","watch_start","watch_read","watch_stop","watch_forget"}},
-            {"snapshot_limits",{{"objects",16},{"properties_per_object",32},{"scan_fields_per_object",4096},
-                                {"property_value_bytes",16384},{"object_path_bytes",8192},
-                                {"snapshot_bytes",Observations::MaxSnapshotBytes}}},
-            {"watch_limits",{{"records",Observations::MaxWatches},{"properties",32},
-                             {"duration_ms_min",1},{"duration_ms_max",600000},
-                             {"interval_ms_min",10},{"interval_ms_max",60000},
-                             {"capacity_min",1},{"capacity_max",128},
-                             {"buffer_bytes",Observations::MaxBufferBytes},{"read_events",100},
+                           "snapshot","watch_start","watch_read","watch_stop","watch_forget","watch_list","watch_resume"}},
+            {"snapshot_limits",{{"objects",nullptr},{"properties_per_object",nullptr},{"scan_fields_per_object",nullptr},
+                                {"property_value_bytes",nullptr},{"object_path_bytes",nullptr},
+                                {"snapshot_bytes",nullptr}}},
+            {"watch_limits",{{"records",nullptr},{"properties",nullptr},
+                             {"duration_ms_min",1},{"duration_ms_max",nullptr},
+                             {"interval_ms_min",1},{"interval_ms_max",nullptr},
+                             {"capacity_min",1},{"capacity_max",nullptr},
+                             {"buffer_bytes",nullptr},{"read_events",nullptr},
                              {"due_watches_per_tick",1}}},
             {"snapshot_consistency","single_tick_sequential"},
             {"world_generation_supported",false},
@@ -570,16 +570,25 @@ std::string GameAccess::name(uint64_t fname) const {
 std::string GameAccess::object_name(void* object) const {return name(read<uint64_t>(reinterpret_cast<uintptr_t>(object)+0x18));}
 std::string GameAccess::object_path(void* object) const {
     std::string result;auto ptr=reinterpret_cast<uintptr_t>(object);
-    for(int depth=0;ptr && depth<32;++depth) {auto part=object_name(reinterpret_cast<void*>(ptr));result=result.empty()?part:part+"."+result;ptr=read<uintptr_t>(ptr+0x20);}return result;
+    std::set<uintptr_t> visited;
+    for(;ptr;ptr=read<uintptr_t>(ptr+0x20)) {
+        if(!visited.insert(ptr).second)throw HandlerError("invalid_object_path","Object outer chain contains a cycle");
+        auto part=object_name(reinterpret_cast<void*>(ptr));result=result.empty()?part:part+"."+result;
+    }
+    return result;
 }
 GameAccess::SlotIdentity GameAccess::slot_identity(int index) const {
     auto count=read<int32_t>(base_+kObjects+0x14);auto chunks=read<uintptr_t>(base_+kObjects);
-    if(count<0 || count>4000000 || index<0 || index>=count)return {};
+    if(count<0 || index<0 || index>=count)return {};
     auto chunk_count=read<int32_t>(base_+kObjects+0x1c);
-    if((index>>16)>=chunk_count || chunk_count<1 || chunk_count>64 || !chunks)return {};
-    auto chunk=read<uintptr_t>(chunks+(index>>16)*8ull);
+    if((index>>16)>=chunk_count || chunk_count<1 || !chunks)return {};
+    const auto chunk_offset=static_cast<uintptr_t>(index>>16)*sizeof(uintptr_t);
+    if(chunks>std::numeric_limits<uintptr_t>::max()-chunk_offset-sizeof(uintptr_t))return {};
+    auto chunk=read<uintptr_t>(chunks+chunk_offset);
     if(!chunk)return {};
-    const auto item=chunk+(index&65535)*24ull;
+    const auto item_offset=static_cast<uintptr_t>(index&65535)*24;
+    if(chunk>std::numeric_limits<uintptr_t>::max()-item_offset-24)return {};
+    const auto item=chunk+item_offset;
     const auto object=read<uintptr_t>(item);
     if(!object)return {};
     const auto serial=read<int32_t>(item+0x10);
@@ -601,7 +610,6 @@ std::string GameAccess::handle_for(void* object,int index) {
     for(const auto& [id,existing]:handles_) {
         if(same_serial_identity(serial_identity(existing),serial_identity(identity)))return id;
     }
-    if(handles_.size()>=4096)throw HandlerError("handle_limit","Реестр ссылок заполнен; существующие ссылки сохранены");
     auto id="obj-"+std::to_string(++next_handle_);
     handles_[id]=identity;return id;
 }
@@ -639,7 +647,7 @@ void GameAccess::validate_class(void* object_class) const {
     const auto identity=validate_object(object_class);
     auto metaclass=reinterpret_cast<uintptr_t>(identity.object_class);
     std::set<uintptr_t> visited;
-    for(int depth=0;metaclass && depth<64;++depth) {
+    for(;metaclass;) {
         if(!visited.insert(metaclass).second)
             throw HandlerError("invalid_object_class","Цикл метакласса");
         validate_object(reinterpret_cast<void*>(metaclass));
@@ -681,7 +689,6 @@ json GameAccess::object_descriptor(void* object,void* expected_class) {
         throw HandlerError("incompatible_object_result","Объект не принадлежит объявленному классу свойства");
     const auto identity=validate_object(object);
     const auto path=object_path(object);
-    if(path.size()>8192)throw HandlerError("object_identity_too_large","Путь объектного значения превышает 8 КиБ");
     json result={{"handle",handle_for(object,identity.index)},{"index",identity.index},
         {"name",object_name(object)},{"path",path},{"class",object_name(identity.object_class)},
         {"session_id",handle_session_}};
@@ -731,7 +738,7 @@ GameAccess::EnumTable GameAccess::enum_table(void* object) const {
         bool valid_enum=false;
         std::set<uintptr_t> visited;
         auto current=enum_class;
-        for(int depth=0;current && depth<64;++depth) {
+        for(;current;) {
             if(!visited.insert(current).second)throw HandlerError("invalid_enum_class","Цикл класса UEnum");
             validate_class(reinterpret_cast<void*>(current));
             if(object_path(reinterpret_cast<void*>(current))=="/Script/CoreUObject.Enum"){valid_enum=true;break;}
@@ -739,11 +746,12 @@ GameAccess::EnumTable GameAccess::enum_table(void* object) const {
         }
         if(!valid_enum)throw HandlerError("invalid_enum_class","Объявление enum не является UEnum");
         const auto path=object_path(object);
-        if(path.size()>8192)throw HandlerError("enum_path_too_large","Путь enum превышает 8 КиБ");
         const auto ptr=reinterpret_cast<uintptr_t>(object);
         const auto data=read<uintptr_t>(ptr+0x40);
         const auto count=read<int32_t>(ptr+0x48),capacity=read<int32_t>(ptr+0x4c);
         const auto bytes=g1r::enum_values::table_byte_size(count,capacity,data!=0);
+        if(data>std::numeric_limits<uintptr_t>::max()-bytes)
+            throw HandlerError("invalid_enum_table","Адресный диапазон таблицы enum переполнен");
         std::vector<std::byte> copied(bytes);
         if(bytes && !copy_memory(copied.data(),reinterpret_cast<void*>(data),bytes))
             throw HandlerError("invalid_enum_table","Таблица enum недоступна");
@@ -855,14 +863,13 @@ json GameAccess::selected_properties(void* object,const json& names) {
     json items=json::array();
     std::unordered_map<std::string,json> selected;
     auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);
-    int scanned=0;bool scan_truncated=false;
+    size_t scanned=0;bool scan_truncated=false;
     std::set<uintptr_t> visited_classes,visited_fields;
-    for(int depth=0;klass && depth<64 && selected.size()<names.size();
-        klass=read<uintptr_t>(klass+0x40),++depth) {
+    for(;klass && selected.size()<names.size();klass=read<uintptr_t>(klass+0x40)) {
         if(!visited_classes.insert(klass).second){scan_truncated=true;break;}
         auto field=read<uintptr_t>(klass+0x50);auto class_size=read<int32_t>(klass+0x58);
         for(;field && selected.size()<names.size();field=read<uintptr_t>(field+0x18)) {
-            if(scanned==4096 || !visited_fields.insert(field).second){scan_truncated=true;break;}
+            if(!visited_fields.insert(field).second){scan_truncated=true;break;}
             ++scanned;
             const auto field_name=name(read<uint64_t>(field+0x20));
             if(selected.contains(field_name) || std::find(names.begin(),names.end(),json(field_name))==names.end())continue;
@@ -879,7 +886,6 @@ json GameAccess::selected_properties(void* object,const json& names) {
                     value=result.at("value");if(result.contains("enum"))item["enum"]=result.at("enum");
                 } else value=property_value(reinterpret_cast<uintptr_t>(object)+offset,type,size,field);
                 if(value.is_null() && type!="ObjectProperty" && type!="ClassProperty")throw HandlerError("unsupported_property_type","Тип свойства не поддержан");
-                if(value.dump().size()>16384)throw HandlerError("property_value_too_large","Значение превышает предел поля 16 КиБ");
                 item["value"]=std::move(value);item["supported"]=true;
             } catch(const HandlerError& error) {
                 item["error"]={{"code",error.code()},{"message",error.what()}};
@@ -887,7 +893,6 @@ json GameAccess::selected_properties(void* object,const json& names) {
             selected.emplace(field_name,std::move(item));
         }
         if(scan_truncated)break;
-        if(depth==63 && selected.size()<names.size() && read<uintptr_t>(klass+0x40))scan_truncated=true;
     }
     bool partial=scan_truncated;
     for(const auto& requested:names) {
@@ -896,7 +901,7 @@ json GameAccess::selected_properties(void* object,const json& names) {
         if(found==selected.end()) {
             items.push_back({{"name",key},{"type",nullptr},{"supported",false},
                 {"error",{{"code",scan_truncated?"property_scan_truncated":"property_not_found"},
-                           {"message",scan_truncated?"Поиск свойства достиг лимита":"Свойство не найдено"}}}});
+                           {"message",scan_truncated?"Property chain contains a cycle":"Свойство не найдено"}}}});
             partial=true;
         } else {
             if(!found->second.at("supported").get<bool>())partial=true;
@@ -912,8 +917,8 @@ json GameAccess::snapshot(const json& targets) {
         {"thread_id",GetCurrentThreadId()},{"tick_count",ticks_.load()},
         {"consistency","single_tick_sequential"},{"objects",json::array()},
         {"partial",false},{"truncated",false},
-        {"limits",{{"objects",16},{"properties_per_object",32},{"scan_fields_per_object",4096},
-                   {"property_value_bytes",16384},{"snapshot_bytes",Observations::MaxSnapshotBytes}}}};
+        {"limits",{{"objects",nullptr},{"properties_per_object",nullptr},{"scan_fields_per_object",nullptr},
+                   {"property_value_bytes",nullptr},{"snapshot_bytes",nullptr}}}};
     for(const auto& target:targets) {
         const auto handle=target.at("handle").get<std::string>();
         json item={{"handle",handle},{"properties",json::array()}};
@@ -921,8 +926,6 @@ json GameAccess::snapshot(const json& targets) {
             auto object=resolve(handle);
             item["path"]=object_path(object);
             item["class"]=object_name(reinterpret_cast<void*>(read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10)));
-            if(item["path"].get_ref<const std::string&>().size()>8192)
-                throw HandlerError("object_identity_too_large","Путь объекта превышает предел 8 КиБ");
             const auto fields=selected_properties(object,target.at("properties"));
             resolve(handle);
             item["properties"]=fields.at("properties");
@@ -931,15 +934,8 @@ json GameAccess::snapshot(const json& targets) {
             if(fields.at("truncated").get<bool>())result["truncated"]=true;
         } catch(const HandlerError& error) {
             item["properties"]=json::array();
-            if(error.code()=="object_identity_too_large")item.erase("path");
             item["error"]={{"code",error.code()},{"message",error.what()}};
             result["partial"]=true;
-        }
-        if(result.dump().size()+item.dump().size()>Observations::MaxSnapshotBytes-4096) {
-            result["objects"].push_back({{"handle",handle},{"properties",json::array()},
-                {"error",{{"code","snapshot_too_large"},{"message","Снимок достиг предела 256 КиБ"}}}});
-            result["partial"]=true;result["truncated"]=true;
-            break;
         }
         result["objects"].push_back(std::move(item));
     }

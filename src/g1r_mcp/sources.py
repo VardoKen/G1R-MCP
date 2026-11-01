@@ -328,6 +328,26 @@ class SourceCatalog:
             raise
         return SourceFile(source_path, normalized, "game_script" if game_script else "example_script")
 
+    def _selected_source_files(self, relative_path: str | None) -> list[SourceFile]:
+        if relative_path is None:
+            return self._files()
+        if (not isinstance(relative_path, str) or not relative_path or "\\" in relative_path
+                or "\0" in relative_path or ":" in relative_path):
+            raise SourceError("unsafe_path", "Нужен относительный путь с прямыми разделителями")
+        path = PurePosixPath(relative_path)
+        parts = path.parts
+        if path.is_absolute() or any(part in (".", "..") for part in relative_path.split("/")):
+            raise SourceError("unsafe_path", "Абсолютный путь или выход за каталог исходников запрещён")
+        if not (parts[0] == "Script" or len(parts) >= 3 and parts[0] == "Examples" and parts[2] == "Script"):
+            raise SourceError("source_not_found", "Путь не относится к разрешённым исходникам AngelScript")
+        selected_path = self.root / path
+        selected = _check_path(selected_path, self.root, directory=selected_path.is_dir())
+        normalized = path.as_posix()
+        if selected.is_file() and path.suffix.casefold() == ".as":
+            return [self._source_file(relative_path)]
+        return [file for file in self._files() if file.relative == normalized
+                or selected.is_dir() and file.relative.startswith(normalized + "/")]
+
     def read_file_exact(self, relative_path: str) -> dict:
         """Прочитать полный UTF-8 исходник без изменения BOM, переводов строк и конца файла."""
         file = self._source_file(relative_path)
@@ -362,11 +382,12 @@ class SourceCatalog:
                           content_truncated=start_line > 1 or start_line - 1 + line_count < len(lines))
         return self._result([item], 1, 1, **item)
 
-    def list_types(self, query: str = "", limit: int = 50, offset: int = 0) -> dict:
+    def list_types(self, query: str = "", limit: int = 50, offset: int = 0,
+                   relative_path: str | None = None) -> dict:
         needle = _query(query, empty=True).casefold()
         _limit(limit)
         _offset(offset)
-        files = self._files()
+        files = self._selected_source_files(relative_path)
         items = []
         total = 0
         skipped = []
@@ -396,26 +417,7 @@ class SourceCatalog:
             raise SourceError("invalid_arguments", "Предел должен быть положительным целым числом")
         if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
             raise SourceError("invalid_arguments", "Смещение должно быть неотрицательным целым числом")
-        if relative_path is not None:
-            if (not isinstance(relative_path, str) or not relative_path or "\\" in relative_path
-                    or "\0" in relative_path or ":" in relative_path):
-                raise SourceError("unsafe_path", "Нужен относительный путь с прямыми разделителями")
-            path = PurePosixPath(relative_path)
-            parts = path.parts
-            if path.is_absolute() or any(part in (".", "..") for part in relative_path.split("/")):
-                raise SourceError("unsafe_path", "Абсолютный путь или выход за каталог исходников запрещён")
-            if not (parts[0] == "Script" or len(parts) >= 3 and parts[0] == "Examples" and parts[2] == "Script"):
-                raise SourceError("source_not_found", "Путь не относится к разрешённым исходникам AngelScript")
-            selected_path = self.root / path
-            selected = _check_path(selected_path, self.root, directory=selected_path.is_dir())
-            normalized = path.as_posix()
-            if selected.is_file() and path.suffix.casefold() == ".as":
-                files = [self._source_file(relative_path)]
-            else:
-                files = [file for file in self._files() if file.relative == normalized
-                         or selected.is_dir() and file.relative.startswith(normalized + "/")]
-        else:
-            files = self._files()
+        files = self._selected_source_files(relative_path)
         items = []
         skipped = []
         total = 0

@@ -81,8 +81,13 @@ int main() {
         require(contains_value(Integer{std::int64_t{-1}}, signed_entries), "Отрицательный перечислитель не найден");
         require(contains_value(Integer{std::numeric_limits<std::int64_t>::min()}, signed_entries), "Int64 MIN перечислитель не найден");
         require(!contains_value(Integer{std::numeric_limits<std::uint64_t>::max()}, signed_entries), "UINT64_MAX ошибочно совпал с -1");
-        const std::vector<Entry> oversized(g1r::enum_values::MaxEntries + 1);
-        rejects([&] { contains_value(Integer{std::int64_t{0}}, oversized); }, "enum_validation_unavailable");
+        std::vector<Entry> extended(4097);
+        for(std::size_t index=0;index<extended.size();++index)
+            extended[index]={static_cast<std::uint64_t>(index+1),static_cast<std::int64_t>(index)};
+        require(contains_value(Integer{std::int64_t{4096}}, extended), "Последнее объявленное значение выше прежнего предела не найдено");
+        require(contains_value(Integer{std::uint64_t{4096}}, extended), "Представимое unsigned значение выше прежнего предела не найдено");
+        require(!contains_value(Integer{std::int64_t{4097}}, extended), "Индекс за таблицей принят вместо объявленного числа");
+        require(!contains_value(Integer{std::numeric_limits<std::uint64_t>::max()}, extended), "Большая таблица допустила unsigned-to-signed wrap");
 
         std::cout << "enum_arguments: " << checks << " проверок прошли\n";
         return 0;

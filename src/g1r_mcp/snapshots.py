@@ -1,4 +1,4 @@
-"""Сравнение ограниченных копий снимков без обращения к игровой среде.
+"""Сравнение копий снимков без обращения к игровой среде.
 
 Переданные клиентом поля происхождения являются заявлениями клиента.
 Равенство выбранных значений не доказывает неизменность игрового мира.
@@ -8,12 +8,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-MAX_SNAPSHOT_BYTES = 1024 * 1024
-MAX_DIFF_BYTES = 1024 * 1024
-MAX_OBJECTS = 16
-MAX_PROPERTIES = 32
-MAX_ITEMS = 200
-MAX_OBJECT_INDEX = 4_000_000
+MAX_OBJECT_INDEX = 2**31 - 1
 ENUM_INTEGER_RANGES = {
     "IntProperty": (-(2**31), 2**31 - 1),
     "Int64Property": (-(2**63), 2**63 - 1),
@@ -24,7 +19,7 @@ ENUM_INTEGER_RANGES = {
 
 
 class SnapshotError(Exception):
-    """Некорректная или слишком большая копия снимка."""
+    """Некорректная копия снимка."""
 
     def __init__(self, code: str, message: str):
         super().__init__(message)
@@ -38,8 +33,8 @@ def _invalid(message: str) -> None:
 def _text(value: Any, label: str, *, optional: bool = False) -> None:
     if optional and value is None:
         return
-    if not isinstance(value, str) or not value or len(value) > 8192:
-        _invalid(f"{label}: требуется непустая строка до 8192 символов")
+    if not isinstance(value, str) or not value:
+        _invalid(f"{label}: требуется непустая строка")
 
 
 def _integer(value: Any, label: str, *, positive: bool = False) -> None:
@@ -51,8 +46,8 @@ def _error(value: Any) -> None:
     if not isinstance(value, dict) or set(value) != {"code", "message"}:
         _invalid("Ошибка объекта или свойства должна содержать code и message")
     _text(value["code"], "Код ошибки")
-    if not isinstance(value["message"], str) or len(value["message"]) > 8192:
-        _invalid("Сообщение ошибки должно быть строкой до 8192 символов")
+    if not isinstance(value["message"], str):
+        _invalid("Сообщение ошибки должно быть строкой")
 
 
 def _object_value(value: Any, session_id: str, property_type: str) -> None:
@@ -63,15 +58,11 @@ def _object_value(value: Any, session_id: str, property_type: str) -> None:
     if not isinstance(value, dict) or set(value) != expected:
         _invalid(f"{property_type} должен содержать null или точный дескриптор объекта")
     _text(value["handle"], f"Ссылка значения {property_type}")
-    if len(value["handle"].encode("utf-8")) > 80:
-        _invalid(f"Ссылка значения {property_type} превышает предел 80 байт")
     _integer(value["index"], f"Индекс значения {property_type}")
-    if value["index"] >= MAX_OBJECT_INDEX:
-        _invalid(f"Индекс значения {property_type} превышает предел реестра")
-    for key, bound in (("name", 4096), ("class", 4096), ("path", 8192)):
+    if value["index"] > MAX_OBJECT_INDEX:
+        _invalid(f"Индекс значения {property_type} не представим неотрицательным int32")
+    for key in ("name", "class", "path"):
         _text(value[key], f"{property_type}.{key}")
-        if len(value[key].encode("utf-8")) > bound:
-            _invalid(f"{property_type}.{key}: строка превышает предел {bound} байт")
     _text(value["session_id"], f"Сессия значения {property_type}")
     if value["session_id"] != session_id:
         _invalid(f"Дескриптор {property_type} принадлежит другой сессии снимка")
@@ -98,14 +89,14 @@ def _enum_metadata(metadata: Any, prop: dict[str, Any]) -> None:
         minimum, maximum = ENUM_INTEGER_RANGES[underlying]
         if type(prop.get("value")) is not int or not minimum <= prop["value"] <= maximum:
             _invalid("Числовое значение enum не соответствует базовому типу")
-    for key, bound in (("path", 8192), ("value_name", 4096), ("reason", 128)):
+    for key in ("path", "value_name", "reason"):
         if metadata[key] is not None:
             _text(metadata[key], f"enum.{key}")
-            if len(metadata[key].encode("utf-8")) > bound or "\0" in metadata[key]:
-                _invalid(f"enum.{key}: строка превышает предел или содержит NUL")
+            if "\0" in metadata[key]:
+                _invalid(f"enum.{key}: строка содержит NUL")
     count = metadata["matched_count"]
     _integer(count, "Число совпадений enum")
-    if count > 4096 or type(metadata["ambiguous"]) is not bool or metadata["ambiguous"] != (count > 1):
+    if type(metadata["ambiguous"]) is not bool or metadata["ambiguous"] != (count > 1):
         _invalid("Неверные сведения о совпадениях enum")
     status = metadata["name_status"]
     if not isinstance(status, str) or status not in {"matched", "not_found", "unavailable", "value_unrepresentable"}:
@@ -136,8 +127,7 @@ def _encoded_size(value: Any) -> int:
 def _snapshot(value: Any) -> dict[str, dict[str, Any]]:
     if not isinstance(value, dict):
         _invalid("Снимок должен быть JSON-объектом")
-    if _encoded_size(value) > MAX_SNAPSHOT_BYTES:
-        raise SnapshotError("snapshot_too_large", "Копия снимка превышает 1 МиБ")
+    _encoded_size(value)
     allowed = {"snapshot_id", "source", "session_id", "process_id", "thread_id", "tick_count",
                "consistency", "objects", "truncated", "partial", "limits"}
     required = allowed - {"source", "limits"}
@@ -160,10 +150,11 @@ def _snapshot(value: Any) -> dict[str, dict[str, Any]]:
         if not isinstance(limits, dict) or set(limits) != expected:
             _invalid("Неверный набор заявленных лимитов снимка")
         for key in expected:
-            _integer(limits[key], f"limits.{key}", positive=True)
+            if limits[key] is not None:
+                _integer(limits[key], f"limits.{key}", positive=True)
     objects = value["objects"]
-    if not isinstance(objects, list) or len(objects) > MAX_OBJECTS:
-        _invalid("Снимок допускает не более 16 выбранных объектов")
+    if not isinstance(objects, list):
+        _invalid("Выбранные объекты снимка должны быть списком")
     result: dict[str, dict[str, Any]] = {}
     for obj in objects:
         if not isinstance(obj, dict) or not obj.keys() <= {
@@ -185,8 +176,8 @@ def _snapshot(value: Any) -> dict[str, dict[str, Any]]:
             if key in obj and type(obj[key]) is not bool:
                 _invalid(f"Сведения объекта {key}: требуется логическое значение")
         properties = obj.get("properties", [] if "error" in obj else None)
-        if not isinstance(properties, list) or len(properties) > MAX_PROPERTIES:
-            _invalid("Объект допускает не более 32 выбранных свойств")
+        if not isinstance(properties, list):
+            _invalid("Выбранные свойства объекта должны быть списком")
         names: set[str] = set()
         for prop in properties:
             if not isinstance(prop, dict) or not prop.keys() <= {"name", "type", "supported", "value", "error", "enum"}:
@@ -228,8 +219,8 @@ def _snapshot(value: Any) -> dict[str, dict[str, Any]]:
 
 def compare_snapshots(before: dict[str, Any], after: dict[str, Any], limit: int = 100) -> dict[str, Any]:
     """Сравнить выбранные скалярные поля копий; не проверяет их игровое происхождение."""
-    if type(limit) is not int or not 1 <= limit <= MAX_ITEMS:
-        raise SnapshotError("invalid_limit", "Предел сравнения должен быть от 1 до 200")
+    if type(limit) is not int or limit < 1:
+        raise SnapshotError("invalid_limit", "Предел сравнения должен быть положительным целым числом")
     old = _snapshot(before)
     new = _snapshot(after)
     old_incomplete = sum(bool(obj.get("partial") or obj.get("truncated")) for obj in old.values())
@@ -339,17 +330,9 @@ def compare_snapshots(before: dict[str, Any], after: dict[str, Any], limit: int 
         not bool(result["value_changes"] or result["type_changes"])
         if result["coverage"]["complete"] else None
     )
-    for entry in entries[:limit]:
-        result["items"].append(entry)
-        if _encoded_size(result) > MAX_DIFF_BYTES:
-            result["items"].pop()
-            break
+    result["items"] = entries[:limit]
     remaining = limit - len(result["items"])
-    for annotation in annotations[:remaining]:
-        result["metadata_annotations"].append(annotation)
-        if _encoded_size(result) > MAX_DIFF_BYTES:
-            result["metadata_annotations"].pop()
-            break
+    result["metadata_annotations"] = annotations[:remaining]
     result["truncated"] = (len(result["items"]) < len(entries)
                            or len(result["metadata_annotations"]) < len(annotations))
     # Все вложенные значения ответа копируются: вызывающий код не получает

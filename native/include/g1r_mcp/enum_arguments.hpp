@@ -81,8 +81,6 @@ inline EncodedInteger encode_integer(std::string_view type, int element_size, co
 // Работа только с проверенной копией UEnum.Names. Имена, aliases и индексы не влияют на число.
 inline bool contains_value(const g1r::enum_values::Integer& value,
                            std::span<const g1r::enum_values::Entry> entries) {
-    if (entries.size() > g1r::enum_values::MaxEntries)
-        throw HandlerError("enum_validation_unavailable", "Число записей enum превышает предел проверки");
     std::int64_t signed_value{};
     if (!g1r::enum_values::label_value(value, signed_value)) return false;
     for (const auto& entry : entries) if (entry.value == signed_value) return true;

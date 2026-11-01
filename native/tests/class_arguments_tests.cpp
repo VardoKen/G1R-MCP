@@ -29,7 +29,11 @@ int main() {
         rejects("invalid_class_argument",[]{g1r_mcp::class_argument_handle(json(10));});
         rejects("invalid_class_argument",[]{g1r_mcp::class_argument_handle(json{{"handle","obj-1"},{"pointer",10}});});
         rejects("invalid_object_class",[]{g1r_mcp::compatible_class_argument(1,10,10,2,[](std::uintptr_t value){return value;});});
-        rejects("invalid_object_class",[]{g1r_mcp::compatible_class_argument(1,10,10,200,[](std::uintptr_t value){return value+1;});});
+        const auto long_parent=[](std::uintptr_t value){return value<200?value+1:std::uintptr_t{0};};
+        require(g1r_mcp::compatible_class_argument(1,10,10,200,long_parent),"Предок класса после 64 звеньев отклонён");
+        require(!g1r_mcp::compatible_class_argument(1,10,10,201,long_parent),"Отсутствующий предок принят в длинной цепочке классов");
+        rejects("invalid_object_class",[]{g1r_mcp::compatible_class_argument(1,10,10,201,
+            [](std::uintptr_t value){return value<200?value+1:std::uintptr_t{65};});});
         std::cout<<"Проверки ClassProperty пройдены\n";return 0;
     } catch(const std::exception& error) {std::cerr<<error.what()<<'\n';return 1;}
 }

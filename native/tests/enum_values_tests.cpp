@@ -51,8 +51,10 @@ int main() {
         rejects([] { table_byte_size(-1, 0, false); }, "negative count");
         rejects([] { table_byte_size(3, 2, true); }, "count above capacity");
         rejects([] { table_byte_size(1, 1, false); }, "missing data");
-        rejects([] { table_byte_size(4097, 4097, true); }, "entry limit");
-        rejects([] { table_byte_size(0, 0, false, 0); }, "zero limit");
+        require(table_byte_size(4097, 4097, true) == 4097 * sizeof(Entry), "entry count above old ceiling");
+        require(table_byte_size(std::numeric_limits<std::int32_t>::max(), std::numeric_limits<std::int32_t>::max(), true)
+                == static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()) * sizeof(Entry), "native int32 count range preserved");
+        rejects([] { table_byte_size(0, -1, false); }, "negative capacity");
         rejects([&] { decode_entries(std::as_bytes(std::span(original)), 3, 4); }, "extra copied bytes");
         rejects([&] { decode_entries(std::as_bytes(std::span(original)).first(8), 1, 1); }, "short entry bytes");
 
@@ -72,14 +74,31 @@ int main() {
         const auto invalid = find_label(Integer{std::int64_t{7}}, entries, [](auto) { return std::string("\xC0\xAF"); });
         require(invalid.status == "unavailable" && invalid.reason == "invalid_enum_label", "invalid utf8 rejected");
 
-        require(valid_label("Имя::値😀") && valid_label(std::string(MaxLabelBytes, 'a')), "valid unicode and exact size");
-        require(!valid_label("") && !valid_label(std::string(MaxLabelBytes + 1, 'a')), "label bounds");
+        const std::string long_label(4097, 'a');
+        require(valid_label("Имя::値😀") && valid_label(long_label), "valid unicode and label above old ceiling");
+        require(!valid_label(""), "empty label rejected");
         require(!valid_label(std::string("a\0b", 3)) && !valid_label("\xED\xA0\x80"), "NUL and surrogate rejected");
         require(!valid_label("\xF4\x90\x80\x80") && !valid_label("\xE2\x82") && !valid_label("\x80"), "unicode bounds and truncated encoding");
         const std::array<Entry, 2> flags{{{1, 1}, {2, 2}}};
         require(find_label(Integer{std::int64_t{3}}, flags, decoder).status == "not_found", "flags are not decomposed");
-        const std::vector<Entry> oversized(MaxEntries + 1);
-        rejects([&] { find_label(Integer{std::int64_t{0}}, oversized, decoder); }, "label search must be bounded");
+        std::vector<Entry> extended(4097);
+        for(std::size_t index=0;index<extended.size();++index)
+            extended[index]={static_cast<std::uint64_t>(index+1),static_cast<std::int64_t>(index)};
+        const auto extended_copy=decode_entries(std::as_bytes(std::span(extended)), 4097, 4097);
+        extended.back().value=-1;
+        int long_calls=0;
+        const auto extended_match=find_label(Integer{std::int64_t{4096}}, extended_copy, [&](std::uint64_t name) {
+            ++long_calls;require(name==4097,"label lookup did not reach last copied entry");return long_label;
+        });
+        require(extended_match.status=="matched" && extended_match.name==long_label
+                && extended_match.matched_count==1 && !extended_match.ambiguous && long_calls==1,
+                "last entry or long label was lost above old ceiling");
+        auto aliased=extended_copy;aliased.front().value=4096;
+        const auto extended_alias=find_label(Integer{std::int64_t{4096}},aliased,[&](auto name) {
+            require(name==1,"alias lookup changed first matching entry");return long_label;
+        });
+        require(extended_alias.status=="matched" && extended_alias.matched_count==2 && extended_alias.ambiguous,
+                "aliases lost beyond old entry ceiling");
         std::cout << "enum_values: " << checks << " проверок прошли\n";
         return 0;
     } catch (const std::exception& error) {

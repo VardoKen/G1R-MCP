@@ -23,8 +23,8 @@ def native_snapshot(*, session="fixture-session-1", value=True, partial=False, t
         "snapshot_id": f"snapshot-{tick}", "source": "live_native", "session_id": session,
         "process_id": 123, "thread_id": 456, "tick_count": tick,
         "consistency": "single_tick_sequential", "partial": partial, "truncated": False,
-        "limits": {"objects": 16, "properties_per_object": 32, "scan_fields_per_object": 4096,
-                   "property_value_bytes": 16384, "snapshot_bytes": 262144},
+        "limits": {"objects": None, "properties_per_object": None, "scan_fields_per_object": None,
+                   "property_value_bytes": None, "snapshot_bytes": None},
         "objects": [{"handle": "obj-1", "path": "/Script/Probe.Default__Probe", "class": "Probe",
                      "properties": properties, "partial": partial, "truncated": False}],
     }
@@ -35,7 +35,7 @@ def watch_metadata(*, session="fixture-session-1", state="running", reason="", n
     return {"watch_id": "watch-1", "session_id": session, "state": state, "reason": reason,
             "cleanup_complete": state != "running", "next_seq": next_seq,
             "last_seq": next_seq - 1, "oldest_seq": oldest_seq, "dropped_events": dropped,
-            "capacity": 2, "buffer_bytes": 1024, "max_buffer_bytes": 262144}
+            "capacity": 2, "buffer_bytes": 1024, "buffer_limit_bytes": None}
 
 
 class SessionNativeFixture:
@@ -44,6 +44,8 @@ class SessionNativeFixture:
     def __init__(self, steps):
         self.steps = steps
         self.requests = []
+        self.response_frame_lengths = []
+        self.response_sessions = []
         self.watch_client_owner = None
         self.connections = 0
         self.errors = []
@@ -117,6 +119,8 @@ class SessionNativeFixture:
                 else:
                     response.update(type="response", result=step["result"])
                 payload = json.dumps(response, ensure_ascii=False).encode("utf-8")
+                self.response_frame_lengths.append(len(payload))
+                self.response_sessions.append(response["session_id"])
                 frame = struct.pack(">I", len(payload)) + payload
                 self.stream.sendall(frame[:3])
                 self.stream.sendall(frame[3:15])
@@ -181,6 +185,61 @@ class MCPObservationTests(unittest.IsolatedAsyncioTestCase):
     def assert_fixture_errors(self, native):
         if native.errors:
             raise AssertionError(f"Ошибка native fixture: {native.errors[0]}") from native.errors[0]
+
+    async def test_large_full_snapshot_and_more_than_200_differences_share_native_connection(self):
+        baseline = native_snapshot()
+        baseline["objects"] = [{"handle": f"obj-{index:02d}", "path": f"/Game/Fixture.Probe_{index}",
+            "class": "Probe", "partial": False, "truncated": False,
+            "properties": [{"name": f"Caption_{number:02d}", "type": "StrProperty", "supported": True,
+                            "value": "Я" * 2048 + f"-{index}-{number}"} for number in range(33)]}
+            for index in range(17)]
+        changed = copy.deepcopy(baseline)
+        changed.update(snapshot_id="snapshot-43", tick_count=43)
+        for target in changed["objects"]:
+            for prop in target["properties"]:
+                prop["value"] += "!"
+        targets = [{"handle": target["handle"], "properties": [prop["name"] for prop in target["properties"]]}
+                   for target in baseline["objects"]]
+        self.assertGreater(len(json.dumps(baseline, ensure_ascii=False).encode("utf-8")), 1048576)
+        status = {"ready": True, "session_id": "fixture-session-1", "tick_count": 44}
+        steps = [{"op": "snapshot", "params": {"targets": targets}, "result": baseline},
+                 {"op": "snapshot", "params": {"targets": targets}, "result": changed},
+                 {"op": "status", "params": {}, "result": status}]
+        with tempfile.TemporaryDirectory() as directory, SessionNativeFixture(steps) as native:
+            root = Path(directory)
+            async with stdio_client(self.parameters(root, native.port)) as (incoming, outgoing):
+                async with ClientSession(incoming, outgoing) as client:
+                    await client.initialize()
+                    before = await self.call_ok(client, "g1r_snapshot", {"targets": targets}, baseline)
+                    after = await self.call_ok(client, "g1r_snapshot", {"targets": targets}, changed)
+                    self.assertEqual(len(before["objects"]), 17)
+                    self.assertTrue(all(len(target["properties"]) == 33 for target in before["objects"]))
+                    self.assertTrue(all(value is None for value in before["limits"].values()))
+                    self.assertFalse(before["truncated"])
+                    self.assertFalse(before["partial"])
+                    self.assertEqual(json.dumps(before, ensure_ascii=False).encode("utf-8"),
+                                     json.dumps(baseline, ensure_ascii=False).encode("utf-8"))
+                    copies = copy.deepcopy((before, after))
+                    difference = await client.call_tool("g1r_compare_snapshots", {"before": before, "after": after, "limit": 561})
+                    self.assertFalse(difference.is_error, difference.content)
+                    report = difference.structured_content
+                    self.assertEqual(report["value_changes"], 561)
+                    self.assertEqual(report["total_items"], 561)
+                    self.assertEqual(len(report["items"]), 561)
+                    self.assertFalse(report["truncated"])
+                    self.assertFalse(report["equal_selected_values"])
+                    self.assertTrue(report["coverage"]["complete"])
+                    self.assertGreater(len(json.dumps(report, ensure_ascii=False).encode("utf-8")), 1048576)
+                    self.assertEqual({(item["handle"], item["property"]) for item in report["items"]},
+                                     {(target["handle"], prop["name"]) for target in before["objects"] for prop in target["properties"]})
+                    self.assertEqual((before, after), copies)
+                    self.assertEqual(len(native.requests), 2)
+                    await self.call_ok(client, "g1r_native_status", {}, status)
+            self.assertEqual(native.connections, 1)
+            self.assertEqual([request["op"] for request in native.requests], ["snapshot", "snapshot", "status"])
+            self.assertEqual(len({request["id"] for request in native.requests}), 3)
+            self.assertTrue(all(length > 1048576 for length in native.response_frame_lengths[:2]))
+            self.assertEqual(native.response_sessions, ["fixture-session-1"] * 3)
 
     async def test_actual_snapshot_and_watch_schemas_routes_and_terminal_result(self):
         targets = [{"handle": "obj-1", "properties": ["Enabled", "Missing"]}]

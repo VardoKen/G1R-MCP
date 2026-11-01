@@ -5,6 +5,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 using nlohmann::json;
 using g1r_mcp::Observations;
@@ -199,7 +200,7 @@ void list_and_resume_without_restarting() {
     model.disconnect("connection-2");
 }
 
-void two_watches_and_byte_bounds() {
+void two_watches_and_scheduling() {
     Observations model;
     auto one=model.start("owner",params(100,128),snapshot(1),0,1).at("watch_id").get<std::string>();
     auto two=model.start("owner",params(100,128),snapshot(1),0,1).at("watch_id").get<std::string>();
@@ -211,12 +212,10 @@ void two_watches_and_byte_bounds() {
     model.stop("owner",query(one),12,4);
     model.pump(21,5,[&](const json&){++calls;return snapshot(4);});
     require(calls==3 && model.read("owner",query(two)).at("state")=="running","Stop одной работы затронул другую");
-    model.pump(31,6,[&](const json&){++calls;auto data=snapshot(4);data["objects"][0]["properties"][0]["value"]=std::string(300000,'a');return data;});
-    const auto failed=model.read("owner",query(two));
-    require(failed.at("state")=="failed" && failed.at("reason")=="event_too_large","Переполнение байтов не завершило работу");
-    require(failed.at("buffer_bytes").get<std::size_t>()<=Observations::MaxBufferBytes,"Буфер превысил байтовый предел");
+    model.pump(31,6,[&](const json&){++calls;return snapshot(5);});
+    require(model.read("owner",query(two)).at("state")=="running","Чтение второй работы завершило наблюдение");
     model.pump(90,7,[&](const json&){++calls;return snapshot(9);});
-    require(calls==4,"Чтение после byte failure");
+    require(calls==5,"Активная работа перестала получать чтения");
 }
 
 void invalid_parameters_and_capacity() {
@@ -235,43 +234,150 @@ void invalid_parameters_and_capacity() {
     error("invalid_snapshot_params",[&]{Observations::validate_targets(json::array({extra}));});
     error("invalid_snapshot_params",[&]{Observations::validate_targets(json::array({target,target}));});
     auto long_handle=target;long_handle["handle"]=std::string(81,'x');
-    error("invalid_snapshot_params",[&]{Observations::validate_targets(json::array({long_handle}));});
+    long_handle["properties"]={std::string(257,'p')};
+    Observations::validate_targets(json::array({long_handle}));
+    auto empty=target;empty["handle"]="";
+    error("invalid_snapshot_params",[&]{Observations::validate_targets(json::array({empty}));});
+    empty=target;empty["properties"]={""};
+    error("invalid_snapshot_params",[&]{Observations::validate_targets(json::array({empty}));});
     auto non_string=target;non_string["properties"]={1};
     error("invalid_snapshot_params",[&]{Observations::validate_targets(json::array({non_string}));});
-    auto too_many=target;too_many["properties"]=json::array();
-    for(int i=0;i<33;++i)too_many["properties"].push_back(std::to_string(i));
-    error("invalid_snapshot_params",[&]{Observations::validate_targets(json::array({too_many}));});
-    for(std::size_t i=0;i<Observations::MaxWatches;++i)model.start("owner",params(),snapshot(1),0,1);
-    error("watch_limit",[&]{model.start("owner",params(),snapshot(1),0,1);});
-    error("invalid_watch_params",[&]{model.read("owner",query("watch-1",99));});
+    bad=params();bad["duration_ms"]=0;
+    error("invalid_watch_params",[&]{model.start("owner",bad,snapshot(1),0,1);});
+    bad=params();bad["capacity"]=0;
+    error("invalid_watch_params",[&]{model.start("owner",bad,snapshot(1),0,1);});
+    bad=params();bad["capacity"]=-1;
+    error("invalid_watch_params",[&]{model.start("owner",bad,snapshot(1),0,1);});
+    const auto id=model.start("owner",params(),snapshot(1),0,1).at("watch_id").get<std::string>();
+    error("invalid_watch_params",[&]{model.read("owner",query(id,99));});
+    error("invalid_watch_params",[&]{model.read("owner",query(id,0,0));});
+    error("unknown_watch",[&]{model.read("owner",query(std::string(81,'x')));});
+    error("invalid_watch_params",[&]{model.read("owner",query(""));});
     model.disconnect("owner");
-    require(model.size()==0,"Не очищены записи после лимита");
+    require(model.size()==0,"Не очищены записи после проверки параметров");
 }
 
-void copied_values_byte_drop_and_no_catchup() {
+void targets_and_watch_counts_follow_the_request() {
+    json targets=json::array();
+    for(int object=0;object<17;++object) {
+        json properties=json::array();
+        for(int property=0;property<33;++property)properties.push_back("Property"+std::to_string(property));
+        targets.push_back({{"handle","obj-"+std::to_string(object)},{"properties",std::move(properties)}});
+    }
+    Observations::validate_targets(targets);
+    auto duplicate=targets;duplicate[16]=duplicate[0];
+    error("invalid_snapshot_params",[&]{Observations::validate_targets(duplicate);});
+    duplicate=targets;duplicate[16]["properties"][32]=duplicate[16]["properties"][0];
+    error("invalid_snapshot_params",[&]{Observations::validate_targets(duplicate);});
+    Observations model;
+    std::vector<std::string> ids;
+    for(int i=0;i<9;++i)ids.push_back(model.start("owner",params(),snapshot(i),0,1).at("watch_id").get<std::string>());
+    require(model.size()==9 && model.list("owner","owner").at("items").size()==9,"Число наблюдений ограничено прежним пределом");
+    int calls=0;
+    for(int i=0;i<9;++i)model.pump(10,i+2,[&](const json&){++calls;return snapshot(20);});
+    require(calls==9,"Не все запрошенные наблюдения получили due чтение");
+    for(const auto& id:ids)require(model.read("owner",query(id)).at("last_seq")==2,"Потеряно событие одного из наблюдений");
+    model.disconnect("owner");
+    require(model.size()==0,"Disconnect оставил записи сверх прежнего предела");
+}
+
+void copied_large_values_and_no_catchup() {
     Observations model;
     auto baseline=snapshot(1);
-    const auto id=model.start("owner",params(1000,128),baseline,0,1).at("watch_id").get<std::string>();
-    baseline["objects"][0]["properties"][0]["value"]=999;
+    baseline["objects"][0]["properties"][0]["value"]=std::string(300000,'a');
+    require(baseline.dump().size()>256*1024,"Fixture не пересёк прежний предел снимка");
+    const auto id=model.start("owner",params(1000,4),baseline,0,1).at("watch_id").get<std::string>();
+    baseline["objects"][0]["properties"][0]["value"]=nullptr;
     require(model.read("owner",query(id)).at("events")[0].at("snapshot").at("objects")[0]
-              .at("properties")[0].at("value")==1,"Baseline не является независимой копией");
+              .at("properties")[0].at("value")==std::string(300000,'a'),"Большой baseline не является независимой полной копией");
     int calls=0;
-    for(int at=100;at<=400;at+=100) {
+    for(int at=100;at<=200;at+=100) {
         model.pump(at,at,[&](const json&) {
             ++calls;auto data=snapshot(1);
-            data["objects"][0]["properties"][0]["value"]=std::string(100000,static_cast<char>('a'+calls));
+            data["objects"][0]["properties"][0]["value"]=std::string(300000,static_cast<char>('a'+calls));
             return data;
         });
         model.pump(at,at,[&](const json&){++calls;return snapshot(999);});
     }
-    require(calls==4,"Sampling догонял пропущенные интервалы или прочёл дважды за один срок");
+    require(calls==2,"Sampling догонял пропущенные интервалы или прочёл дважды за один срок");
     const auto read=model.read("owner",query(id));
-    require(read.at("state")=="running" && read.at("dropped_events").get<int>()>0,
-            "Байтовый предел не удалил старые обычные события");
-    require(read.at("buffer_bytes").get<std::size_t>()<=Observations::MaxBufferBytes,
-            "Несколько обычных событий превысили предел буфера");
-    require(read.at("gap")==true && read.at("oldest_seq").get<int>()>1,"Не сообщена байтовая потеря начала");
+    require(read.at("state")=="running" && read.at("dropped_events")==0 && read.at("events").size()==3,
+            "Большие события завершили наблюдение или вытеснились до заполнения запрошенной capacity");
+    require(read.at("gap")==false && read.at("truncated")==false && read.at("cursor")==3
+            && read.at("oldest_seq")==1,"Большой read потерял начало или ограничен прежним байтовым пределом");
+    std::size_t bytes=0;
+    for(std::size_t index=0;index<3;++index) {
+        const auto& event=read.at("events").at(index);
+        bytes+=event.dump().size();
+        require(event.at("snapshot").at("objects")[0].at("properties")[0].at("value")
+                ==std::string(300000,static_cast<char>('a'+index)),"Большое событие не сохранилось полностью");
+    }
+    require(read.at("buffer_bytes")==bytes && bytes>256*1024 && read.at("buffer_limit_bytes").is_null(),
+            "Учёт байтов больших событий неверен или metadata рекламирует отсутствующий предел");
+    const auto paged=model.read("owner",query(id,0,1));
+    require(paged.at("events").size()==1 && paged.at("cursor")==1 && paged.at("truncated")==true,
+            "Большой read проигнорировал явно запрошенный limit");
+    const auto tail=model.read("owner",query(id,1));
+    require(tail.at("events").size()==2 && tail.at("cursor")==3 && tail.at("truncated")==false,
+            "Cursor не позволяет получить оставшиеся большие события");
     model.disconnect("owner");
+}
+
+void requested_capacity_and_read_limit_above_old_maxima() {
+    Observations model;
+    auto requested=params(1000,129);requested["interval_ms"]=1;
+    const auto id=model.start("owner",requested,snapshot(0),0,1).at("watch_id").get<std::string>();
+    for(int at=1;at<=128;++at)model.pump(at,at+1,[&](const json&){return snapshot(at);});
+    const auto first=model.read("owner",query(id,0,101));
+    require(first.at("capacity")==129 && first.at("events").size()==101 && first.at("truncated")==true
+            && first.at("cursor")==101 && first.at("dropped_events")==0,"Запрошенные capacity 129 или limit 101 ограничены прежними максимумами");
+    const auto remaining=model.read("owner",query(id,101,101));
+    require(remaining.at("events").size()==28 && remaining.at("cursor")==129 && remaining.at("truncated")==false,
+            "Пагинация сверх прежнего максимума потеряла события");
+    model.pump(129,130,[&](const json&){return snapshot(129);});
+    const auto full=model.read("owner",query(id,0,129));
+    require(full.at("events").size()==129 && full.at("dropped_events")==1 && full.at("gap")==true
+            && full.at("oldest_seq")==2 && full.at("cursor")==130,"Вытеснение больше не следует запрошенной capacity");
+}
+
+void requested_timing_above_old_maxima() {
+    Observations model;
+    auto requested=params(600002);requested["interval_ms"]=60001;
+    const auto id=model.start("owner",requested,snapshot(1),0,1).at("watch_id").get<std::string>();
+    int calls=0;
+    model.pump(60000,2,[&](const json&){++calls;return snapshot(2);});
+    require(calls==0,"Длинный interval заменён прежним максимумом");
+    model.pump(60001,3,[&](const json&){++calls;return snapshot(2);});
+    model.pump(600001,4,[&](const json&){++calls;return snapshot(3);});
+    require(calls==2 && model.read("owner",query(id)).at("state")=="running","Длинная duration завершилась на прежнем максимуме");
+    model.pump(600002,5,[&](const json&){++calls;return snapshot(4);});
+    require(calls==2 && model.read("owner",query(id)).at("state")=="completed","Запрошенный срок не завершил наблюдение без дополнительного чтения");
+}
+
+void timing_and_count_native_representability() {
+    constexpr auto maximum=std::numeric_limits<std::uint64_t>::max();
+    Observations model;
+    auto requested=params();requested["duration_ms"]=std::uint64_t{5};requested["interval_ms"]=std::uint64_t{3};
+    requested["capacity"]=std::numeric_limits<std::size_t>::max();
+    const auto id=model.start("owner",requested,snapshot(1),maximum-5,1).at("watch_id").get<std::string>();
+    int calls=0;
+    model.pump(maximum-3,2,[&](const json&){++calls;return snapshot(2);});
+    require(calls==0,"Срок первой выборки переполнился");
+    model.pump(maximum-2,3,[&](const json&){++calls;return snapshot(2);});
+    model.pump(maximum-1,4,[&](const json&){++calls;return snapshot(3);});
+    require(calls==1 && model.read("owner",{{"watch_id",id},{"after_seq",0},{"limit",std::numeric_limits<std::size_t>::max()}}).at("events").size()==2,
+            "Следующая выборка переполнилась или представимые capacity/limit отклонены");
+    model.pump(maximum,5,[&](const json&){++calls;return snapshot(4);});
+    require(calls==1 && model.read("owner",query(id)).at("state")=="completed","Представимый deadline не завершил наблюдение");
+    auto overflowing=requested;overflowing["duration_ms"]=std::uint64_t{6};
+    error("invalid_watch_params",[&]{model.start("owner",overflowing,snapshot(1),maximum-5,1);});
+    error("invalid_watch_params",[&]{model.start("owner",requested,snapshot(1),maximum,1);});
+    requested["interval_ms"]=maximum;
+    const auto no_sample=model.start("owner",requested,snapshot(1),maximum-5,6).at("watch_id").get<std::string>();
+    model.pump(maximum-1,7,[&](const json&){++calls;return snapshot(5);});
+    model.pump(maximum,8,[&](const json&){++calls;return snapshot(6);});
+    require(calls==1 && model.read("owner",query(no_sample)).at("state")=="completed",
+            "Представимый interval длиннее срока переполнился или вызвал лишнюю выборку");
 }
 
 void scalar_argument_boundaries() {
@@ -330,7 +436,11 @@ void object_argument_boundaries_and_inheritance() {
     require(g1r_mcp::compatible_object_class(3,1,parent),"Наследник не принят");
     require(!g1r_mcp::compatible_object_class(1,3,parent),"Базовый класс принят вместо наследника");
     error("invalid_object_class",[]{g1r_mcp::compatible_object_class(1,2,[](std::uintptr_t){return std::uintptr_t{1};});});
-    error("invalid_object_class",[]{g1r_mcp::compatible_object_class(1,200,[](std::uintptr_t c){return c+1;});});
+    auto long_parent=[](std::uintptr_t klass){return klass<200?klass+1:std::uintptr_t{0};};
+    require(g1r_mcp::compatible_object_class(1,200,long_parent),"Предок после 64 звеньев не принят");
+    require(!g1r_mcp::compatible_object_class(1,201,long_parent),"Отсутствующий предок принят в длинной цепочке");
+    error("invalid_object_class",[]{g1r_mcp::compatible_object_class(1,201,
+        [](std::uintptr_t klass){return klass<200?klass+1:std::uintptr_t{65};});});
     error("invalid_object_class",[]{g1r_mcp::compatible_object_class(0,1,[](std::uintptr_t){return std::uintptr_t{0};});});
     Observations model;
     auto data=snapshot(1);
@@ -351,9 +461,13 @@ int main() {
         expiry_invalidation_and_disconnect();
         shared_connection_client_ownership();
         list_and_resume_without_restarting();
-        two_watches_and_byte_bounds();
+        two_watches_and_scheduling();
         invalid_parameters_and_capacity();
-        copied_values_byte_drop_and_no_catchup();
+        targets_and_watch_counts_follow_the_request();
+        copied_large_values_and_no_catchup();
+        requested_capacity_and_read_limit_above_old_maxima();
+        requested_timing_above_old_maxima();
+        timing_and_count_native_representability();
         scalar_argument_boundaries();
         object_argument_boundaries_and_inheritance();
         std::cout << "Проверки наблюдений пройдены\n";

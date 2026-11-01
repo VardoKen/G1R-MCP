@@ -409,6 +409,11 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn("g1r_development_key", names)
                     source_tools = {"g1r_source_identity", "g1r_verify_source_game", "g1r_list_source_functions"}
                     self.assertTrue(source_tools.issubset(names))
+                    type_schema = next(tool for tool in tools if tool.name == "g1r_list_source_types").input_schema
+                    relative_schema = type_schema["properties"]["relative_path"]
+                    self.assertEqual({item["type"] for item in relative_schema["anyOf"]}, {"string", "null"})
+                    self.assertIn("default", relative_schema)
+                    self.assertIsNone(relative_schema["default"])
                     mutations = {"g1r_invoke", "g1r_native_enable", "g1r_create_package",
                                  "g1r_write_package_file", "g1r_watch_start", "g1r_watch_stop", "g1r_watch_forget",
                                  "g1r_watch_resume",
@@ -450,6 +455,13 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                     types = await client.call_tool("g1r_list_source_types", {"query": "UExample"})
                     self.assertFalse(types.is_error)
                     self.assertEqual(len(types.structured_content["items"]), 1)
+                    scoped_types = await client.call_tool("g1r_list_source_types", {
+                        "query": "UExample", "limit": 50, "offset": 0,
+                        "relative_path": "Script/Example.as",
+                    })
+                    self.assertFalse(scoped_types.is_error)
+                    self.assertEqual(scoped_types.structured_content["items"], types.structured_content["items"])
+                    self.assertEqual(scoped_types.structured_content["scanned_files"], 1)
                     validation = await client.call_tool("g1r_validate_package", {"relative_path": "Example"})
                     self.assertFalse(validation.is_error)
                     self.assertTrue(validation.structured_content["valid_structure"])

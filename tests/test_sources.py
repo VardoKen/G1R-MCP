@@ -297,6 +297,47 @@ class Outside {}
         self.assertEqual(after[0]["file_sha256"], hashlib.sha256(replacement).hexdigest())
         self.assertNotEqual(before[0]["file_sha256"], after[0]["file_sha256"])
 
+    def test_type_file_and_subtree_scopes_precede_pagination_and_preserve_global_items(self):
+        self.write("Script/A.as", "class USharedOutside {}\n")
+        selected_path = "Script/Sub/A.as"
+        self.write(selected_path, b"\xef\xbb\xbfnamespace Local {\r\n"
+                   b"class USharedFirst : UBase {}\r\nstruct USharedSecond {}\r\n"
+                   b"enum USharedThird { Ready }\r\n}\r\n")
+        self.write("Script/Sub/B.as", "class USharedSibling {}\n")
+        catalog = self.catalog()
+        global_result = catalog.list_types("Shared")
+        self.assertEqual(global_result["scanned_files"], 3)
+        self.assertEqual(global_result["total_matches"], 5)
+        file_items = [item for item in global_result["items"] if item["path"] == selected_path]
+        subtree_items = [item for item in global_result["items"] if item["path"].startswith("Script/Sub/")]
+
+        with patch.object(catalog, "_files", side_effect=AssertionError("Точный файл не обходит inventory")):
+            first = catalog.list_types("Shared", 2, 0, relative_path=selected_path)
+            second = catalog.list_types("Shared", 2, first["next_offset"], relative_path=selected_path)
+            eof = catalog.list_types("Shared", 2, len(file_items), relative_path=selected_path)
+        self.assertEqual(first["items"], file_items[:2])
+        self.assertEqual(second["items"], file_items[2:])
+        self.assertEqual(first["next_offset"], 2)
+        self.assertTrue(first["has_more"])
+        self.assertIsNone(second["next_offset"])
+        self.assertFalse(second["has_more"])
+        self.assertEqual(eof["items"], [])
+        self.assertIsNone(eof["next_offset"])
+        for page in (first, second, eof):
+            self.assertEqual(page["scanned_files"], 1)
+            self.assertEqual(page["total_matches"], len(file_items))
+            self.assertTrue(page["scan_complete"])
+
+        first_subtree = catalog.list_types("Shared", 2, 0, relative_path="Script/Sub")
+        second_subtree = catalog.list_types("Shared", 2, first_subtree["next_offset"], relative_path="Script/Sub")
+        self.assertEqual(first_subtree["items"] + second_subtree["items"], subtree_items)
+        self.assertEqual(first_subtree["next_offset"], 2)
+        self.assertIsNone(second_subtree["next_offset"])
+        for page in (first_subtree, second_subtree):
+            self.assertEqual(page["scanned_files"], 2)
+            self.assertEqual(page["total_matches"], len(subtree_items))
+            self.assertTrue(page["scan_complete"])
+
     def test_invalid_arguments_and_empty_source_do_not_fake_success(self):
         with self.assertRaises(SourceError) as captured:
             self.catalog().search_files("x")

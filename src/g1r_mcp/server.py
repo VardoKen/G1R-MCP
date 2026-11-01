@@ -477,10 +477,11 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             raise _tool_failure(error) from None
 
     @server.tool(annotations=read_only)
-    def g1r_list_source_types(query: str = "", limit: int = 50, offset: int = 0) -> dict[str, Any]:
-        """Найти исходные объявления class/struct/enum, базовые типы, строки и SHA-256; это лексические данные."""
+    def g1r_list_source_types(query: str = "", limit: int = 50, offset: int = 0,
+                              relative_path: str | None = None) -> dict[str, Any]:
+        """Найти объявления class/struct/enum глобально или в выбранном .as/каталоге; данные лексические."""
         try:
-            return sources.list_types(query, limit, offset)
+            return sources.list_types(query, limit, offset, relative_path=relative_path)
         except SourceError as error:
             raise _tool_failure(error) from None
 
@@ -787,13 +788,13 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_snapshot(targets: list[dict[str, Any]]) -> dict[str, Any]:
-        """Скопировать до 16 targets={handle, properties:[имена]} на одном Tick; это последовательные чтения."""
+        """Скопировать targets={handle, properties:[имена]} на одном Tick; это последовательные чтения."""
         return native_request("snapshot", {"targets": targets})
 
     @server.tool(annotations=read_only)
     def g1r_compare_snapshots(before: dict[str, Any], after: dict[str, Any],
                               limit: int = 100) -> dict[str, Any]:
-        """Сравнить ограниченные копии; исходный runtime и происхождение клиентских данных не проверяет."""
+        """Сравнить копии с выбранным limit; исходный runtime и происхождение клиентских данных не проверяет."""
         try:
             return compare_snapshots(before, after, limit)
         except SnapshotError as error:

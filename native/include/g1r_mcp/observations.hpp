@@ -16,10 +16,6 @@ class Observations {
 public:
     using Json = nlohmann::json;
     using Reader = std::function<Json(const Json& targets)>;
-    static constexpr std::size_t MaxWatches = 8;
-    static constexpr std::size_t MaxBufferBytes = 256 * 1024;
-    static constexpr std::size_t MaxSnapshotBytes = 256 * 1024;
-
     static void validate_targets(const Json& targets);
     Json start(const std::string& owner, const Json& params, const Json& baseline,
                std::uint64_t now_ms, std::uint64_t tick);

@@ -1,11 +1,12 @@
 """Проверки семантики сравнения выбранных копий и ограничений JSON."""
 import copy
+import json
 from pathlib import Path
 import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from g1r_mcp.snapshots import MAX_SNAPSHOT_BYTES, SnapshotError, compare_snapshots
+from g1r_mcp.snapshots import SnapshotError, compare_snapshots
 
 
 def prop(name="Enabled", value=True, kind="BoolProperty"):
@@ -145,10 +146,26 @@ class SnapshotComparisonTests(unittest.TestCase):
         result = compare_snapshots(before, after, limit=1)
         self.assertEqual((len(result["items"]), result["total_items"], result["value_changes"]), (1, 2, 2))
         self.assertTrue(result["truncated"])
-        for limit in (0, 201, True, 1.5):
+        for limit in (0, -1, True, 1.5):
             with self.subTest(limit=limit), self.assertRaises(SnapshotError) as failure:
                 compare_snapshots(before, after, limit)
             self.assertEqual(failure.exception.code, "invalid_limit")
+
+    def test_requested_result_limits_above_two_hundred_preserve_exact_changes(self):
+        before = snapshot([prop(f"P{index:03}", index, "IntProperty") for index in range(205)])
+        after = snapshot([prop(f"P{index:03}", index + 1, "IntProperty") for index in range(205)])
+        expected = [{"kind": "value_changed", "handle": "obj-1", "property": f"P{index:03}",
+                     "before": index, "after": index + 1} for index in range(205)]
+        for limit in (201, 205):
+            with self.subTest(limit=limit):
+                result = compare_snapshots(before, after, limit=limit)
+                self.assertEqual(result["items"], expected[:limit])
+                self.assertEqual(result["total_items"], 205)
+                self.assertEqual(result["value_changes"], 205)
+                self.assertEqual(result["truncated"], limit < 205)
+        default = compare_snapshots(before, after)
+        self.assertEqual(default["items"], expected[:100])
+        self.assertTrue(default["truncated"])
 
     def test_duplicate_handles_names_and_invalid_shapes_are_rejected(self):
         candidate = snapshot()
@@ -173,29 +190,41 @@ class SnapshotComparisonTests(unittest.TestCase):
             with self.subTest(value=repr(value)):
                 self.assert_invalid(snapshot([prop(value=value)]))
 
-    def test_object_property_and_serialized_input_bounds(self):
-        candidate = snapshot()
-        candidate["objects"] = []
-        for index in range(16):
-            candidate["objects"].append(snapshot(handle=f"obj-{index}")["objects"][0])
-        self.assertTrue(compare_snapshots(candidate, candidate)["equal_selected_values"])
-        candidate["objects"].append(snapshot(handle="obj-16")["objects"][0])
-        self.assert_invalid(candidate)
-        candidate = snapshot([prop(f"P{i}") for i in range(32)])
-        self.assertTrue(compare_snapshots(candidate, candidate)["equal_selected_values"])
-        candidate["objects"][0]["properties"].append(prop("P32"))
-        self.assert_invalid(candidate)
-        self.assert_invalid(snapshot([prop(value="x" * MAX_SNAPSHOT_BYTES, kind="StrProperty")]),
-                            "snapshot_too_large")
+    def test_large_snapshot_preserves_seventeen_objects_thirty_three_properties_and_full_text(self):
+        before = snapshot()
+        before["objects"] = [snapshot([prop(f"P{index:02}", index, "IntProperty") for index in range(33)],
+                                      handle=f"obj-{object_index:02}")["objects"][0]
+                             for object_index in range(17)]
+        text = "Мод 🐉\r\n" * 100000
+        before["objects"][0]["properties"][-1] = prop("P32", text, "StrProperty")
+        before["limits"] = dict.fromkeys(("objects", "properties_per_object", "scan_fields_per_object",
+                                          "property_value_bytes", "snapshot_bytes"))
+        self.assertGreater(len(json.dumps(before, ensure_ascii=False).encode("utf-8")), 1024 * 1024)
+        after = copy.deepcopy(before)
+        after["objects"][0]["properties"][-1]["value"] = text + "конец"
+        after["objects"][-1]["properties"][-1]["value"] = 99
+        result = compare_snapshots(before, after)
+        self.assertEqual(result["items"], [
+            {"kind": "value_changed", "handle": "obj-00", "property": "P32", "before": text, "after": text + "конец"},
+            {"kind": "value_changed", "handle": "obj-16", "property": "P32", "before": 32, "after": 99},
+        ])
+        self.assertEqual(result["coverage"]["before_targets"], 17)
+        self.assertEqual(result["coverage"]["after_targets"], 17)
+        self.assertEqual(result["total_items"], 2)
+        self.assertFalse(result["truncated"])
+        self.assertTrue(result["coverage"]["complete"])
+        self.assertEqual(before["objects"][0]["properties"][-1]["value"], text)
 
-    def test_large_diff_respects_byte_bound_without_losing_counts(self):
+    def test_large_diff_preserves_full_values_without_losing_counts(self):
         before = snapshot([prop(value="a" * 600000, kind="StrProperty")])
         after = snapshot([prop(value="b" * 600000, kind="StrProperty")])
         result = compare_snapshots(before, after)
         self.assertEqual(result["value_changes"], 1)
         self.assertEqual(result["total_items"], 1)
-        self.assertEqual(result["items"], [])
-        self.assertTrue(result["truncated"])
+        self.assertEqual(result["items"], [{"kind": "value_changed", "handle": "obj-1", "property": "Enabled",
+                                          "before": "a" * 600000, "after": "b" * 600000}])
+        self.assertGreater(len(json.dumps(result).encode("utf-8")), 1024 * 1024)
+        self.assertFalse(result["truncated"])
 
     def test_actual_native_limits_object_flags_and_null_missing_type(self):
         before, after = snapshot(), snapshot()
@@ -228,6 +257,11 @@ class SnapshotComparisonTests(unittest.TestCase):
             "objects": 16, "properties_per_object": 32, "scan_fields_per_object": 4096,
             "property_value_bytes": 16384, "snapshot_bytes": 262144,
         }
+        for selected_limits in (dict.fromkeys(limits), {**limits, "objects": None, "snapshot_bytes": None}):
+            candidate = snapshot()
+            candidate["limits"] = selected_limits
+            with self.subTest(limits=selected_limits):
+                self.assertTrue(compare_snapshots(candidate, candidate)["equal_selected_values"])
         for key, value in (("objects", True), ("snapshot_bytes", 0), ("other", 1)):
             candidate = snapshot()
             candidate["limits"] = {**limits, key: value}
@@ -280,9 +314,7 @@ class SnapshotComparisonTests(unittest.TestCase):
     def test_reference_descriptor_sessions_and_shape_are_validated(self):
         reference = object_reference()
         for key, changed in (("session_id", "session-2"), ("index", True), ("index", -1),
-                             ("index", 4_000_000), ("handle", ""), ("handle", "h" * 81),
-                             ("handle", "ж" * 41), ("name", "n" * 4097),
-                             ("class", "c" * 4097), ("path", "p" * 8193), ("name", "ж" * 2049)):
+                             ("index", 2**31), ("handle", ""), ("name", None), ("class", 123), ("path", "")):
             value = {**reference, key: changed}
             with self.subTest(key=key, value=repr(changed)[:30]):
                 self.assert_invalid(snapshot([prop("Target", value, "ObjectProperty")]))
@@ -292,14 +324,40 @@ class SnapshotComparisonTests(unittest.TestCase):
         self.assert_invalid(snapshot([prop("Target", value, "ObjectProperty")]))
         self.assert_invalid(snapshot([prop("Target", reference, "StructProperty")]))
 
-    def test_unicode_object_names_use_fname_compatible_byte_limits(self):
-        value = {**object_reference(), "name": "ж" * 600, "class": "名" * 1000}
-        candidate = snapshot([prop("Target", value, "ObjectProperty")])
-        self.assertTrue(compare_snapshots(candidate, candidate)["equal_selected_values"])
-        value = {**object_reference(), "handle": "h" * 80, "name": "n" * 4096,
-                 "class": "c" * 4096, "path": "p" * 8192}
-        candidate = snapshot([prop("Target", value, "ObjectProperty")])
-        self.assertTrue(compare_snapshots(candidate, candidate)["equal_selected_values"])
+    def test_long_reference_descriptors_preserve_full_identity_and_int32_indices(self):
+        value = {**object_reference(), "handle": "ссылка" * 1000, "index": 4_000_001,
+                 "name": "ж" * 10000, "class": "名" * 10000, "path": "/Script/" + "Путь" * 5000,
+                 "session_id": "сеанс" * 2000}
+        for index in (4_000_001, 2**31 - 1):
+            for property_type in ("ObjectProperty", "ClassProperty"):
+                value["index"] = index
+                before = snapshot([prop("Target", None, property_type)], handle="объект" * 2000)
+                before.update(session_id=value["session_id"], snapshot_id="снимок" * 2000)
+                before["objects"][0].update(path="путь" * 3000, **{"class": "класс" * 3000})
+                after = copy.deepcopy(before)
+                after["objects"][0]["properties"][0]["value"] = copy.deepcopy(value)
+                with self.subTest(index=index, property_type=property_type):
+                    result = compare_snapshots(before, after)
+                    self.assertEqual(result["items"][0]["after"], value)
+                    self.assertEqual(result["value_changes"], 1)
+                    self.assertEqual(result["unknown_count"], 0)
+                    self.assertFalse(result["truncated"])
+                    result["items"][0]["after"]["name"] = "изменённая копия"
+                    self.assertEqual(after["objects"][0]["properties"][0]["value"]["name"], value["name"])
+
+    def test_long_object_and_property_errors_preserve_detached_messages(self):
+        message = "Ошибка 🐉\r\n" * 3000
+        error = {"code": "код" * 3000, "message": message}
+        before = snapshot([prop("Поле" * 3000)])
+        after = snapshot([{"name": "Поле" * 3000, "type": None, "supported": False, "error": error}])
+        result = compare_snapshots(before, after)
+        self.assertEqual(result["items"][0]["after_error"], error)
+        result["items"][0]["after_error"]["message"] = "изменённая копия"
+        self.assertEqual(after["objects"][0]["properties"][0]["error"]["message"], message)
+        after = snapshot()
+        after["objects"] = [{"handle": "obj-1", "error": copy.deepcopy(error)}]
+        result = compare_snapshots(snapshot(), after)
+        self.assertEqual(result["items"][0]["after_error"], error)
 
     def test_same_reference_type_cannot_be_hidden_as_loose_scalar(self):
         for value in (True, 12, "ref-1", [object_reference()]):
@@ -360,10 +418,9 @@ class SnapshotComparisonTests(unittest.TestCase):
         valid = enum_property()
         malformed = [({"extra": True}, None), ({"underlying_type": "FloatProperty"}, None),
                      ({"name_status": "unknown"}, None), ({"name_status": []}, None), ({"matched_count": True}, None),
-                     ({"matched_count": 4097}, None), ({"matched_count": 2}, None),
+                     ({"matched_count": 2}, None),
                      ({"value_name": None}, None), ({"path": None}, None),
-                     ({"reason": "x" * 129}, None), ({"value_name": "x" * 4097}, None),
-                     ({"path": "x" * 8193}, None), ({"value_name": "Bad\0Name"}, None),
+                     ({"reason": "still_not_allowed_for_matched"}, None), ({"value_name": "Bad\0Name"}, None),
                      ({"name_status": "not_found", "value_name": None}, None),
                      ({"name_status": "value_unrepresentable", "value_name": None, "matched_count": 0}, None)]
         for metadata, _ in malformed:
@@ -379,6 +436,25 @@ class SnapshotComparisonTests(unittest.TestCase):
         self.assert_invalid(snapshot([enum_property(1, kind="ByteProperty", underlying="IntProperty")]))
         self.assert_invalid(snapshot([prop("Mode", 2**64, "EnumProperty")]))
         self.assert_invalid(snapshot([prop("Socket", 17, "NameProperty")]))
+
+    def test_long_enum_metadata_and_large_match_count_preserve_annotations(self):
+        path, label, reason = "/Script/" + "Перечисление" * 1000, "Имя" * 3000, "Причина" * 1000
+        before = snapshot([enum_property(7)])
+        after = snapshot([enum_property(7, path=path, label=label, count=5000)])
+        result = compare_snapshots(before, after)
+        self.assertTrue(result["equal_selected_values"])
+        self.assertEqual(result["metadata_annotations"][0]["after"], after["objects"][0]["properties"][0]["enum"])
+        result["metadata_annotations"][0]["after"]["value_name"] = "изменённая копия"
+        self.assertEqual(after["objects"][0]["properties"][0]["enum"]["value_name"], label)
+        unavailable = snapshot([enum_property(7, status="unavailable", path=path, label=None, count=5000, reason=reason)])
+        result = compare_snapshots(before, unavailable)
+        self.assertTrue(result["equal_selected_values"])
+        self.assertEqual(result["metadata_annotations"][0]["after"]["reason"], reason)
+        for field in ("path", "value_name", "reason"):
+            candidate = copy.deepcopy(unavailable if field == "reason" else after)
+            candidate["objects"][0]["properties"][0]["enum"][field] += "\0"
+            with self.subTest(field=field):
+                self.assert_invalid(candidate)
 
     def test_enum_metadata_annotations_share_result_limit_and_preserve_totals(self):
         before = snapshot([enum_property(0)])
@@ -442,7 +518,7 @@ class SnapshotComparisonTests(unittest.TestCase):
             self.assertEqual((result["value_changes"], result["unknown_count"]), (0, 1))
             self.assertEqual(result["items"][0]["reason"], "object_reference_identity_mismatch")
         for value in (True, 12, "ref-1", {**reference, "extra": True},
-                      {**reference, "session_id": "another-session"}, {**reference, "index": 4_000_000}):
+                      {**reference, "session_id": "another-session"}, {**reference, "index": 2**31}):
             self.assert_invalid(snapshot([prop("ActorClass", value, "ClassProperty")]))
 
 

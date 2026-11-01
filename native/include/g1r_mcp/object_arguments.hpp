@@ -33,13 +33,12 @@ inline bool compatible_object_class(std::uintptr_t actual, std::uintptr_t expect
                                     const std::function<std::uintptr_t(std::uintptr_t)>& superclass) {
     if (!actual || !expected) throw HandlerError("invalid_object_class", "Класс объекта отсутствует");
     std::set<std::uintptr_t> visited;
-    for (int depth=0;actual && depth<64;++depth) {
+    while (actual) {
         if (!visited.insert(actual).second)
             throw HandlerError("invalid_object_class", "Цикл наследования класса объекта");
         if (actual==expected) return true;
         actual=superclass(actual);
     }
-    if (actual) throw HandlerError("invalid_object_class", "Глубина наследования превышает предел 64");
     return false;
 }
 
