@@ -279,10 +279,13 @@ std::string file_hash() {
     std::ostringstream output; output<<std::hex<<std::setfill('0'); for(auto byte:digest) output<<std::setw(2)<<static_cast<unsigned>(byte);
     return output.str();
 }
-int limit_of(const json& params,int default_value=50) {
-    int value=params.value("limit",default_value);
-    if(value<1 || value>200) throw HandlerError("invalid_limit","Предел должен быть от 1 до 200");
-    return value;
+std::size_t limit_of(const json& params,std::size_t default_value=50) {
+    if(!params.contains("limit"))return default_value;
+    const auto& value=params.at("limit");
+    if(!value.is_number_integer() || (!value.is_number_unsigned() && value.get<int64_t>()<1)
+       || value.get<uint64_t>()<1 || value.get<uint64_t>()>std::numeric_limits<std::size_t>::max())
+        throw HandlerError("invalid_limit","limit must be a positive integer representable by size_t");
+    return static_cast<std::size_t>(value.get<uint64_t>());
 }
 bool contains(const std::string& value,const std::string& query) {
     std::string a=value,b=query;
@@ -548,7 +551,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.60"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.61"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -1410,19 +1413,19 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
     if(resolve(target_handle)!=object)throw HandlerError("signature_changed","Ссылка объекта изменилась при чтении сигнатуры");
     return result;
 }
-json GameAccess::functions(void* object,int limit,const std::string& query,const std::string& target_handle) {
+json GameAccess::functions(void* object,std::size_t limit,const std::string& query,const std::string& target_handle) {
     json items=json::array();auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);
     bool truncated=false,scan_truncated=false;std::set<uintptr_t> visited_classes;
-    for(int depth=0;klass;klass=read<uintptr_t>(klass+0x40),++depth) {
-        if(depth>=64 || !visited_classes.insert(klass).second){scan_truncated=true;break;}
+    for(;klass;klass=read<uintptr_t>(klass+0x40)) {
+        if(!visited_classes.insert(klass).second){scan_truncated=true;break;}
         auto field=read<uintptr_t>(klass+0x48);std::set<uintptr_t> visited_fields;
         for(;field;field=read<uintptr_t>(field+0x28)) {
-            if(visited_fields.size()>=4096 || !visited_fields.insert(field).second){scan_truncated=true;break;}
+            if(!visited_fields.insert(field).second){scan_truncated=true;break;}
             const auto fieldclass=read<uintptr_t>(field+0x10);
             if(!contains(object_name(reinterpret_cast<void*>(fieldclass)),"Function"))continue;
             const auto function_name=object_name(reinterpret_cast<void*>(field));
             if(!function_query::name_matches(function_name,query))continue;
-            if(items.size()>=static_cast<size_t>(limit)){truncated=true;break;}
+            if(items.size()>=limit){truncated=true;break;}
             json parameters=json::array();auto parameter=read<uintptr_t>(field+0x50);
             std::set<uintptr_t> visited_parameters;bool parameters_truncated=false;
             for(;parameter;parameter=read<uintptr_t>(parameter+0x18)) {
@@ -1475,11 +1478,11 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     if(expected_token)expected_contract=checked_function_contract(signature_contracts_,*expected_token,handle_session_,target_handle,function_name);
     auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);uintptr_t function=0,function_owner=0;
     std::set<uintptr_t> visited_classes;
-    for(int depth=0;klass && depth<64 && !function;klass=read<uintptr_t>(klass+0x40),++depth) {
+    for(;klass && !function;klass=read<uintptr_t>(klass+0x40)) {
         if(!visited_classes.insert(klass).second)throw HandlerError("unsupported_signature","Цепочка владельцев функций циклическая");
         auto field=read<uintptr_t>(klass+0x48);
         std::set<uintptr_t> visited_functions;
-        for(int count=0;field && count<4096;field=read<uintptr_t>(field+0x28),++count) {
+        for(;field;field=read<uintptr_t>(field+0x28)) {
             if(!visited_functions.insert(field).second)throw HandlerError("unsupported_signature","Цепочка UFunction циклическая");
             if(object_name(reinterpret_cast<void*>(field))==function_name && contains(object_name(reinterpret_cast<void*>(read<uintptr_t>(field+0x10))),"Function")){function=field;function_owner=klass;break;}
         }
@@ -2442,13 +2445,13 @@ json GameAccess::execute(const json& request) {
     if(op=="watch_resume")return observations_.resume(session,params.value("client_owner",session),params);
     if(op!="objects" && op!="properties" && op!="functions" && op!="invoke" && op!="read_array" && op!="read_struct")throw HandlerError("unknown_operation","Операция не поддержана");
     if(op=="objects") {
-        auto query=params.value("query",std::string{}),class_query=params.value("class_query",std::string{});int limit=limit_of(params);if(query.size()>256||class_query.size()>256)throw HandlerError("invalid_query","Запрос слишком длинный");
+        auto query=params.value("query",std::string{}),class_query=params.value("class_query",std::string{});const auto limit=limit_of(params);
         if(params.contains("exact_path") && !params.at("exact_path").is_string())
             throw HandlerError("invalid_query","exact_path требует строку");
         const auto exact_path=params.value("exact_path",std::string{});
         if(!object_query::valid_exact_path(exact_path))
-            throw HandlerError("invalid_query","exact_path превышает 8 КиБ или содержит NUL");
-        auto count=read<int32_t>(base_+kObjects+0x14);if(count<0||count>4000000)throw HandlerError("invalid_registry","Некорректный реестр объектов");
+            throw HandlerError("invalid_query","exact_path must contain no NUL");
+        auto count=read<int32_t>(base_+kObjects+0x14);if(count<0)throw HandlerError("invalid_registry","Некорректный реестр объектов");
         json items=json::array();int scanned=0,skipped=0;
         for(int index=0;index<count;++index){++scanned;
             try {
@@ -2462,7 +2465,7 @@ json GameAccess::execute(const json& request) {
                 const auto path=object_query::needs_path(query,exact_path,n)?object_path(object):std::string{};
                 if(!object_query::matches(query,exact_path,n,path))continue;
                 items.push_back(object_info(object,index));
-                if(items.size()>=static_cast<size_t>(limit))break;
+                if(items.size()>=limit)break;
             }
             catch(const HandlerError& error){if(error.code()=="handle_limit")throw;++skipped;}
         }
@@ -2503,7 +2506,7 @@ json GameAccess::execute(const json& request) {
         if(params.contains("function_query") && !params.at("function_query").is_string())
             throw HandlerError("invalid_query","function_query требует строку");
         const auto query=params.value("function_query",std::string{});
-        if(!function_query::valid(query))throw HandlerError("invalid_query","function_query превышает 512 байт или содержит NUL");
+        if(!function_query::valid(query))throw HandlerError("invalid_query","function_query must contain no NUL");
         return functions(object,limit_of(params),query,params.at("handle").get<std::string>());
     }
     if(op=="invoke")return invoke(object,params.at("function").get<std::string>(),params.value("arguments",json::object()),

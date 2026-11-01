@@ -19,21 +19,21 @@ json GameAccess::read_array(const json& params) {
         throw HandlerError("invalid_array_params","Требуются строковые handle и property_name");
     const auto handle=params.at("handle").get<std::string>();
     const auto property_name=params.at("property_name").get<std::string>();
-    if(handle.empty() || handle.size()>80 || handle.find('\0')!=std::string::npos
-       || property_name.empty() || property_name.size()>256 || property_name.find('\0')!=std::string::npos)
-        throw HandlerError("invalid_array_params","Неверные длина или содержимое handle/property_name");
-    auto integer=[&](const char* key,int default_value,int minimum,int maximum) {
+    if(handle.empty() || handle.find('\0')!=std::string::npos
+       || property_name.empty() || property_name.find('\0')!=std::string::npos)
+        throw HandlerError("invalid_array_params","handle and property_name must be nonempty and contain no NUL");
+    auto integer=[&](const char* key,uint64_t default_value,uint64_t minimum,uint64_t maximum) {
         if(!params.contains(key))return default_value;
         const auto& value=params.at(key);
         if(!value.is_number_integer()
-           || (!value.is_number_unsigned() && value.get<int64_t>()<minimum)
-           || value.get<uint64_t>()<static_cast<uint64_t>(minimum)
-           || value.get<uint64_t>()>static_cast<uint64_t>(maximum))
-            throw HandlerError("invalid_array_params","offset/limit требуют целое число в допустимом диапазоне");
-        return static_cast<int>(value.get<uint64_t>());
+           || (!value.is_number_unsigned() && value.get<int64_t>()<0)
+           || value.get<uint64_t>()<minimum
+           || value.get<uint64_t>()>maximum)
+            throw HandlerError("invalid_array_params","offset and limit require integers within their representable ranges");
+        return value.get<uint64_t>();
     };
-    const auto offset=integer("offset",0,0,std::numeric_limits<int32_t>::max());
-    const auto limit=integer("limit",64,1,std::numeric_limits<int32_t>::max());
+    const auto offset=static_cast<int32_t>(integer("offset",0,0,std::numeric_limits<int32_t>::max()));
+    const auto limit=static_cast<std::size_t>(integer("limit",64,1,std::numeric_limits<std::size_t>::max()));
     auto object=resolve(handle);
     const auto initial=validate_object(object);
     struct Metadata {
@@ -49,14 +49,14 @@ json GameAccess::read_array(const json& params) {
     auto capture=[&]() {
         Metadata result;
         auto klass=reinterpret_cast<uintptr_t>(validate_object(object).object_class);
-        std::set<uintptr_t> classes,fields;int scanned=0;
-        for(int depth=0;klass && !result.field;klass=read<uintptr_t>(klass+0x40),++depth) {
-            if(depth>=64 || !classes.insert(klass).second)
-                throw HandlerError("array_scan_incomplete","Цепочка классов массива не завершена в пределах 64");
+        std::set<uintptr_t> classes,fields;
+        for(;klass && !result.field;klass=read<uintptr_t>(klass+0x40)) {
+            if(!classes.insert(klass).second)
+                throw HandlerError("array_scan_incomplete","Class chain contains a cycle");
             validate_class(reinterpret_cast<void*>(klass));
             for(auto field=read<uintptr_t>(klass+0x50);field;field=read<uintptr_t>(field+0x18)) {
-                if(++scanned>4096 || !fields.insert(field).second)
-                    throw HandlerError("array_scan_incomplete","Список свойств массива не завершён в пределах 4096");
+                if(!fields.insert(field).second)
+                    throw HandlerError("array_scan_incomplete","Property chain contains a cycle");
                 if(name(read<uint64_t>(field+0x20))==property_name){result.field=field;result.owner=klass;break;}
             }
         }

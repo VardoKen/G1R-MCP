@@ -130,7 +130,7 @@ private:
     nlohmann::json selected_properties(void* object, const nlohmann::json& names);
     nlohmann::json snapshot(const nlohmann::json& targets);
     nlohmann::json capture_function_contract(void* object, uintptr_t owner, uintptr_t function, const std::string& target_handle);
-    nlohmann::json functions(void* object, int limit, const std::string& function_query, const std::string& target_handle);
+    nlohmann::json functions(void* object, std::size_t limit, const std::string& function_query, const std::string& target_handle);
     nlohmann::json invoke(void* object, const std::string& function_name, const nlohmann::json& arguments,
                           const std::string& target_handle, const nlohmann::json* expected_token);
     static void __fastcall hooked_tick(void* loop);

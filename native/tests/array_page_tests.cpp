@@ -30,7 +30,16 @@ int main() {
         rejects("invalid_array_page",[&]{g1r_mcp::array_page(header,4,1,-1,64);});
         rejects("invalid_array_page",[&]{g1r_mcp::array_page(header,4,1,206,64);});
         rejects("invalid_array_page",[&]{g1r_mcp::array_page(header,4,1,0,0);});
-        rejects("invalid_array_page",[&]{g1r_mcp::array_page(header,4,1,0,-1);});
+        const auto maximum_limit=std::numeric_limits<std::size_t>::max();
+        const auto all=g1r_mcp::array_page(header,4,1,0,maximum_limit);
+        require(all.begin==0x1000 && all.count==205 && all.bytes==820 && all.next_offset==205
+                && !all.has_more,"SIZE_MAX limit не ограничен фактическим остатком массива");
+        const auto maximum_limit_tail=g1r_mcp::array_page(header,4,1,200,maximum_limit);
+        require(maximum_limit_tail.begin==tail.begin && maximum_limit_tail.count==tail.count
+                && maximum_limit_tail.bytes==tail.bytes && !maximum_limit_tail.has_more,
+                "SIZE_MAX limit изменил последнюю страницу");
+        require(g1r_mcp::array_page(header,4,1,205,maximum_limit).count==0,
+                "SIZE_MAX limit нарушил пустой EOF");
         rejects("unsupported_array_layout",[&]{g1r_mcp::array_page(header,4,2,0,64);});
         rejects("unsupported_array_layout",[&]{g1r_mcp::array_page(header,0,1,0,64);});
         rejects("invalid_array_header",[]{g1r_mcp::array_page({0x1000,-1,1},4,1,0,64);});
@@ -42,7 +51,7 @@ int main() {
         require(million.begin==0x1000+4000000 && million.count==1 && million.bytes==4
                 && million.next_offset==1000001 && !million.has_more,"Хвост массива больше миллиона доступен без выделения полного массива");
         const auto maximum=g1r_mcp::array_page({0x1000,std::numeric_limits<std::int32_t>::max(),std::numeric_limits<std::int32_t>::max()},
-                8,1,std::numeric_limits<std::int32_t>::max()-1,1);
+            8,1,std::numeric_limits<std::int32_t>::max()-1,maximum_limit);
         require(maximum.count==1 && maximum.bytes==8 && maximum.next_offset==std::numeric_limits<std::int32_t>::max()
                 && !maximum.has_more,"Последняя запись int32 массива сохраняет представимое продолжение");
         rejects("invalid_array_header",[]{g1r_mcp::array_page({std::numeric_limits<std::uintptr_t>::max()-8,2,2},8,1,0,64);});

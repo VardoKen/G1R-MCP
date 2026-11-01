@@ -7,10 +7,8 @@
 
 namespace g1r_mcp::object_query {
 
-inline constexpr std::size_t max_exact_path_bytes = 8192;
-
 inline bool valid_exact_path(std::string_view value) {
-    return value.size() <= max_exact_path_bytes && value.find('\0') == std::string_view::npos;
+    return value.find('\0') == std::string_view::npos;
 }
 
 inline bool query_uses_path(std::string_view query) {

@@ -28,7 +28,7 @@ inline bool same_array_header(const ArrayHeader& left,const ArrayHeader& right) 
 }
 
 inline ArrayPage array_page(const ArrayHeader& header,int stride,int array_dim,
-                            std::int32_t offset,int limit) {
+                            std::int32_t offset,std::size_t limit) {
     if(stride<1 || array_dim!=1)
         throw HandlerError("unsupported_array_layout","Неподдерживаемые stride или ArrayDim элемента");
     if(header.count<0 || header.capacity<header.count || (!header.data && (header.count || header.capacity)))
@@ -41,7 +41,8 @@ inline ArrayPage array_page(const ArrayHeader& header,int stride,int array_dim,
     const auto capacity_bytes=static_cast<std::uintptr_t>(header.capacity)*unsigned_stride;
     if(header.data>std::numeric_limits<std::uintptr_t>::max()-capacity_bytes)
         throw HandlerError("invalid_array_header","Адресный диапазон массива переполнен");
-    const auto count=std::min<std::int32_t>(header.count-offset,limit);
+    const auto count=static_cast<std::int32_t>(std::min<std::size_t>(
+        static_cast<std::size_t>(header.count-offset),limit));
     const auto bytes=static_cast<std::size_t>(count)*static_cast<std::size_t>(stride);
     const auto begin=header.data+static_cast<std::uintptr_t>(offset)*unsigned_stride;
     return {begin,bytes,offset,count,offset+count,offset+count<header.count};
