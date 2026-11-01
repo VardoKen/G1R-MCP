@@ -42,11 +42,91 @@ Layout mixed() {
         numeric("Unsigned64",24,"UInt64Property",8),numeric("Float",32,"FloatProperty",4),
         numeric("Double",40,"DoubleProperty",8),boolean("NativeBool",48,0xff)}};
 }
+struct CaptureFixture {
+    std::array<std::byte,4096> memory{};
+    std::vector<std::string> names{"None"};
+    g1r_mcp::ObjectSerialIdentity identity{0x200,0x300,4,0,23,5,0,29};
+    Layout layout;
+    explicit CaptureFixture(Layout value):layout(std::move(value)) {
+        auto named=[&](std::string name) {names.push_back(std::move(name));return std::uint64_t(names.size()-1);};
+        identity.name=named("SyntheticStruct");identity.class_name=named("ScriptStruct");
+        put(std::span(memory),0x88,std::uintptr_t{0x340});
+        put(std::span(memory),0x90,std::uint64_t{0x301});
+        put(std::span(memory),0xa0,named("StoredValue"));
+        put(std::span(memory),0xb0,std::int32_t{1});put(std::span(memory),0xb4,std::int32_t{layout.properties_size});
+        put(std::span(memory),0xb8,std::uint64_t{0x80});put(std::span(memory),0xc4,std::int32_t{32});
+        put(std::span(memory),0xf0,std::uintptr_t{0x200});
+        put(std::span(memory),0x340,named("StructProperty"));
+        put(std::span(memory),0x250,std::uintptr_t{0x400});
+        put(std::span(memory),0x258,std::int32_t{layout.properties_size});
+        put(std::span(memory),0x25c,std::int32_t{layout.min_alignment});
+        for(std::size_t index=0;index<layout.components.size();++index) {
+            const auto field=0x400+index*0x100,type=0xc00+index*0x20;
+            const auto& component=layout.components[index];
+            put(std::span(memory),field+8,std::uintptr_t{type});
+            put(std::span(memory),field+0x10,std::uint64_t{0x201});
+            put(std::span(memory),field+0x18,index+1<layout.components.size()?std::uintptr_t{field+0x100}:std::uintptr_t{});
+            put(std::span(memory),field+0x20,named(component.name));put(std::span(memory),type,named(component.layout.type));
+            put(std::span(memory),field+0x30,std::int32_t{component.layout.array_dim});
+            put(std::span(memory),field+0x34,std::int32_t{component.layout.element_size});
+            put(std::span(memory),field+0x44,std::int32_t{component.offset});
+            if(component.layout.type=="BoolProperty") {
+                put(std::span(memory),field+0x70,component.layout.field_size);
+                put(std::span(memory),field+0x71,component.layout.byte_offset);
+                put(std::span(memory),field+0x72,component.layout.byte_mask);
+                put(std::span(memory),field+0x73,component.layout.field_mask);
+            }
+        }
+    }
+    auto capture() {
+        return g1r_mcp::scalar_struct_values::capture(0x80,layout.properties_size,1,
+            [this]<class Value>(std::uintptr_t address) {
+                if(address>memory.size() || sizeof(Value)>memory.size()-address)throw std::runtime_error("Чтение вне fake memory");
+                Value value{};std::memcpy(&value,memory.data()+address,sizeof(value));return value;
+            },
+            [this](std::uint64_t name) {return names.at(static_cast<std::size_t>(name));},
+            [this](std::uintptr_t address) {require(address==identity.object,"Capture читает собственный fake UScriptStruct");return identity;},
+            [this](std::uintptr_t address) {require(address==identity.object_class,"Capture проверяет класс fake UScriptStruct");},
+            [](std::uintptr_t) {return std::string("/Synthetic/SyntheticStruct");});
+    }
+};
+void captured_property_copies() {
+    using namespace g1r_mcp;
+    const std::array<Layout,3> layouts{{
+        {16,8,false,{numeric("X",0,"DoubleProperty",8),numeric("Y",8,"DoubleProperty",8)}},
+        {24,8,false,{numeric("X",0,"DoubleProperty",8),numeric("Y",8,"DoubleProperty",8),numeric("Z",16,"DoubleProperty",8)}},
+        {24,8,false,{numeric("Count",0,"IntProperty",4),boolean("Enabled",4,1),numeric("Ratio",8,"DoubleProperty",8),numeric("Wide",16,"Int64Property",8)}}
+    }};
+    const std::array<json,3> expected{{json{{"X",13.25},{"Y",-27.5}},json{{"X",1.25},{"Y",-2.5},{"Z",3.75}},
+        json{{"Count",17},{"Enabled",true},{"Ratio",2.5},{"Wide",std::int64_t{9007199254740993LL}}}}};
+    for(std::size_t index=0;index<layouts.size();++index) {
+        CaptureFixture fixture(layouts[index]);
+        std::vector<std::byte> source(static_cast<std::size_t>(layouts[index].properties_size));
+        if(index<2) {put(std::span(source),0,index==0?13.25:1.25);put(std::span(source),8,index==0?-27.5:-2.5);if(index==1)put(std::span(source),16,3.75);}
+        else {put(std::span(source),0,std::int32_t{17});put(std::span(source),4,std::uint8_t{1});put(std::span(source),8,2.5);put(std::span(source),16,std::int64_t{9007199254740993LL});}
+        const auto before=fixture.capture();const auto copied=source;
+        std::fill(source.begin(),source.end(),std::byte{});
+        require(before.layout==layouts[index],"Capture восстанавливает layout 2D/3D/DTO из fake reflection");
+        require(before.offset==32 && before.path=="/Synthetic/SyntheticStruct" && before.identity==fixture.identity,"Capture сохраняет внешнее поле и identity");
+        const auto decoded=scalar_struct_values::decode(before.layout,copied);
+        require(decoded==expected[index],"Capture→копия→decode сохраняет точные значения 2D/3D/DTO");
+        require(before==fixture.capture(),"Неизменённые reflection metadata совпадают до и после copy");
+        put(std::span(fixture.memory),0x438,std::uint64_t{0x200});
+        require(!(before==fixture.capture()),"Изменённые flags поля обнаруживаются при повторном capture");
+        if(index==2) {
+            require(decoded.at("Enabled").is_boolean() && decoded.at("Wide").is_number_integer() && !decoded.at("Wide").is_number_unsigned()
+                && json::parse(decoded.dump()).at("Wide").get<std::int64_t>()==9007199254740993LL,"Captured DTO сохраняет Bool и Int64 больше 2^53 в JSON");
+            put(std::span(fixture.memory),0x438,std::uint64_t{});fixture.identity.serial++;
+            require(!(before==fixture.capture()),"Смена serial структуры обнаруживается повторным capture");
+        }
+    }
+}
 }
 
 int main() {
     using namespace g1r_mcp;
     try {
+        captured_property_copies();
         const auto reflected=mixed();
         std::array<std::byte,66> storage{};storage.fill(std::byte{0xa5});
         auto body=std::span(storage).subspan(1,64);

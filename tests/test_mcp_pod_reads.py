@@ -83,6 +83,14 @@ class MCPPODReadTests(unittest.IsolatedAsyncioTestCase):
                                   "offset": 0, "value": 1.25},
                                  {"name": "Y", "type": "DoubleProperty", "element_size": 8,
                                   "offset": 8, "value": -2.5}]}
+        vector2d = {**common, "property_name": "StoredVector2D",
+                    "consistency": "copied_bytes_then_metadata_revalidated",
+                    "struct_path": "/Script/CoreUObject.Vector2D", "properties_size": 16,
+                    "min_alignment": 8, "partial": False, "truncated": False,
+                    "components": [{"name": "Y", "type": "DoubleProperty", "element_size": 8,
+                                    "offset": 8, "value": -9876.125},
+                                   {"name": "X", "type": "DoubleProperty", "element_size": 8,
+                                    "offset": 0, "value": 12345.0625}]}
         no_effect = {"executed": False, "may_have_executed": False, "do_not_retry": False}
         status = {"ready": True, "session_id": "fixture-session-1", "tick_count": 50}
         steps = [
@@ -91,6 +99,7 @@ class MCPPODReadTests(unittest.IsolatedAsyncioTestCase):
             {"op": "read_array", "params": {"handle": "obj-pod", "property_name": "EmptyNames",
              "offset": 0, "limit": 64}, "result": empty},
             {"op": "read_struct", "params": {"handle": "obj-pod", "property_name": "StoredVector"}, "result": struct},
+            {"op": "read_struct", "params": {"handle": "obj-pod", "property_name": "StoredVector2D"}, "result": vector2d},
             {"op": "read_struct", "params": {"handle": "obj-pod", "property_name": "NestedTransform"},
              "error": {"code": "unsupported_struct_layout", "message": "Структура не входит в подтверждённый POD-контракт",
                        "details": no_effect}},
@@ -110,6 +119,18 @@ class MCPPODReadTests(unittest.IsolatedAsyncioTestCase):
                 async with ClientSession(incoming, outgoing) as client:
                     await client.initialize()
                     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+                    self.assertEqual(len(tools), 42)
+                    struct_schema = tools["g1r_read_struct"].input_schema
+                    self.assertEqual(set(struct_schema["properties"]), {"handle", "property_name"})
+                    self.assertEqual(set(struct_schema["required"]), {"handle", "property_name"})
+                    capabilities = await client.call_tool("g1r_capabilities", {})
+                    self.assertFalse(capabilities.is_error, capabilities.content)
+                    contract = capabilities.structured_content["struct_values"]
+                    self.assertEqual(contract["component_fields"], ["name", "type", "element_size", "offset", "value"])
+                    self.assertEqual(contract["component_count"], "reflected")
+                    self.assertEqual(contract["properties_size"], "reflected")
+                    self.assertTrue(contract["own_fields_only"])
+                    self.assertFalse(contract["current_checked"])
                     for name in ("g1r_read_array", "g1r_read_struct"):
                         annotations = tools[name].annotations
                         self.assertTrue(annotations.read_only_hint)
@@ -119,6 +140,7 @@ class MCPPODReadTests(unittest.IsolatedAsyncioTestCase):
                         ("g1r_read_array", {"handle": "obj-pod", "property_name": "Numbers", "offset": 200, "limit": 200}, page),
                         ("g1r_read_array", {"handle": "obj-pod", "property_name": "EmptyNames"}, empty),
                         ("g1r_read_struct", {"handle": "obj-pod", "property_name": "StoredVector"}, struct),
+                        ("g1r_read_struct", {"handle": "obj-pod", "property_name": "StoredVector2D"}, vector2d),
                     ):
                         response = await client.call_tool(tool, params)
                         self.assertFalse(response.is_error, response.content)
@@ -130,14 +152,14 @@ class MCPPODReadTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(error["code"], "unsupported_struct_layout")
                     self.assertIs(error["may_have_executed"], False)
                     self.assertEqual(error["effect"], no_effect)
-                    self.assertEqual(error["request_id"], native.requests[3]["id"])
+                    self.assertEqual(error["request_id"], native.requests[4]["id"])
                     checked = await client.call_tool("g1r_native_status", {})
                     self.assertFalse(checked.is_error, checked.content)
                     self.assertEqual(checked.structured_content, status)
             self.assertEqual(native.connections, 1)
             self.assertEqual([request["op"] for request in native.requests],
-                             ["read_array", "read_array", "read_struct", "read_struct", "status"])
-            self.assertEqual(len({request["id"] for request in native.requests}), 5)
+                             ["read_array", "read_array", "read_struct", "read_struct", "read_struct", "status"])
+            self.assertEqual(len({request["id"] for request in native.requests}), 6)
 
 
 if __name__ == "__main__":

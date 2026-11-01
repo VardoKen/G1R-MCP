@@ -58,7 +58,7 @@ NATIVE_TOOLS = (
     ("g1r_find_objects", "Поиск объектов текущего процесса игры"),
     ("g1r_object_properties", "Чтение отражённых скалярных свойств"),
     ("g1r_read_array", "Ограниченное чтение страницы отражённого массива"),
-    ("g1r_read_struct", "Чтение трёх отражённых числовых компонентов структуры"),
+    ("g1r_read_struct", "Копирование собственных отражённых скалярных полей структуры"),
     ("g1r_object_functions", "Список отражённых функций объекта"),
     ("g1r_invoke", "Один явный вызов отражённой функции"),
     ("g1r_snapshot", "Скопировать выбранные свойства объектов на одном Tick"),
@@ -243,6 +243,17 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                       "stack_capture_supported": True,
                                       "stack_result_field": "script_errors.stack_captured",
                                       "absence_of_logged_errors_proves_script_completion": False},
+            "struct_values": {"tool": "g1r_read_struct", "source": "runtime_reflection",
+                              "result_field": "components",
+                              "component_fields": ["name", "type", "element_size", "offset", "value"],
+                              "field_types": ["BoolProperty", "IntProperty", "Int64Property", "UInt32Property",
+                                              "UInt64Property", "FloatProperty", "DoubleProperty"],
+                              "own_fields_only": True, "layout": "reflected_scalar_fields",
+                              "properties_size": "reflected", "component_count": "reflected",
+                              "nested_fields_supported": False, "string_fields_supported": False,
+                              "consistency": "copied_bytes_then_metadata_revalidated",
+                              "availability": "requires_live_native_status_and_current_game_tick",
+                              "current_checked": False},
             "source_functions": {"tool": "g1r_list_source_functions", "parser_kind": "lexical",
                                  "result_field": "items", "prototype": "raw_source",
                                  "item_fields": ["name", "owner", "namespace", "kind", "prototype", "path",
@@ -741,7 +752,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_read_struct(handle: str, property_name: str) -> dict[str, Any]:
-        """Скопировать XYZ или Pitch/Yaw/Roll по фактической reflection без игровых записей."""
+        """Скопировать собственные скалярные поля структуры по отражённому размеру и layout без игровых записей."""
         return native_request("read_struct", {"handle": handle, "property_name": property_name})
 
     @server.tool(annotations=read_only)
