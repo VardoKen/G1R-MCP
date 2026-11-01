@@ -5,7 +5,7 @@ class UG1RMCPDevelopmentHelpers : UScriptWorldSubsystem
     UFUNCTION(BlueprintCallable)
     FString GetHelperVersion()
     {
-        return "1.0.0-dev.39";
+        return "1.0.0-dev.40";
     }
 
     UFUNCTION(BlueprintCallable)
