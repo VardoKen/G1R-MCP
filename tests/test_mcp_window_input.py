@@ -23,7 +23,7 @@ class MCPHTTPWindowInputTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_key_owner_strict_arguments_partial_receipt_and_shared_native_session(self):
         native_status = {"ready": True, "session_id": "fixture-session-1", "tick_count": 48}
-        steps = [{"op": "status", "params": {}, "result": native_status} for _ in range(3)]
+        steps = [{"op": "status", "params": {}, "result": native_status} for _ in range(4)]
         with tempfile.TemporaryDirectory() as temporary, SessionNativeFixture(steps) as native:
             root = Path(temporary)
             repository, modkit, workspace, game = (root / name for name in
@@ -65,7 +65,7 @@ class MCPHTTPWindowInputTests(unittest.IsolatedAsyncioTestCase):
 
             with patch("g1r_mcp.server.NativeClient", return_value=backend) as native_factory, \
                  patch("g1r_mcp.server.DevelopmentService", return_value=service) as development_factory, \
-                 patch("g1r_mcp.development.queue_key", side_effect=[receipt, windows_error]) as queue:
+                 patch("g1r_mcp.development.queue_key", side_effect=[receipt, windows_error, receipt]) as queue:
                 server = create_server(modkit, workspace, game_root=game,
                                        native_port=native.port, transport="streamable-http")
                 security = TransportSecuritySettings(enable_dns_rebinding_protection=True,
@@ -160,11 +160,37 @@ class MCPHTTPWindowInputTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(queue.call_count, 2)
                         self.assertEqual(len(process_calls), before + 2)
                         self.assertEqual(await tool(second, other, "g1r_native_status"), native_status)
+                        resume = {"reason": "Восстановление HTTP-владения", "expected_process": identity,
+                                  "expected_claim_id": claim["claim"]["claim_id"]}
+                        for invalid, expected_code in (({"expected_claim_id": "wrong"}, "session_claim_changed"),
+                                                       ({"expected_process": None}, "session_process_mismatch")):
+                            result = await rpc(second, "tools/call", {"name": "g1r_session_acquire",
+                                                                     "arguments": {**resume, **invalid}}, other)
+                            self.assertTrue(result.get("isError", False), result)
+                            text = "\n".join(item.get("text", "") for item in result["content"])
+                            self.assertEqual(json.loads(text[text.index("{"):])["code"], expected_code)
+                            self.assertEqual((await tool(second, other, "g1r_session_status"))["claim"], remaining["claim"])
+                            self.assertEqual(queue.call_count, 2)
+                        resumed = await tool(second, other, "g1r_session_acquire", resume)
+                        self.assertTrue(resumed["resumed"])
+                        self.assertEqual(resumed["claim"], remaining["claim"])
+                        restored_input = await tool(second, other, "g1r_development_key", arguments)
+                        self.assertEqual(restored_input, receipt)
+                        self.assertEqual(queue.call_count, 3)
+                        self.assertEqual(queue.call_args.args, (identity, 120))
+                        self.assertEqual(queue.call_args.kwargs, {"expected_window": 1024})
+                        revoked = await first.post("/mcp", headers={"Mcp-Session-Id": owner,
+                            "Accept": "application/json, text/event-stream"}, json={"jsonrpc": "2.0",
+                            "id": 9999, "method": "tools/call", "params": {
+                                "name": "g1r_development_key", "arguments": arguments}})
+                        self.assertEqual(revoked.status_code, 404, revoked.text)
+                        self.assertEqual(queue.call_count, 3)
+                        self.assertEqual(await tool(second, other, "g1r_native_status"), native_status)
                         native_factory.assert_called_once_with(port=native.port)
                         development_factory.assert_called_once()
                 self.assertEqual(native.connections, 1)
-                self.assertEqual([item["op"] for item in native.requests], ["status"] * 3)
-                self.assertEqual(len({item["id"] for item in native.requests}), 3)
+                self.assertEqual([item["op"] for item in native.requests], ["status"] * 4)
+                self.assertEqual(len({item["id"] for item in native.requests}), 4)
                 self.assertEqual(source.read_bytes(), original)
                 self.assertEqual(list(workspace.iterdir()), [])
 

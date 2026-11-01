@@ -19,9 +19,11 @@ import probe_development_mcp as development
 
 
 class HelpersFixture(WrapperFixture):
-    def __init__(self, *, channel=7, has_helper_world=True, bad_version=False, bad_enum=False):
+    def __init__(self, *, channel=7, has_helper_world=True, has_gameplay_player=False,
+                 bad_version=False, bad_enum=False):
         super().__init__()
         self.channel, self.has_helper_world, self.bad_version, self.bad_enum = channel, has_helper_world, bad_version, bad_enum
+        self.has_gameplay_player = has_gameplay_player
         self.helper = {"handle": "obj-helper", "name": probe.HOST + "_0", "class": probe.HOST,
                        "path": "/Game/Menu.Menu." + probe.HOST + "_0"}
         self.helper_cdo = {"handle": "obj-helper-cdo", "name": "Default__" + probe.HOST, "class": probe.HOST,
@@ -43,6 +45,7 @@ class HelpersFixture(WrapperFixture):
                         signature_token=self.helper_tokens[name])
             return listing
         kind, width = {"GetHelperVersion": ("StrProperty", 16), "HasWorld": ("BoolProperty", 1),
+                       "HasGameplayPlayer": ("BoolProperty", 1),
                        "GetVisibilityTraceChannel": ("ByteProperty", 1)}[name]
         return {"items": [{"name": name, "parameters": [{"name": "ReturnValue", "type": kind, "element_size": width,
                 "offset": 0, "array_dim": 1, "return": True, "out": True, "const": False, "reference": False, "flags": 0x580}],
@@ -63,6 +66,8 @@ class HelpersFixture(WrapperFixture):
             if method == "GetHelperVersion":
                 return {"executed": True, "return_type": "StrProperty", "result": "wrong" if self.bad_version else probe.HELPER_VERSION, "cleanup_confirmed": True}
             if method == "HasWorld": return {"executed": True, "return_type": "BoolProperty", "result": self.has_helper_world}
+            if method == "HasGameplayPlayer":
+                return {"executed": True, "return_type": "BoolProperty", "result": self.has_gameplay_player}
             if method == "GetVisibilityTraceChannel":
                 return {"executed": True, "return_type": "ByteProperty", "result": self.channel, "return_enum": {
                     "path": "/Script/Engine.Other" if self.bad_enum else probe.ENUM_PATH, "underlying_type": "ByteProperty",
@@ -77,7 +82,7 @@ class HelpersFixture(WrapperFixture):
 class DevelopmentHelpersProbeTests(unittest.TestCase):
     def test_helper_version_is_independent_of_bridge_version(self):
         fixture = HelpersFixture()
-        with patch.object(probe, "VERSION", "1.0.0-dev.47"):
+        with patch.object(probe, "VERSION", "1.0.0-dev.50"):
             report = asyncio.run(probe.helper_exercise(fixture.call))
         self.assertEqual(report["version"], probe.HELPER_VERSION)
         self.assertTrue(report["trace"]["tested"])
@@ -91,7 +96,36 @@ class DevelopmentHelpersProbeTests(unittest.TestCase):
         self.assertTrue(report["helper"]["trace"]["tested"])
         self.assertEqual(fixture.resets, 1)
         helper_calls = [args["function"] for name, args, _ in fixture.calls if name == "g1r_invoke" and args["handle"] == "obj-helper"]
-        self.assertEqual(helper_calls, ["GetHelperVersion", "HasWorld", "GetVisibilityTraceChannel", "TraceImpactPoint"])
+        self.assertEqual(helper_calls, ["GetHelperVersion", "HasWorld", "HasGameplayPlayer",
+                                        "GetVisibilityTraceChannel", "TraceImpactPoint"])
+
+    def test_gameplay_player_ready_records_false_and_true_independently_of_world(self):
+        for ready in (False, True):
+            fixture = HelpersFixture(has_helper_world=True, has_gameplay_player=ready)
+            with self.subTest(ready=ready):
+                report = asyncio.run(probe.helper_exercise(fixture.call))
+                self.assertTrue(report["has_world"])
+                self.assertIs(report["gameplay_player_ready"], ready)
+                self.assertIs(report["gameplay_player_result"]["result"], ready)
+                self.assertTrue(report["trace"]["tested"])
+
+    def test_gameplay_player_result_rejects_non_bool_before_trace(self):
+        for value in (0, 1, None, "true"):
+            fixture = HelpersFixture(has_gameplay_player=value)
+            with self.subTest(value=value), self.assertRaises(probe.ProbeError) as caught:
+                asyncio.run(probe.helper_exercise(fixture.call))
+            self.assertEqual(caught.exception.code, "probe_scalar_out_result")
+            self.assertFalse(any(name == "g1r_invoke" and arguments["handle"] == "obj-helper"
+                                 and arguments["function"] == "TraceImpactPoint"
+                                 for name, arguments, _ in fixture.calls))
+
+    def test_gameplay_player_signature_requires_one_byte_bool(self):
+        for kind, width in (("IntProperty", 4), ("BoolProperty", 4)):
+            listing = HelpersFixture().helper_functions("HasGameplayPlayer")
+            listing["items"][0]["parameters"][0].update(type=kind, element_size=width)
+            with self.subTest(kind=kind, width=width), self.assertRaises(probe.ProbeError) as caught:
+                probe.check_signature(listing, "HasGameplayPlayer")
+            self.assertEqual(caught.exception.code, "probe_signature_mismatch")
 
     def test_wrong_version_world_or_enum_stops_before_helper_trace(self):
         for kwargs in ({"bad_version": True}, {"has_helper_world": False}, {"bad_enum": True}):

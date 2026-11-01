@@ -5,7 +5,7 @@ class UG1RMCPDevelopmentHelpers : UScriptWorldSubsystem
     UFUNCTION(BlueprintCallable)
     FString GetHelperVersion()
     {
-        return "1.0.0-dev.46";
+        return "1.0.0-dev.49";
     }
 
     UFUNCTION(BlueprintCallable)
@@ -20,6 +20,15 @@ class UG1RMCPDevelopmentHelpers : UScriptWorldSubsystem
     bool HasWorld()
     {
         return GetWorld() != nullptr;
+    }
+
+    UFUNCTION(BlueprintCallable)
+    bool HasGameplayPlayer()
+    {
+        if (GetWorld() == nullptr)
+            return false;
+        AGothicCharacter Player = Cast<AGothicCharacter>(Gameplay::GetPlayerCharacter(0));
+        return Player != nullptr && Player.IsGameplayReady();
     }
 
     UFUNCTION(BlueprintCallable)

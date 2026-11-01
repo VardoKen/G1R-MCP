@@ -20,9 +20,9 @@ from probe_scalar_out_contract import check_scalar
 from probe_vector_contract import check_parameter_vector_metadata
 
 HOST = "G1RMCPDevelopmentHelpers"
-VERSION = "1.0.0-dev.48"
-HELPER_VERSION = "1.0.0-dev.46"
-METHODS = ("GetHelperVersion", "HasWorld", "GetVisibilityTraceChannel", "TraceImpactPoint")
+VERSION = "1.0.0-dev.49"
+HELPER_VERSION = "1.0.0-dev.49"
+METHODS = ("GetHelperVersion", "HasWorld", "HasGameplayPlayer", "GetVisibilityTraceChannel", "TraceImpactPoint")
 ENUM_PATH = "/Script/Engine.ETraceTypeQuery"
 
 
@@ -88,8 +88,8 @@ def check_signature(listing, name):
         raise ProbeError("probe_signature_flags", "Helper getter return CPF/границы не подтверждены")
     if name == "GetHelperVersion" and (field.get("type"), width) != ("StrProperty", 16):
         raise ProbeError("probe_signature_mismatch", "Helper version должен вернуть FString16")
-    if name == "HasWorld" and (field.get("type"), width) != ("BoolProperty", 1):
-        raise ProbeError("probe_signature_mismatch", "Helper HasWorld должен вернуть Bool1")
+    if name in {"HasWorld", "HasGameplayPlayer"} and (field.get("type"), width) != ("BoolProperty", 1):
+        raise ProbeError("probe_signature_mismatch", "Helper world/player getter должен вернуть Bool1")
     if name == "GetVisibilityTraceChannel" and (field.get("type") not in {"EnumProperty", "ByteProperty"} or width not in {1, 4, 8}
                                                 or field["type"] == "ByteProperty" and width != 1):
         raise ProbeError("probe_signature_mismatch", "Helper visibility channel должен вернуть reflected enum")
@@ -147,6 +147,11 @@ async def helper_exercise(call):
         world = await invoke("HasWorld")
         report["world_result"] = world
         check_scalar(world, "BoolProperty", True)
+        gameplay_player = await invoke("HasGameplayPlayer")
+        report["gameplay_player_result"] = gameplay_player
+        gameplay_player_ready = gameplay_player.get("result") is True
+        check_scalar(gameplay_player, "BoolProperty", gameplay_player_ready)
+        report["gameplay_player_ready"] = gameplay_player_ready
         channel_result = await invoke("GetVisibilityTraceChannel")
         report["channel_result"] = channel_result
         channel = check_channel(channel_result)

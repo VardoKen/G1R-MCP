@@ -23,10 +23,17 @@ class SessionOwnership:
                     "automatic_game_stop": False}
 
     def acquire(self, owner: Any, reason: str, *, process: dict | None = None,
-                package: str | None = None) -> dict:
+                package: str | None = None, expected_claim_id: str | None = None) -> dict:
         with self.lock:
             if not isinstance(reason, str) or not 1 <= len(reason) <= 256 or any(ord(c) < 32 for c in reason):
                 raise DevelopmentError("invalid_session_reason", "Укажите причину управления общей игрой (1–256 символов)")
+            if expected_claim_id is not None:
+                if self._record is None or self._record["claim_id"] != expected_claim_id:
+                    raise DevelopmentError("session_claim_changed", "Заявка изменилась после чтения состояния")
+                if self._record["process"] != process:
+                    raise DevelopmentError("session_process_mismatch", "Для восстановления нужны точные PID, время создания и путь заявленного процесса")
+                self._owner = owner
+                return {**self.status(), "resumed": True}
             if self._owner is not None and self._owner != owner:
                 raise DevelopmentError("game_session_owned", "Общей игрой управляет другая MCP-сессия; сначала завершите её работу")
             if self._record is None:

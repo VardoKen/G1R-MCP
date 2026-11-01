@@ -222,7 +222,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                   "helpers": {"relative_package": "development/helpers/G1RMCPDevelopmentHelpers",
                                               "class": "/Script/Angelscript.G1RMCPDevelopmentHelpers",
                                               "requires": "explicit_companion_package_and_live_world_instance",
-                                              "functions": ["GetHelperVersion", "ReadText", "HasWorld", "GetVisibilityTraceChannel", "TraceImpactPoint"]}},
+                                              "functions": ["GetHelperVersion", "ReadText", "HasWorld", "HasGameplayPlayer", "GetVisibilityTraceChannel", "TraceImpactPoint"]}},
             "compiler_reports": {"tool": "g1r_compile_diagnostics", "implemented": True,
                                  "source": "native_formatter_or_caller_selected_workspace_file", "compiler_api_available": True,
                                  "absence_of_errors_proves_compile": False},
@@ -590,8 +590,9 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
         return ownership.status()
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
-    def g1r_session_acquire(reason: str, expected_process: dict[str, Any] | None = None, ctx: Context = None) -> dict[str, Any]:
-        """Заявить управление общей игрой; другой HTTP-клиент не сможет stop/restart/load. Не запускает игру."""
+    def g1r_session_acquire(reason: str, expected_process: dict[str, Any] | None = None,
+                            expected_claim_id: str | None = None, ctx: Context = None) -> dict[str, Any]:
+        """Заявить управление игрой; после обрыва вернуть существующую заявку через expected_claim_id и точный expected_process. Игру не запускает."""
         try:
             owner = request_owner(ctx)
             with ownership.lock:
@@ -599,7 +600,8 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                 if expected_process is not None:
                     service = development_service()
                     process = service._expected_process(expected_process, service.process_state(), allow_bootstrap=True)
-                return ownership.acquire(owner, reason, process=process)
+                return ownership.acquire(owner, reason, process=process,
+                                         expected_claim_id=expected_claim_id)
         except DevelopmentError as error:
             raise ToolError(json.dumps({"code": error.code, "message": str(error), "outcome_unknown": error.outcome_unknown}, ensure_ascii=False)) from None
 

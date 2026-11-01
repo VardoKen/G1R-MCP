@@ -6,6 +6,59 @@ from g1r_mcp.development import DevelopmentError
 
 
 class SessionOwnershipTests(unittest.TestCase):
+    def test_explicit_resumption_keeps_claim_and_moves_control_to_new_owner(self):
+        state = SessionOwnership(); old, new = object(), object()
+        process = {"pid": 11, "creation_time": "T1", "executable": "game"}
+        claim = state.acquire(old, "Исходная проверка", process=process, package="Main")
+        state.bind(old, process, "native_loaded")
+        original = state.status()["claim"]
+        resumed = state.acquire(new, "Продолжение проверки", process=dict(process),
+                                package="MustNotReplace", expected_claim_id=claim["claim"]["claim_id"])
+        self.assertTrue(resumed["resumed"])
+        self.assertEqual(resumed["claim"], original)
+        state.require(new, process)
+        for operation in (lambda: state.require(old, process), lambda: state.release(old),
+                          lambda: state.acquire(old, "Без явного восстановления")):
+            with self.assertRaises(DevelopmentError) as caught: operation()
+            self.assertEqual(caught.exception.code, "game_session_owned")
+        self.assertEqual(state.status()["claim"], original)
+
+    def test_resumption_mismatched_claim_or_process_never_changes_owner_or_record(self):
+        state = SessionOwnership(); old, new = object(), object()
+        process = {"pid": 11, "creation_time": "T1", "executable": "game"}
+        original = state.acquire(old, "Исходная проверка", process=process, package="Main")["claim"]
+        claim_id = original["claim_id"]
+        cases = [("wrong", process, "session_claim_changed"),
+                 (claim_id, None, "session_process_mismatch")]
+        cases += [(claim_id, {**process, key: value}, "session_process_mismatch")
+                  for key, value in (("pid", 12), ("creation_time", "T2"), ("executable", "other"))]
+        for expected, identity, code in cases:
+            with self.subTest(claim=expected, process=identity), self.assertRaises(DevelopmentError) as caught:
+                state.acquire(new, "Восстановление", process=identity, expected_claim_id=expected)
+            self.assertEqual(caught.exception.code, code)
+            self.assertEqual(state.status()["claim"], original)
+            state.require(old, process)
+            with self.assertRaises(DevelopmentError): state.require(new, process)
+        empty = SessionOwnership()
+        with self.assertRaises(DevelopmentError) as caught:
+            empty.acquire(new, "Восстановление", process=process, expected_claim_id=claim_id)
+        self.assertEqual(caught.exception.code, "session_claim_changed")
+        self.assertFalse(empty.status()["claimed"])
+
+    def test_resumption_of_unbound_claim_preserves_pending_launch(self):
+        state = SessionOwnership(); old, new = object(), object()
+        claim = state.acquire(old, "Запуск", package="Main")["claim"]
+        state.launched(old, "Main")
+        original = state.status()["claim"]
+        with self.assertRaises(DevelopmentError) as caught:
+            state.acquire(new, "Восстановление", process={"pid": 11}, expected_claim_id=claim["claim_id"])
+        self.assertEqual(caught.exception.code, "session_process_mismatch")
+        self.assertEqual(state.status()["claim"], original)
+        resumed = state.acquire(new, "Восстановление", expected_claim_id=claim["claim_id"])
+        self.assertTrue(resumed["resumed"])
+        self.assertEqual(resumed["claim"], original)
+        state.require(new)
+
     def test_other_client_cannot_take_control_or_stop(self):
         state = SessionOwnership(); a, b = object(), object()
         process = {"pid": 11, "creation_time": "T1", "executable": "game"}
