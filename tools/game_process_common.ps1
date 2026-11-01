@@ -220,7 +220,7 @@ namespace G1RMCP.ProcessControl {
             if (!allowForce)
                 throw Failure("process_still_running", "Исходный процесс не завершился штатно", false);
             if (!Native.TerminateProcess(handle, 0)) {
-                if (Wait(0))
+                if (Wait(forceWaitMilliseconds))
                     return new StopResult { State = "stopped", Mode = "exited_before_force", GraceRequests = attempts, Identity = Identity };
                 throw Failure("termination_failed", "Не удалось завершить исходный процесс через удерживаемый HANDLE", true);
             }

@@ -2,10 +2,13 @@
 import hashlib
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
+from mcp import ClientSession
+from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.server.mcpserver.exceptions import ToolError
 
 import g1r_mcp.server as server_module
@@ -86,6 +89,40 @@ class MCPDevelopmentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(error["outcome_unknown"], unknown)
         self.assertEqual(error["retry"], "only_explicit_new_request")
         return error
+
+    async def test_stdio_claim_survives_request_contexts_and_releases_normally(self):
+        bootstrap = """from pathlib import Path
+import sys
+from unittest.mock import Mock, patch
+from g1r_mcp.server import create_server
+service = Mock()
+service.process_state.return_value = {"processes": [], "running": False}
+with patch("g1r_mcp.server.DevelopmentService", return_value=service):
+    create_server(Path(sys.argv[1]), Path(sys.argv[2]), game_root=Path(sys.argv[3])).run(transport="stdio")
+"""
+        parameters = StdioServerParameters(command=sys.executable, args=[
+            "-B", "-c", bootstrap, str(self.modkit), str(self.workspace), str(self.game)])
+        async with stdio_client(parameters) as (incoming, outgoing):
+            async with ClientSession(incoming, outgoing) as client:
+                await client.initialize()
+                acquired = await client.call_tool("g1r_session_acquire", {"reason": "Изолированная stdio-проверка"})
+                self.assertFalse(acquired.is_error, acquired.content)
+                original = acquired.structured_content["claim"]
+                self.assertIsNone(original["process"])
+                observed = await client.call_tool("g1r_session_status", {})
+                self.assertFalse(observed.is_error, observed.content)
+                self.assertEqual(observed.structured_content["claim"], original)
+                released = await client.call_tool("g1r_session_release", {})
+                self.assertFalse(released.is_error, released.content)
+                self.assertTrue(released.structured_content["released"])
+                self.assertEqual(released.structured_content["previous_claim"], original)
+                self.assertFalse(released.structured_content["game_stopped"])
+                final = await client.call_tool("g1r_session_status", {})
+                self.assertFalse(final.is_error, final.content)
+                self.assertFalse(final.structured_content["claimed"])
+                self.assertIsNone(final.structured_content["claim"])
+        self.assertEqual(self.calls, [])
+        self.assertEqual(list(self.game.iterdir()), [])
 
     async def test_recipe_start_load_stop_bind_hashes_and_process_identity(self):
         # Статический статус не создаёт сервис и не запускает системных команд.

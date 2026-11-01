@@ -113,7 +113,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                 if session_id:
                     return "http:" + session_id
                 raise DevelopmentError("session_identity_unavailable", "HTTP-запрос не содержит идентичность MCP-сессии")
-            return ctx.session
+            return local_owner
         except ValueError:
             return local_owner
 
