@@ -3,6 +3,8 @@ from contextlib import redirect_stderr
 import io
 import json
 from pathlib import Path
+import socket
+import struct
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -13,6 +15,67 @@ from mcp.server.transport_security import TransportSecuritySettings
 from g1r_mcp.native_client import NativeClient
 from g1r_mcp.server import create_server, main
 from tests.test_mcp_observations import SessionNativeFixture
+
+
+class LargeFrameNativeFixture(SessionNativeFixture):
+    """Изолированный uint32 framing без старого фиктивного предела 1 МиБ."""
+
+    def __init__(self, steps):
+        super().__init__(steps)
+        self.request_frame_lengths = []
+        self.response_frame_lengths = []
+        self.response_sessions = []
+        self.echo_calls = 0
+
+    def run(self):
+        try:
+            while len(self.requests) < len(self.steps) and not self.stop.is_set():
+                if self.stream is None:
+                    try:
+                        self.stream, _ = self.listener.accept()
+                    except socket.timeout:
+                        continue
+                    self.connections += 1
+                    self.stream.settimeout(0.1)
+                try:
+                    length = struct.unpack(">I", self.receive(4))[0]
+                    if length == 0:
+                        raise AssertionError("Пустой нативный кадр")
+                    request = json.loads(self.receive(length).decode("utf-8"))
+                except EOFError:
+                    self.stream.close()
+                    self.stream = None
+                    continue
+                step = self.steps[len(self.requests)]
+                self.requests.append(request)
+                self.request_frame_lengths.append(length)
+                if (request.get("protocol") != 1 or request.get("op") != step["op"]
+                        or request.get("params") != step["params"]):
+                    raise AssertionError("Запрос не соответствует ожидаемой операции")
+                if not isinstance(request.get("id"), str) or not request["id"]:
+                    raise AssertionError("Нет нативного request ID")
+                result = dict(step["result"])
+                if request.get("params", {}).get("function") == "EchoLargeString":
+                    self.echo_calls += 1
+                    result["out_parameters"] = {"CallCount": self.echo_calls}
+                elif request.get("params", {}).get("function") == "ReadCallCount":
+                    result["result"] = self.echo_calls
+                session = f"fixture-session-{self.connections}"
+                response = {"protocol": 1, "id": request["id"], "session_id": session,
+                            "type": "response", "result": result}
+                payload = json.dumps(response, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                self.response_frame_lengths.append(len(payload))
+                self.response_sessions.append(session)
+                header = struct.pack(">I", len(payload))
+                self.stream.sendall(header[:2])
+                self.stream.sendall(header[2:])
+                for offset in range(0, len(payload), 65537):
+                    self.stream.sendall(payload[offset:offset + 65537])
+        except (OSError, EOFError) as error:
+            if not self.stop.is_set():
+                self.errors.append(error)
+        except Exception as error:
+            self.errors.append(error)
 
 
 class MCPTransportCLITests(unittest.TestCase):
@@ -59,6 +122,126 @@ class MCPTransportCLITests(unittest.TestCase):
 class MCPHTTPSharedServerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self._asyncioRunner.get_loop().slow_callback_duration = 2.0
+
+    async def test_large_string_request_and_result_share_connection_after_http_session_delete(self):
+        handle, token = "obj-large-http-string", "sig-large-http-string"
+        text = "G1R-large-string-" * 65537
+        self.assertGreater(len(text.encode("ascii")), 1048576)
+        arguments = {"Input": text, "CallCount": {"out": True}}
+        status = {"ready": True, "session_id": "fixture-session-1", "tick_count": 41}
+        reflection = {"items": [{"name": "EchoLargeString", "signature_token": token,
+            "signature_status": "complete", "parameters": [
+                {"name": "Input", "type": "StrProperty", "offset": 0, "element_size": 16,
+                 "array_dim": 1, "flags": 0x182, "return": False, "out": True,
+                 "reference": False, "const": True, "direction": "input", "passing": "const_reference",
+                 "argument_constraints": {"max_utf16_units": 2147483646, "embedded_nul": "rejected",
+                                          "ownership": "engine_owned_copy"}},
+                {"name": "CallCount", "type": "IntProperty", "element_size": 4, "array_dim": 1,
+                 "flags": 0x180, "return": False, "out": True, "reference": False,
+                 "const": False, "direction": "output", "argument_marker": {"out": True}},
+                {"name": "ReturnValue", "type": "StrProperty", "element_size": 16, "array_dim": 1,
+                 "flags": 0x480, "return": True, "out": False, "reference": False, "const": False}]}]}
+        echoed = {"function": "EchoLargeString", "return_type": "StrProperty", "result": text,
+                  "out_parameters": {"CallCount": 1},
+                  "out_parameter_metadata": {"CallCount": {"type": "IntProperty", "element_size": 4,
+                                                            "array_dim": 1}},
+                  "executed": True, "thread_id": 456, "cleanup_confirmed": True,
+                  "input_cleanup_confirmed": True}
+        getter = {"function": "ReadCallCount", "return_type": "IntProperty", "result": 1,
+                  "executed": True, "thread_id": 456}
+        steps = [
+            {"op": "status", "params": {}, "result": status},
+            {"op": "functions", "params": {"handle": handle, "limit": 50,
+                "function_query": "EchoLargeString"}, "result": reflection},
+            {"op": "invoke", "params": {"handle": handle, "function": "EchoLargeString",
+                "arguments": arguments, "expected_signature_token": token}, "result": echoed},
+            {"op": "invoke", "params": {"handle": handle, "function": "ReadCallCount",
+                "arguments": {}}, "result": getter},
+            {"op": "status", "params": {}, "result": status},
+        ]
+        with tempfile.TemporaryDirectory() as temporary, LargeFrameNativeFixture(steps) as native:
+            root = Path(temporary)
+            modkit, workspace = root / "Modkit", root / "workspace"
+            (modkit / "Script").mkdir(parents=True)
+            source = modkit / "Script" / "Fixture.as"
+            original = b"class UFixture {}\r\n"
+            source.write_bytes(original)
+            workspace.mkdir()
+            backend = NativeClient(port=native.port)
+            self.addCleanup(backend.close)
+            with patch("g1r_mcp.server.NativeClient", return_value=backend) as factory:
+                server = create_server(modkit, workspace, native_port=native.port, transport="streamable-http")
+                factory.assert_called_once_with(port=native.port)
+                app = server.streamable_http_app(host="127.0.0.1", streamable_http_path="/mcp",
+                    stateless_http=False, json_response=True,
+                    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=True,
+                        allowed_hosts=["127.0.0.1:27124"], allowed_origins=["http://127.0.0.1:27124"]))
+                counter = 0
+
+                async def rpc(client, method, params, session=None):
+                    nonlocal counter
+                    counter += 1
+                    headers = {"Accept": "application/json, text/event-stream"}
+                    if session is not None:
+                        headers["Mcp-Session-Id"] = session
+                    response = await client.post("/mcp", headers=headers,
+                        json={"jsonrpc": "2.0", "id": counter, "method": method, "params": params})
+                    self.assertEqual(response.status_code, 200, response.text[:500])
+                    return response
+
+                async def initialize(client, name):
+                    response = await rpc(client, "initialize", {"protocolVersion": "2025-06-18",
+                        "capabilities": {}, "clientInfo": {"name": name, "version": "1"}})
+                    session = response.headers["mcp-session-id"]
+                    notified = await client.post("/mcp", headers={"Mcp-Session-Id": session,
+                        "Accept": "application/json, text/event-stream"},
+                        json={"jsonrpc": "2.0", "method": "notifications/initialized"})
+                    self.assertEqual(notified.status_code, 202, notified.text)
+                    return session
+
+                async def call(client, session, name, parameters=None):
+                    response = await rpc(client, "tools/call", {"name": name,
+                        "arguments": parameters or {}}, session)
+                    result = response.json()["result"]
+                    self.assertFalse(result.get("isError", False), str(result)[:500])
+                    return result["structuredContent"], response
+
+                async with app.router.lifespan_context(app):
+                    async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app),
+                            base_url="http://127.0.0.1:27124") as first, \
+                            httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app),
+                            base_url="http://127.0.0.1:27124") as second:
+                        first_session = await initialize(first, "large-string-owner")
+                        second_session = await initialize(second, "large-string-reader")
+                        self.assertNotEqual(first_session, second_session)
+                        self.assertEqual((await call(first, first_session, "g1r_native_status"))[0], status)
+                        listed, _ = await call(first, first_session, "g1r_object_functions",
+                            {"handle": handle, "function_query": "EchoLargeString"})
+                        self.assertEqual(listed, reflection)
+                        actual, response = await call(first, first_session, "g1r_invoke",
+                            {"handle": handle, "function": "EchoLargeString", "arguments": arguments,
+                             "expected_signature_token": listed["items"][0]["signature_token"]})
+                        self.assertEqual(actual, echoed)
+                        self.assertEqual(actual["result"].encode("ascii"), text.encode("ascii"))
+                        self.assertGreater(len(response.request.content), 1048576)
+                        self.assertGreater(len(response.content), 1048576)
+                        terminated = await first.delete("/mcp", headers={"Mcp-Session-Id": first_session,
+                            "Accept": "application/json, text/event-stream"})
+                        self.assertEqual(terminated.status_code, 200, terminated.text)
+                        self.assertEqual((await call(second, second_session, "g1r_invoke",
+                            {"handle": handle, "function": "ReadCallCount"}))[0], getter)
+                        self.assertEqual((await call(second, second_session, "g1r_native_status"))[0], status)
+                factory.assert_called_once_with(port=native.port)
+            self.assertEqual(native.connections, 1)
+            self.assertEqual(native.echo_calls, 1)
+            self.assertGreater(native.request_frame_lengths[2], 1048576)
+            self.assertGreater(native.response_frame_lengths[2], 1048576)
+            self.assertEqual(native.response_sessions, ["fixture-session-1"] * len(steps))
+            self.assertEqual([request["op"] for request in native.requests],
+                             ["status", "functions", "invoke", "invoke", "status"])
+            self.assertEqual(len({request["id"] for request in native.requests}), len(steps))
+            self.assertEqual(source.read_bytes(), original)
+            self.assertEqual(list(workspace.iterdir()), [])
 
     async def test_two_http_sessions_share_native_owner_workspace_and_security_boundary(self):
         native_status = {"ready": True, "session_id": "shared-native-owner", "tick_count": 31}

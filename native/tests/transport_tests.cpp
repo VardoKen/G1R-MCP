@@ -127,7 +127,6 @@ void request_errors_and_handler_errors() {
         ++calls;
         if (input.at("op") == "reject") throw g1r_mcp::HandlerError("not_ready", "Мир не готов");
         if (input.at("op") == "throw") throw std::runtime_error("Скрытая ошибка");
-        if (input.at("op") == "big") return {{"text", std::string(g1r_mcp::MaxFrameBytes, 'x')}};
         if (input.at("op") == "scalar") return 1;
         return {{"ok", true}};
     }, 0);
@@ -143,7 +142,7 @@ void request_errors_and_handler_errors() {
     {
         Client client(port(transport));
         for (const auto& [op, code] : {std::pair{"reject", "not_ready"}, {"throw", "native_handler_error"},
-                                    {"big", "response_too_large"}, {"scalar", "invalid_handler_result"}}) {
+                                    {"scalar", "invalid_handler_result"}}) {
             client.send_json(request(op, op));
             require(client.read_json().at("error").at("code") == code, "Неверный код ошибки обработчика");
         }
@@ -157,8 +156,8 @@ void request_errors_and_handler_errors() {
     }
     {
         Client client(port(transport));
-        client.send_bytes(std::string{"\0\x10\0\1", 4});
-        require(client.read_json().at("error").at("code") == "invalid_frame_length", "Большой кадр не отвергнут");
+        client.send_bytes(std::string{"\0\0\0\0", 4});
+        require(client.read_json().at("error").at("code") == "invalid_frame_length", "Пустой кадр не отвергнут");
     }
     transport.stop();
 }
@@ -185,30 +184,40 @@ void execution_error_metadata() {
     transport.stop();
 }
 
-void executed_result_exceeding_frame_preserves_effect_and_session() {
+void large_request_and_result_preserve_effect_and_session() {
+    constexpr std::size_t former_frame_limit=1024U*1024U;
+    const std::string large_text=std::string(former_frame_limit+97U,'x')+"Привет";
+    json nested={{"text",large_text}};
+    for(int depth=0;depth<40;++depth)nested={{"nested",std::move(nested)}};
+    auto large_request=request("large","large_action");
+    large_request["params"]={{"payload",nested}};
+    require(large_request.dump().size()>former_frame_limit,"Запрос должен превышать прежний предел 1 МиБ");
     std::atomic_int action_calls{0};
     Transport transport([&](const json& envelope)->json {
         if(envelope.at("op")=="large_action") {
             ++action_calls;
-            return {{"executed",true},{"result",std::string(g1r_mcp::MaxFrameBytes,'x')}};
+            return {{"executed",true},{"may_have_executed",true},{"do_not_retry",true},
+                    {"result",envelope.at("params").at("payload")}};
         }
         return {{"ready",true}};
     },0);
     require(transport.start(),"Транспорт большого результата не запущен");
     {
         Client client(port(transport));
-        client.send_json(request("large","large_action"));
-        const auto failed=client.read_json();
-        require(failed.at("type")=="error" && failed.at("error").at("code")=="response_too_large",
-                "Переполнение результата не вернуло структурированный отказ");
-        const auto& details=failed.at("error").at("details");
+        client.send_json(large_request);
+        const auto response=client.read_json();
+        require(response.at("type")=="response" && response.at("id")=="large",
+                "Большой запрос и результат не прошли транспорт");
+        require(response.dump().size()>former_frame_limit && response.at("result").at("result")==nested,
+                "Большой вложенный результат или его UTF-8 текст изменились");
+        const auto& details=response.at("result");
         require(details.at("executed")==true && details.at("may_have_executed")==true
                 && details.at("do_not_retry")==true,"Большой ответ скрыл выполненное действие");
         require(action_calls==1,"Большое действие было повторено");
         client.send_json(request("status","status"));
         const auto status=client.read_json();
-        require(status.at("result").at("ready")==true && status.at("session_id")==failed.at("session_id"),
-                "Отказ большого результата изменил сессию или сломал следующее чтение");
+        require(status.at("result").at("ready")==true && status.at("session_id")==response.at("session_id"),
+                "Большой результат изменил сессию или сломал следующее чтение");
         require(action_calls==1,"Следующее чтение повторило действие");
     }
     transport.stop();
@@ -240,20 +249,47 @@ void bounded_timeout_and_stop() {
     }
 }
 
-void bounded_session_and_busy_port() {
-    Transport transport([](const json&) { return json{{"ok", true}}; }, 0);
+void long_session_and_busy_port() {
+    std::atomic_int calls{0},action_calls{0};
+    Transport transport([&](const json& envelope) {
+        ++calls;
+        if(envelope.at("op")=="action") {
+            ++action_calls;
+            return json{{"executed",true},{"may_have_executed",true},{"do_not_retry",true}};
+        }
+        return json{{"ok",true}};
+    }, 0);
     require(transport.start(), "Первый слушатель не создан");
+    require(transport.status().at("max_session_requests").is_null(),"Статус сохранил предел числа запросов сессии");
     Transport occupied([](const json&) { return json::object(); }, port(transport));
     require(!occupied.start(), "Занятый порт неожиданно открыт повторно");
     {
         Client client(port(transport));
-        for (std::size_t index = 0; index < g1r_mcp::MaxSessionRequests; ++index) {
+        json first_session;
+        constexpr int requests=1030;
+        for (int index = 0; index < requests; ++index) {
             client.send_json(request(std::to_string(index)));
-            require(client.read_json().at("type") == "response", "Запрос внутри лимита отклонён");
+            const auto response=client.read_json();
+            require(response.at("type")=="response" && response.at("result").at("ok")==true,
+                    "Длинная сессия отвергла запрос");
+            if(index==0)first_session=response.at("session_id");
+            require(response.at("session_id")==first_session,"Длинная сессия сменилась между запросами");
         }
-        client.send_json(request("overflow"));
-        require(client.read_json().at("error").at("code") == "session_request_limit", "Предел сессии не применён");
-        require(client.closed(), "Сессия после лимита не закрыта");
+        client.send_json(request("0"));
+        const auto duplicate=client.read_json();
+        require(duplicate.at("error").at("code")=="duplicate_request_id" && duplicate.at("session_id")==first_session,
+                "Длинная сессия потеряла защиту от повторного ID");
+        require(calls==requests && action_calls==0,"Повторный ID вызвал обработчик");
+        client.send_json(request("action-after-long-session","action"));
+        const auto action=client.read_json();
+        require(action.at("type")=="response" && action.at("session_id")==first_session
+                && action.at("result").at("executed")==true && action_calls==1,
+                "Действие после 1024 запросов не выполнилось ровно один раз");
+        client.send_json(request("getter-after-action","getter"));
+        const auto getter=client.read_json();
+        require(getter.at("result").at("ok")==true && getter.at("session_id")==first_session
+                && calls==requests+2 && action_calls==1,
+                "Следующее чтение сменило сессию или повторило действие");
     }
     transport.stop();
 }
@@ -264,11 +300,11 @@ int main() {
     try {
         exchange_duplicate_and_reconnect();
         execution_error_metadata();
-        executed_result_exceeding_frame_preserves_effect_and_session();
+        large_request_and_result_preserve_effect_and_session();
         request_errors_and_handler_errors();
         bounded_timeout_and_stop();
-        bounded_session_and_busy_port();
-        std::cout << "4 сценария нативного транспорта пройдены\n";
+        long_session_and_busy_port();
+        std::cout << "6 сценариев нативного транспорта пройдены\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "Проверка транспорта не пройдена: " << error.what() << '\n';

@@ -179,6 +179,31 @@ class NativeClientTests(unittest.TestCase):
         self.assertEqual(received[0]["protocol"], 1)
         self.assertEqual(received[0]["params"], {"text": "Жизнь"})
 
+    def test_request_and_echo_larger_than_one_mib_keep_connection_without_retry(self):
+        received = []
+        text = "Мир 🐉\n" * 100_000
+        self.assertGreater(len(text.encode("utf-8")), 1024 * 1024)
+        self.assertEqual(MAX_FRAME_BYTES, 0xFFFFFFFF)
+
+        def handler(stream):
+            value = request(stream)
+            received.append(value)
+            wire = frame(response(value, {"text": value["params"]["text"], "executed": True}))
+            self.assertGreater(len(wire) - 4, 1024 * 1024)
+            stream.sendall(wire)
+            following = request(stream)
+            received.append(following)
+            stream.sendall(frame(response(following, {"ready": True, "accepted_requests": len(received)})))
+
+        with FakeServer(handler) as server, NativeClient(port=server.port) as client:
+            echoed = client.request("invoke", {"text": text})
+            self.assertEqual(echoed, {"text": text, "executed": True})
+            self.assertEqual(client.status(), {"ready": True, "accepted_requests": 2})
+            self.assertEqual(server.accepted, 1)
+        self.assertEqual([value["op"] for value in received], ["invoke", "status"])
+        self.assertEqual(received[0]["params"]["text"].encode("utf-8"), text.encode("utf-8"))
+        self.assertEqual(len({value["id"] for value in received}), 2)
+
     def test_timeout_after_send_does_not_retry_and_drops_connection(self):
         received = []
         ended = threading.Event()
@@ -256,10 +281,10 @@ class NativeClientTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, "native_protocol_error")
             self.assertTrue(caught.exception.may_have_executed)
 
-    def test_header_limit_rejected_without_receiving_body(self):
+    def test_zero_length_header_rejected_without_receiving_body(self):
         def handler(stream):
             request(stream)
-            stream.sendall(struct.pack(">I", MAX_FRAME_BYTES + 1))
+            stream.sendall(struct.pack(">I", 0))
 
         with FakeServer(handler) as server, NativeClient(port=server.port) as client:
             with self.assertRaises(NativeError) as caught:
@@ -327,8 +352,7 @@ class NativeClientTests(unittest.TestCase):
             with self.subTest(values=values), self.assertRaises(ValueError):
                 NativeClient(**values)
         with NativeClient() as client, patch("g1r_mcp.native_client.socket.socket") as opened:
-            for operation, params in (("", {}), ("x" * 65, {}), ("\ud800", {}), ("x", []),
-                                      ("x", {"text": "x" * MAX_FRAME_BYTES})):
+            for operation, params in (("", {}), ("x" * 65, {}), ("\ud800", {}), ("x", [])):
                 with self.subTest(operation=operation[:10]), self.assertRaises(ValueError):
                     client.request(operation, params)
             with self.assertRaises(NativeError) as caught:

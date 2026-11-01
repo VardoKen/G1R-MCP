@@ -13,7 +13,7 @@ import uuid
 
 PROTOCOL_VERSION = 1
 DEFAULT_PORT = 27123
-MAX_FRAME_BYTES = 1024 * 1024
+MAX_FRAME_BYTES = 0xFFFFFFFF
 MAX_TIMEOUT = 5.0
 
 
@@ -197,7 +197,7 @@ class NativeClient:
                               {"executed": False, "may_have_executed": False, "do_not_retry": False,
                                "request_started": False, "stage": "serialization_not_sent"}) from None
         if len(payload) > MAX_FRAME_BYTES:
-            raise ValueError("Запрос превышает предел 1 МиБ")
+            raise ValueError("Длина запроса не представима четырёхбайтовым заголовком кадра")
         deadline = time.monotonic() + duration
         if not self._request_lock.acquire(timeout=duration):
             raise NativeError("native_busy", "Истёк срок ожидания предыдущего нативного запроса", False, request_id)

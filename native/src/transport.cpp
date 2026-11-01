@@ -133,7 +133,7 @@ nlohmann::json Transport::status() const {
     return {{"running", running_.load()}, {"listening", listener_ != INVALID_SOCKET},
             {"connected", active_client_ != INVALID_SOCKET}, {"host", "127.0.0.1"},
             {"port", bound_port_}, {"session_id", session_.empty() ? nlohmann::json(nullptr) : nlohmann::json(session_)},
-            {"max_frame_bytes", MaxFrameBytes}, {"max_session_requests", MaxSessionRequests},
+            {"max_frame_bytes", MaxFrameBytes}, {"max_session_requests", nullptr},
             {"last_error", {{"code", last_error_code_}, {"message", last_error_message_}}}};
 }
 
@@ -257,10 +257,7 @@ void Transport::serve(SOCKET client, const std::string& session) {
         if (!read_exact(client, payload.data(), payload.size(), deadline)) return;
         nlohmann::json request;
         try {
-            request = nlohmann::json::parse(payload, [](int depth, nlohmann::json::parse_event_t, nlohmann::json&) {
-                if (depth > 32) throw std::runtime_error("JSON глубже допустимого предела");
-                return true;
-            });
+            request = nlohmann::json::parse(payload);
         }
         catch (...) {
             send_json(client, error_response(nullptr, session, "invalid_json", "Кадр не содержит корректный JSON"));
@@ -283,10 +280,6 @@ void Transport::serve(SOCKET client, const std::string& session) {
         if (seen.contains(request_id)) {
             if (!send_json(client, error_response(id, session, "duplicate_request_id", "Идентификатор уже использован в этом соединении"))) return;
             continue;
-        }
-        if (seen.size() >= MaxSessionRequests) {
-            send_json(client, error_response(id, session, "session_request_limit", "Достигнут предел запросов соединения; требуется новое соединение"));
-            return;
         }
         seen.insert(request_id);
         request["session_id"] = session;

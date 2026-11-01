@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -24,8 +25,7 @@
 namespace g1r_mcp {
 
 inline constexpr std::uint16_t DefaultPort = 27123;
-inline constexpr std::uint32_t MaxFrameBytes = 1024U * 1024U;
-inline constexpr std::size_t MaxSessionRequests = 1024;
+inline constexpr std::uint32_t MaxFrameBytes = std::numeric_limits<std::uint32_t>::max();
 
 class HandlerError : public std::runtime_error {
 public:
