@@ -35,8 +35,8 @@ LOCAL_TOOLS = (
     ("g1r_capabilities", "Catalog of implemented and unavailable groups"),
     ("g1r_source_identity", "Current Modkit Git HEAD and comparison with the revision label"),
     ("g1r_verify_source_game", "Compare Modkit script bytes with the installed game"),
-    ("g1r_find_source_files", "Find official Modkit files"),
-    ("g1r_search_source", "Literal search of AngelScript lines"),
+    ("g1r_find_source_files", "Find Modkit or selected workspace-package source files"),
+    ("g1r_search_source", "Literal search of Modkit or selected workspace-package sources"),
     ("g1r_read_source", "Bounded reading of Modkit source"),
     ("g1r_read_source_exact", "Full source text preserving BOM, line endings, and SHA-256"),
     ("g1r_list_source_types", "Lexical search of type and base-class declarations with source SHA-256"),
@@ -489,19 +489,25 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             raise _tool_failure(error) from None
 
     @server.tool(annotations=read_only)
-    def g1r_find_source_files(query: str, limit: int = 50, offset: int = 0) -> dict[str, Any]:
-        """Find a page of relative .as paths; continue through next_offset without an atomic snapshot."""
+    def g1r_find_source_files(query: str, limit: int = 50, offset: int = 0,
+                              relative_package: str | None = None) -> dict[str, Any]:
+        """Find Modkit .as paths or all Script/ScriptPatches paths in relative_package; paginate through next_offset."""
         try:
+            if relative_package is not None:
+                return workspace.search_source_files(relative_package, query, limit, offset)
             return sources.search_files(query, limit, offset)
-        except SourceError as error:
+        except (SourceError, WorkspaceError) as error:
             raise _tool_failure(error) from None
 
     @server.tool(annotations=read_only)
-    def g1r_search_source(query: str, limit: int = 50, case_sensitive: bool = False, offset: int = 0) -> dict[str, Any]:
-        """Search for literal text in official .as files; return a bounded set of lines with source references."""
+    def g1r_search_source(query: str, limit: int = 50, case_sensitive: bool = False, offset: int = 0,
+                         relative_package: str | None = None) -> dict[str, Any]:
+        """Search literal lines in Modkit .as files or all Script/ScriptPatches files in relative_package."""
         try:
+            if relative_package is not None:
+                return workspace.search_source_text(relative_package, query, limit, case_sensitive, offset)
             return sources.search_text(query, limit, case_sensitive=case_sensitive, offset=offset)
-        except SourceError as error:
+        except (SourceError, WorkspaceError) as error:
             raise _tool_failure(error) from None
 
     @server.tool(annotations=read_only)

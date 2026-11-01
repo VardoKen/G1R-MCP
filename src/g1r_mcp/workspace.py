@@ -368,6 +368,104 @@ class PackageWorkspace:
                            next_offset=offset + len(items) if has_more else None, has_more=has_more,
                            truncated=len(items) < len(files), snapshot_atomic=False)
 
+    def _source_files(self, relative_path: str) -> tuple[Path, str, list[str]]:
+        package, name = self._package(relative_path)
+        files = []
+        with _guard_directories(package, self.root):
+            def walk_error(error: OSError) -> None:
+                raise WorkspaceError("access_error", "Could not read the source directory")
+            for component in ("Script", "ScriptPatches"):
+                root = package / component
+                if not os.path.lexists(root):
+                    continue
+                self._unprotected(_checked(root, package, directory=True))
+                for directory, directories, names in os.walk(root, followlinks=False, onerror=walk_error):
+                    parent = self._unprotected(_checked(Path(directory), package, directory=True))
+                    for child in directories:
+                        self._unprotected(_checked(parent / child, package, directory=True))
+                    for child in names:
+                        file = self._unprotected(_checked(parent / child, package))
+                        if not file.is_file():
+                            raise WorkspaceError("invalid_path", "The source must be a regular file")
+                        files.append(file.relative_to(package).as_posix())
+        return package, name, sorted(files)
+
+    @staticmethod
+    def _source_search_arguments(query: str, limit: int, offset: int) -> None:
+        if not isinstance(query, str) or not query or "\0" in query:
+            raise WorkspaceError("invalid_arguments", "The query must be a nonempty string without NUL")
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise WorkspaceError("invalid_arguments", "The limit must be a positive integer")
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise WorkspaceError("invalid_arguments", "The offset must be a nonnegative integer")
+
+    def _source_search_result(self, name: str, files: list[str], items: list[dict],
+                              total: int, limit: int, offset: int, skipped: list[dict], **extra) -> dict:
+        next_offset = offset + len(items)
+        result = {"items": items, "truncated": total > len(items), "truncation_scope": "items",
+                  "total_matches": total, "scanned_files": len(files), "scan_complete": not skipped,
+                  "source": "workspace_package_static", "validation": "source_only",
+                  "snapshot_kind": "sequential_file_reads", "scope": "workspace_package",
+                  "relative_package": name, "package": name,
+                  "offset": offset, "limit": limit,
+                  "next_offset": next_offset if next_offset < total else None,
+                  "has_more": next_offset < total, "pagination_limit_reached": False, "max_offset": None,
+                  "skipped_files": skipped, "skipped_count": len(skipped), "skipped_list_truncated": False,
+                  **extra}
+        if skipped:
+            result["total_matches"] = None
+            result["total_matches_lower_bound"] = total
+        return result
+
+    def search_source_files(self, relative_path: str, query: str, limit: int = 50,
+                             offset: int = 0) -> dict:
+        """Search Script and ScriptPatches paths of one workspace package without reading file contents."""
+        self._source_search_arguments(query, limit, offset)
+        needle = query.casefold()
+        with self._lock:
+            package, name, files = self._source_files(relative_path)
+            matched = [file for file in files if needle in file.casefold()]
+            items = [{"path": file, "root_kind": "workspace_script" if file.startswith("Script/")
+                      else "workspace_script_patches"} for file in matched[offset:offset + limit]]
+            return self._source_search_result(name, files, items, len(matched), limit, offset, [])
+
+    def search_source_text(self, relative_path: str, query: str, limit: int = 50,
+                            case_sensitive: bool = False, offset: int = 0) -> dict:
+        """Search literal UTF-8 lines in Script and ScriptPatches; report unreadable files without claiming a complete scan."""
+        self._source_search_arguments(query, limit, offset)
+        if not isinstance(case_sensitive, bool):
+            raise WorkspaceError("invalid_arguments", "The case sensitivity parameter must be a boolean")
+        needle = query if case_sensitive else query.casefold()
+        with self._lock:
+            package, name, files = self._source_files(relative_path)
+            items = []
+            skipped = []
+            total = 0
+            for file_path in files:
+                item = {"path": file_path, "root_kind": "workspace_script" if file_path.startswith("Script/")
+                        else "workspace_script_patches"}
+                try:
+                    parts = self._file_parts(file_path)
+                    file = self._unprotected(_checked(package.joinpath(*parts), package))
+                    with _guard_directories(file.parent, self.root):
+                        raw = _read_bytes(file, package, MAX_FILE_BYTES)
+                    text = raw.decode("utf-8-sig", errors="strict")
+                except UnicodeDecodeError:
+                    skipped.append({**item, "error_code": "invalid_encoding"})
+                    continue
+                except WorkspaceError as error:
+                    if error.code == "unsafe_path":
+                        raise
+                    skipped.append({**item, "error_code": error.code})
+                    continue
+                for line_number, line in enumerate(text.splitlines(), 1):
+                    if needle in (line if case_sensitive else line.casefold()):
+                        total += 1
+                        if total > offset and len(items) < limit:
+                            items.append({**item, "line": line_number, "text": line, "text_truncated": False})
+            return self._source_search_result(name, files, items, total, limit, offset, skipped,
+                                              query_kind="literal")
+
     def read_package_file(self, relative_path: str, file_path: str,
                           start_line: int = 1, line_count: int = 100) -> dict:
         parts = self._file_parts(file_path)
