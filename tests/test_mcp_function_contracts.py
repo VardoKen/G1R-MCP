@@ -15,6 +15,55 @@ class MCPFunctionContractTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self._asyncioRunner.get_loop().slow_callback_duration = 2.0
 
+    async def test_large_selected_property_names_and_limits_reach_native_unchanged(self):
+        handle = "obj-large-selection"
+        names = [f"Property{index:02}" for index in range(31)] + ["A" * 257, "Я" * 129]
+        self.assertEqual(len(names), 33)
+        self.assertGreater(len(names[-1].encode("utf-8")), 256)
+        selected = {"source": "live_native", "session_id": "fixture-session-1", "handle": handle,
+                    "partial": False, "truncated": False, "items": [
+                        {"name": name, "type": "StrProperty", "supported": True, "value": f"value-{index}"}
+                        for index, name in enumerate(names)]}
+        status = {"ready": True, "session_id": "fixture-session-1", "tick_count": 7}
+        limits = (201, 2**64 - 1)
+        steps = [{"op": "properties", "params": {"handle": handle, "limit": limit, "property_names": names},
+                  "result": selected} for limit in limits]
+        steps.append({"op": "status", "params": {}, "result": status})
+        with tempfile.TemporaryDirectory() as temporary, SessionNativeFixture(steps) as native:
+            root = Path(temporary)
+            source = root / "Modkit" / "Script" / "Fixture.as"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"class UFixture {}\n")
+            original = source.read_bytes()
+            workspace = root / "workspace"
+            workspace.mkdir()
+            parameters = StdioServerParameters(command=sys.executable, args=[
+                "-B", "-m", "g1r_mcp.server", "--modkit-root", str(source.parent.parent),
+                "--workspace-root", str(workspace), "--native-port", str(native.port)])
+            async with stdio_client(parameters) as (incoming, outgoing):
+                async with ClientSession(incoming, outgoing) as client:
+                    await client.initialize()
+                    tool = next(tool for tool in (await client.list_tools()).tools if tool.name == "g1r_object_properties")
+                    schema = tool.input_schema["properties"]
+                    self.assertEqual(schema["limit"]["default"], 50)
+                    names_schema = schema["property_names"]["anyOf"]
+                    self.assertEqual({option["type"] for option in names_schema}, {"array", "null"})
+                    self.assertEqual(next(option for option in names_schema if option["type"] == "array")["items"]["type"], "string")
+                    self.assertTrue(tool.annotations.read_only_hint)
+                    for limit in limits:
+                        result = await client.call_tool("g1r_object_properties", {
+                            "handle": handle, "limit": limit, "property_names": names})
+                        self.assertFalse(result.is_error, result.content)
+                        self.assertEqual(result.structured_content, selected)
+                    following = await client.call_tool("g1r_native_status", {})
+                    self.assertFalse(following.is_error, following.content)
+                    self.assertEqual(following.structured_content, status)
+            self.assertEqual(native.connections, 1)
+            self.assertEqual([request["op"] for request in native.requests], ["properties", "properties", "status"])
+            self.assertEqual(len({request["id"] for request in native.requests}), 3)
+            self.assertEqual(source.read_bytes(), original)
+            self.assertEqual(list(workspace.iterdir()), [])
+
     async def test_optional_contracts_keep_legacy_payload_errors_and_connection(self):
         no_effect = {"executed": False, "may_have_executed": False, "do_not_retry": False}
         handle = "obj-contract"

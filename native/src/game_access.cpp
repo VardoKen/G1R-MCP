@@ -400,7 +400,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.57"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.58"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
@@ -834,12 +834,17 @@ json GameAccess::object_info(void* object,int index) {
     auto ptr=reinterpret_cast<uintptr_t>(object);return {{"handle",handle_for(object,index)},{"index",index},{"name",object_name(object)},
         {"path",object_path(object)},{"class",object_name(reinterpret_cast<void*>(read<uintptr_t>(ptr+0x10)))},{"flags",read<uint32_t>(ptr+8)}};
 }
-json GameAccess::properties(void* object,int limit) {
+json GameAccess::properties(void* object,std::size_t limit) {
     json items=json::array();auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);bool truncated=false;
-    for(int depth=0;klass && depth<64;klass=read<uintptr_t>(klass+0x40),++depth) {
+    std::set<uintptr_t> visited_classes,visited_fields;
+    for(;klass;klass=read<uintptr_t>(klass+0x40)) {
+        if(!visited_classes.insert(klass).second)
+            throw HandlerError("property_scan_cycle","Class chain contains a cycle");
         auto field=read<uintptr_t>(klass+0x50);auto class_size=read<int32_t>(klass+0x58);
-        for(int count=0;field && count<4096;field=read<uintptr_t>(field+0x18),++count) {
-            if(items.size()>=static_cast<size_t>(limit)){truncated=true;break;}
+        for(;field;field=read<uintptr_t>(field+0x18)) {
+            if(items.size()>=limit){truncated=true;break;}
+            if(!visited_fields.insert(field).second)
+                throw HandlerError("property_scan_cycle","Property chain contains a cycle");
             auto type=field_type(field,[this](auto f){return name(f);});auto offset=read<int32_t>(field+0x44),size=read<int32_t>(field+0x34);
             json item={{"name",name(read<uint64_t>(field+0x20))},{"type",type},{"offset",offset},{"element_size",size},{"array_dim",read<int32_t>(field+0x30)}};
             if(offset>=0 && size>0 && offset<=class_size-size && item["array_dim"]==1) {
@@ -2320,7 +2325,21 @@ json GameAccess::execute(const json& request) {
         return read_struct(object,params.at("handle").get<std::string>(),params.at("property_name").get<std::string>());
     }
     if(op=="properties") {
-        if(!params.contains("property_names"))return properties(object,limit_of(params));
+        if(!params.contains("property_names")) {
+            std::size_t limit=50;
+            if(params.contains("limit")) {
+                const auto& value=params.at("limit");
+                if(!value.is_number_integer() || (!value.is_number_unsigned() && value.get<int64_t>()<1)
+                   || value.get<uint64_t>()<1 || value.get<uint64_t>()>std::numeric_limits<std::size_t>::max())
+                    throw HandlerError("invalid_limit","limit must be a positive integer representable by size_t");
+                limit=static_cast<std::size_t>(value.get<uint64_t>());
+            }
+            const auto before=serial_identity(validate_object(object));
+            auto result=properties(object,limit);
+            if(resolve(params.at("handle").get<std::string>())!=object || !same_serial_identity(before,serial_identity(validate_object(object))))
+                throw HandlerError("stale_handle","Object identity changed while reading properties");
+            return result;
+        }
         const auto before=serial_identity(validate_object(object));
         auto result=selected_properties(object,params.at("property_names"));
         if(resolve(params.at("handle").get<std::string>())!=object || !same_serial_identity(before,serial_identity(validate_object(object))))

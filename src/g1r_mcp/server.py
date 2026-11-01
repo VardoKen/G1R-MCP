@@ -762,7 +762,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     @server.tool(annotations=read_only)
     def g1r_object_properties(handle: str, limit: int = 50,
                               property_names: list[StrictStr] | None = None) -> dict[str, Any]:
-        """Читать свойства ссылки; property_names выбирает до 32 точных уникальных имён в заданном порядке."""
+        """Читать свойства ссылки; property_names выбирает точные уникальные имена в заданном порядке."""
         params = {"handle": handle, "limit": limit}
         if property_names is not None:
             params["property_names"] = property_names

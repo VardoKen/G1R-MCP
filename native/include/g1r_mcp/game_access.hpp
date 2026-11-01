@@ -115,7 +115,7 @@ private:
     void* slot(int index) const;
     SlotIdentity slot_identity(int index) const;
     nlohmann::json object_info(void* object, int index);
-    nlohmann::json properties(void* object, int limit);
+    nlohmann::json properties(void* object, std::size_t limit);
     nlohmann::json selected_properties(void* object, const nlohmann::json& names);
     nlohmann::json snapshot(const nlohmann::json& targets);
     nlohmann::json capture_function_contract(void* object, uintptr_t owner, uintptr_t function, const std::string& target_handle);

@@ -41,22 +41,28 @@ int main() {
         require(differently_cased[0]=="Entry" && differently_cased[1]=="entry" && differently_cased[2]==" Entry ",
                 "Проверка не должна сворачивать регистр или убирать пробелы");
 
-        json maximum=json::array();
-        for(std::size_t i=0;i<query::max_properties;++i)maximum.push_back("Property"+std::to_string(i));
-        query::validate(maximum);
-        require(maximum.size()==32,"Граница 32 свойства разрешена");
-        query::validate(json::array({std::string(256,'a')}));
+        json extended=json::array();
+        for(std::size_t i=0;i<33;++i)extended.push_back("Property"+std::to_string(i));
+        extended[0]=std::string(257,'a');
         std::string unicode;
-        for(int i=0;i<128;++i)unicode+="\xD0\xAF";
-        query::validate(json::array({unicode}));
-        require(unicode.size()==256,"Предел имени проверяется в байтах UTF-8");
-
-        auto too_many=maximum;
-        too_many.push_back("Property32");
+        for(int i=0;i<129;++i)unicode+="\xD0\xAF";
+        extended[32]=unicode;
+        calls=0;
+        const auto extended_result=query::validated(extended,[&](const json& names) {
+            ++calls;
+            require(&names==&extended,"Большой запрос не должен копироваться или нормализоваться до reader");
+            return names;
+        });
+        require(calls==1 && extended_result==extended && extended_result.size()==33,
+                "Запрос выше прежних пределов не дошёл до reader полностью и в исходном порядке");
+        require(extended_result[0].get_ref<const std::string&>().size()==257
+                && extended_result[32].get_ref<const std::string&>()==unicode && unicode.size()==258,
+                "Длинные ASCII и UTF-8 имена изменены");
+        auto duplicate_extended=extended;duplicate_extended[32]=extended[0];
         const std::vector<json> invalid={
-            nullptr,false,7,"StoredEntry",json::object(),json::array(),too_many,
+            nullptr,false,7,"StoredEntry",json::object(),json::array(),duplicate_extended,
             json::array({nullptr}),json::array({false}),json::array({1}),json::array({json::object()}),
-            json::array({""}),json::array({std::string(257,'a')}),json::array({unicode+"a"}),
+            json::array({""}),
             json::array({std::string("Entry\0Other",11)}),json::array({"Entry","Entry"}),
             json::array({"StoredEntry",nullptr})};
         for(const auto& names:invalid) {
