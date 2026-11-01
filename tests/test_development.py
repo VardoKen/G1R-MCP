@@ -8,11 +8,12 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from g1r_mcp.development import (CommandResult, DevelopmentError, DevelopmentService,
                                  execute_command, PROCESS_TIMEOUT_SECONDS)
+from g1r_mcp.window_input import WindowInputError
 
 
 class DevelopmentTests(unittest.TestCase):
@@ -170,6 +171,71 @@ class DevelopmentTests(unittest.TestCase):
         self.assertIn("-Restart", arguments)
         self.assertEqual(arguments[arguments.index("-ExpectedPid") + 1], "123")
         self.assertEqual(arguments[arguments.index("-ExpectedCreationTime") + 1], self.identity["creation_time"])
+
+    def test_queue_key_uses_exact_process_and_window_without_replacing_observer(self):
+        permanent_lease = Mock()
+        self.service._process_lease = permanent_lease
+        self.addCleanup(self.service.close)
+        window = 0x100000123
+        receipt = {"status": "input_queued", "process": self.identity, "selected_hwnd": window,
+                   "window_thread_id": 456, "virtual_key": 0x1B,
+                   "messages": [{"message": "WM_KEYDOWN", "queued": True},
+                                {"message": "WM_KEYUP", "queued": True}],
+                   "handling_confirmed": False, "outcome_unknown": False, "do_not_retry": False}
+        with patch.object(self.service, "process_state", return_value={"processes": [self.identity]}), \
+                patch("g1r_mcp.development.queue_key", return_value=receipt) as queued:
+            result = self.service.queue_key(self.identity, 0x1B, expected_window=window)
+        queued.assert_called_once_with(self.identity, 0x1B, expected_window=window)
+        self.assertEqual(result, receipt)
+        self.assertFalse(result["handling_confirmed"])
+        self.assertIs(self.service._process_lease, permanent_lease)
+        permanent_lease.close.assert_not_called()
+        permanent_lease.poll.assert_not_called()
+        self.assertEqual(self.calls, [])
+
+    def test_queue_key_rejects_changed_identity_and_closed_service_before_dispatch(self):
+        with patch.object(self.service, "process_state", return_value={"processes": [self.identity]}) as observed, \
+                patch("g1r_mcp.development.queue_key") as queued:
+            for expected, code in (
+                ({**self.identity, "pid": 124}, "process_changed"),
+                ({**self.identity, "creation_time": "2026-10-30T01:02:03.0000000Z"}, "process_changed"),
+                ({**self.identity, "executable": str(self.service.bootstrap_executable)}, "process_path_mismatch"),
+            ):
+                with self.subTest(expected=expected), self.assertRaises(DevelopmentError) as captured:
+                    self.service.queue_key(expected, 0x1B)
+                self.assertEqual(captured.exception.code, code)
+                self.assertFalse(captured.exception.outcome_unknown)
+            self.service.close()
+            observed.reset_mock()
+            with self.assertRaises(DevelopmentError) as captured:
+                self.service.queue_key(self.identity, 0x1B)
+            self.assertEqual(captured.exception.code, "service_closed")
+            self.assertFalse(captured.exception.outcome_unknown)
+            observed.assert_not_called()
+            queued.assert_not_called()
+        self.assertEqual(self.calls, [])
+
+    def test_queue_key_preserves_partial_receipt_and_uncertain_effect_without_retry(self):
+        receipt = {"status": "input_queue_failed", "process": self.identity, "selected_hwnd": 321,
+                   "window_thread_id": 456, "virtual_key": 0x1B,
+                   "messages": [{"message": "WM_KEYDOWN", "message_id": 0x100, "wparam": 0x1B,
+                                 "lparam": 0x10001, "queued": True},
+                                {"message": "WM_KEYUP", "message_id": 0x101, "wparam": 0x1B,
+                                 "lparam": 0xC0010001, "queued": False, "win32_error": 5}],
+                   "handling_confirmed": False, "outcome_unknown": True, "do_not_retry": True}
+        failure = WindowInputError("key_up_queue_failed", "Не удалось поставить отпускание в очередь", receipt)
+        with patch.object(self.service, "process_state", return_value={"processes": [self.identity]}), \
+                patch("g1r_mcp.development.queue_key", side_effect=failure) as queued:
+            with self.assertRaises(DevelopmentError) as captured:
+                self.service.queue_key(self.identity, 0x1B)
+        queued.assert_called_once_with(self.identity, 0x1B, expected_window=None)
+        self.assertEqual(captured.exception.code, failure.code)
+        self.assertEqual(str(captured.exception), str(failure))
+        self.assertTrue(captured.exception.outcome_unknown)
+        self.assertEqual(captured.exception.receipt, receipt)
+        self.assertTrue(captured.exception.receipt["do_not_retry"])
+        self.assertIs(captured.exception.__cause__, failure)
+        self.assertEqual(self.calls, [])
 
     def test_stop_and_load_require_identity_and_load_requires_dll_hash(self):
         self.processes = [self.identity]

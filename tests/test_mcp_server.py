@@ -45,16 +45,20 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(initialized.server_info.version, __version__)
                     tools = (await client.list_tools()).tools
                     names = {tool.name for tool in tools}
-                    self.assertEqual(len(names), 41)
+                    self.assertEqual(len(names), 42)
+                    self.assertIn("g1r_development_key", names)
                     source_tools = {"g1r_source_identity", "g1r_verify_source_game", "g1r_list_source_functions"}
                     self.assertTrue(source_tools.issubset(names))
                     mutations = {"g1r_invoke", "g1r_native_enable", "g1r_create_package",
                                  "g1r_write_package_file", "g1r_watch_start", "g1r_watch_stop", "g1r_watch_forget",
-                                 "g1r_development_start", "g1r_development_stop", "g1r_native_load",
+                                 "g1r_development_start", "g1r_development_stop", "g1r_development_key", "g1r_native_load",
                                  "g1r_create_package_directory"}
                     mutations.update({"g1r_session_acquire", "g1r_session_release"})
                     self.assertTrue(all(tool.annotations.read_only_hint for tool in tools if tool.name not in mutations))
                     self.assertFalse(next(tool for tool in tools if tool.name == "g1r_invoke").annotations.read_only_hint)
+                    key_tool = next(tool for tool in tools if tool.name == "g1r_development_key")
+                    self.assertFalse(key_tool.annotations.read_only_hint)
+                    self.assertFalse(key_tool.annotations.idempotent_hint)
 
                     status = await client.call_tool("g1r_status", {})
                     self.assertFalse(status.is_error)
@@ -68,6 +72,7 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                                                          capabilities.structured_content["local_tools"]}))
                     helpers = capabilities.structured_content["development_tools"]["helpers"]
                     self.assertIn("ReadText", helpers["functions"])
+                    self.assertIn("g1r_development_key", capabilities.structured_content["development_tools"]["operations"])
                     self.assertTrue(all(not group["available"] for group in capabilities.structured_content["game_groups"]))
                     found = await client.call_tool("g1r_find_source_files", {"query": "Example"})
                     self.assertFalse(found.is_error)

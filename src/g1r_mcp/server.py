@@ -18,7 +18,7 @@ from . import __version__
 from .packages import PackageError, validate_package
 from .sources import SourceCatalog, SourceError
 from .native_client import NativeClient, NativeError
-from pydantic import StrictBool, StrictStr
+from pydantic import StrictBool, StrictInt, StrictStr
 from .workspace import PackageWorkspace, WorkspaceError
 from .snapshots import SnapshotError, compare_snapshots
 from .development import DevelopmentError, DevelopmentService
@@ -69,7 +69,7 @@ NATIVE_TOOLS = (
 DEVELOPMENT_TOOLS = (
     "g1r_session_status", "g1r_session_acquire", "g1r_session_release", "g1r_compile_diagnostics",
     "g1r_development_recipe", "g1r_development_processes", "g1r_development_start",
-    "g1r_development_stop", "g1r_native_load",
+    "g1r_development_stop", "g1r_development_key", "g1r_native_load",
 )
 
 
@@ -535,7 +535,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     def development_request(operation: str, *, ctx: Context | None = None, session_reason: str = "Проверка рабочего пакета", **params: Any) -> dict[str, Any]:
         nonlocal native
         try:
-            if transport == "streamable-http" and operation in ("start", "stop", "load_native"):
+            if transport == "streamable-http" and operation in ("start", "stop", "queue_key", "load_native"):
                 owner = request_owner(ctx)
                 with ownership.lock:
                     acquired_here = False
@@ -576,9 +576,13 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                 previous_native.close()
             return result
         except DevelopmentError as error:
-            raise ToolError(json.dumps({"code": error.code, "message": str(error),
-                                       "outcome_unknown": error.outcome_unknown,
-                                       "retry": "only_explicit_new_request"}, ensure_ascii=False)) from None
+            payload = {"code": error.code, "message": str(error),
+                       "outcome_unknown": error.outcome_unknown,
+                       "retry": "only_explicit_new_request"}
+            if error.receipt is not None:
+                payload["receipt"] = error.receipt
+                payload["do_not_retry"] = error.receipt["do_not_retry"]
+            raise ToolError(json.dumps(payload, ensure_ascii=False)) from None
 
     @server.tool(annotations=read_only)
     def g1r_session_status() -> dict[str, Any]:
@@ -639,6 +643,16 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     def g1r_development_processes() -> dict[str, Any]:
         """Прочитать точные PID, времена создания и пути процессов выбранной игры."""
         return development_request("process_state")
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False,
+        destructiveHint=False, idempotentHint=False, openWorldHint=False))
+    def g1r_development_key(expected_process: dict[str, Any], virtual_key: StrictInt,
+                           expected_window: StrictInt | None = None,
+                           ctx: Context = None) -> dict[str, Any]:
+        """Поставить одну клавишу в очередь точного окна игры без Tick; обработка клавиши игрой проверяется отдельно."""
+        return development_request("queue_key", expected_process=expected_process,
+                                   virtual_key=virtual_key, expected_window=expected_window,
+                                   ctx=ctx)
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True,
                                             idempotentHint=False, openWorldHint=True))

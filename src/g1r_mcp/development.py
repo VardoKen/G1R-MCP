@@ -18,6 +18,7 @@ import re
 import subprocess
 import threading
 import uuid
+from .window_input import WindowInputError, queue_key
 from typing import Callable
 
 from .packages import MAX_DESCRIPTOR_BYTES, PackageError, validate_package
@@ -37,10 +38,12 @@ _TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{7}Z$")
 
 class DevelopmentError(Exception):
     """Ошибка операции с явным признаком неопределённого внешнего эффекта."""
-    def __init__(self, code: str, message: str, *, outcome_unknown: bool = False):
+    def __init__(self, code: str, message: str, *, outcome_unknown: bool = False,
+                 receipt: dict | None = None):
         super().__init__(message)
         self.code = code
         self.outcome_unknown = outcome_unknown
+        self.receipt = receipt
 
 
 @dataclass(frozen=True)
@@ -642,6 +645,19 @@ class DevelopmentService:
                         for item in stage["packages"]], "source_packages_modified": False,
                     "edit_target": "staged_copy_only", "hot_reload": "function_bodies_file_watch",
                     "staging_retention": "retain_for_review"} if stage is not None else {})}
+
+    def queue_key(self, expected_process: dict, virtual_key: int,
+                  expected_window: int | None = None) -> dict:
+        with self._observation_lock:
+            if self._closed:
+                raise DevelopmentError("service_closed", "Сервис разработки уже закрыт")
+            expected = self._expected_process(expected_process, self.process_state())
+            try:
+                return queue_key(expected, virtual_key, expected_window=expected_window)
+            except WindowInputError as error:
+                raise DevelopmentError(error.code, str(error),
+                                       outcome_unknown=error.outcome_unknown,
+                                       receipt=error.receipt) from error
 
     def stop(self, expected_process: dict) -> dict:
         with self._observation_lock:
