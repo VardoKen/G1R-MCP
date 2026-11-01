@@ -551,7 +551,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.67"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.68"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -585,7 +585,7 @@ json GameAccess::status() const {
                              {"interval_ms_min",1},{"interval_ms_max",nullptr},
                              {"capacity_min",1},{"capacity_max",nullptr},
                              {"buffer_bytes",nullptr},{"read_events",nullptr},
-                             {"due_watches_per_tick",1}}},
+                             {"due_watches_per_tick",nullptr}}},
             {"snapshot_consistency","single_tick_sequential"},
             {"world_generation_supported",false},
             {"serial_guard",{{"policy","strict_observed_equality_including_zero"},

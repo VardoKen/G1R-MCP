@@ -214,26 +214,19 @@ class DevelopmentCompositionTests(unittest.TestCase):
                 self.assertEqual(len(self.calls), before)
         self.assertFalse((self.workspace / "artifacts").exists())
 
-    def test_four_packages_are_ordered_and_five_are_rejected_without_side_effects(self):
+    def test_five_packages_are_ordered_and_staged(self):
         extras = ["extra/Third", "elsewhere/Fourth", "last/Fifth"]
         for relative in extras:
             self.make_package(relative, Path(relative).name)
-        companions = [self.helper_path, *extras[:2]]
+        companions = [self.helper_path, *extras]
         recipe = self.recipe(companions)
         self.assertEqual(recipe["manifest"]["selected_mods"],
-                         ["WorkingMod", "G1R_DevelopmentHelpers", "Third", "Fourth"])
+                         ["WorkingMod", "G1R_DevelopmentHelpers", "Third", "Fourth", "Fifth"])
         result = self.start(recipe, companions)
-        self.assertEqual(len(result["active_staging_packages"]), 4)
+        self.assertEqual(len(result["active_staging_packages"]), 5)
         arguments = self.launch_calls()[0]
         self.assertEqual(arguments[arguments.index("-ModsCsv") + 1],
-                         "WorkingMod,G1R_DevelopmentHelpers,Third,Fourth")
-        before_files = self.snapshot(self.workspace)
-        before_calls = len(self.calls)
-        with self.assertRaises(DevelopmentError) as captured:
-            self.recipe([self.helper_path, *extras])
-        self.assertEqual(captured.exception.code, "manifest_limit")
-        self.assertEqual(len(self.calls), before_calls)
-        self.assertEqual(self.snapshot(self.workspace), before_files)
+                         "WorkingMod,G1R_DevelopmentHelpers,Third,Fourth,Fifth")
 
     def test_wrong_receipt_names_or_root_leave_launch_outcome_unknown(self):
         transforms = {

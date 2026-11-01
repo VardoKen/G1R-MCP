@@ -138,15 +138,15 @@ if ($PSBoundParameters.ContainsKey('ModsCsv')) {
     if ($PSBoundParameters.ContainsKey('Mods')) {
         throw 'ModsCsv and Mods cannot be specified together.'
     }
-    if ([string]::IsNullOrWhiteSpace($ModsCsv) -or $ModsCsv.Length -gt 515) {
-        throw 'ModsCsv must contain 1 to 4 comma-separated package names.'
+    if ([string]::IsNullOrWhiteSpace($ModsCsv)) {
+        throw 'ModsCsv must contain one or more comma-separated package names.'
     }
     $selectedMods = @($ModsCsv.Split([char]','))
-    if ($selectedMods.Count -lt 1 -or $selectedMods.Count -gt 4) {
-        throw 'ModsCsv must contain 1 to 4 comma-separated package names.'
+    if ($selectedMods.Count -lt 1) {
+        throw 'ModsCsv must contain one or more comma-separated package names.'
     }
     foreach ($mod in $selectedMods) {
-        if ($mod -cnotmatch '\A[A-Za-z0-9_-]{1,128}\z') {
+        if ($mod -cnotmatch '\A[A-Za-z0-9_-]+\z') {
             throw 'ModsCsv contains an invalid package name.'
         }
     }
@@ -162,7 +162,7 @@ if (-not [string]::IsNullOrWhiteSpace($ModsDirectory) -or $selectedMods.Count -g
     Assert-NoPathRedirect -Path $resolvedModsDirectory
     $uniqueMods = @{}
     foreach ($mod in $selectedMods) {
-        if ([string]::IsNullOrWhiteSpace($mod) -or $mod -cnotmatch '^[A-Za-z0-9_-]{1,128}$' -or $uniqueMods.ContainsKey($mod)) {
+        if ([string]::IsNullOrWhiteSpace($mod) -or $mod -cnotmatch '^[A-Za-z0-9_-]+$' -or $uniqueMods.ContainsKey($mod)) {
             throw 'Mods names must be unique directory names containing letters, digits, _ or -.'
         }
         $uniqueMods[$mod] = $true

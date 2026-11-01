@@ -26,7 +26,6 @@ from .workspace import (PackageWorkspace, WorkspaceError, _checked, _destination
                         _guard_directories, _read_bytes)
 
 MAX_FILE_BYTES = None
-MAX_DEVELOPMENT_PACKAGES = 4
 PROCESS_TIMEOUT_SECONDS = 30
 _SHA = re.compile(r"^[0-9a-fA-F]{64}$")
 _TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{7}Z$")
@@ -293,7 +292,7 @@ class DevelopmentService:
             if not validation["valid_structure"]:
                 raise DevelopmentError("invalid_package", "The official package failed structural validation")
             name = validation["metadata"]["name"]
-            if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", name) or package.name != name:
+            if not re.fullmatch(r"[A-Za-z0-9_-]+", name) or package.name != name:
                 raise DevelopmentError("invalid_package_name", "The package name must exactly match the directory name")
             entries = []
             total = 0
@@ -369,8 +368,6 @@ class DevelopmentService:
         if not companion_packages:
             return self._manifest(relative_package, enable_ingame_tools=enable_ingame_tools,
                                   show_script_errors=show_script_errors)
-        if len(companion_packages) >= MAX_DEVELOPMENT_PACKAGES:
-            raise DevelopmentError("manifest_limit", "A development session supports no more than four packages")
         packages = [self._manifest(path, enable_ingame_tools=enable_ingame_tools,
                                    show_script_errors=show_script_errors)
                     for path in [relative_package, *companion_packages]]

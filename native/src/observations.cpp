@@ -123,7 +123,7 @@ Observations::Json Observations::start(const std::string& connection_session,
     result["start_seq"] = 1;
     result["duration_ms"] = duration;
     result["interval_ms"] = interval;
-    result["sampling"] = "at_most_one_due_watch_per_tick_no_catchup";
+    result["sampling"] = "all_due_watches_per_tick_no_catchup";
     order_.push_back(watch.id);
     watches_.emplace(watch.id, std::move(watch));
     return result;
@@ -219,7 +219,7 @@ void Observations::pump(std::uint64_t now_ms, std::uint64_t tick, const Reader& 
         if (watch.state != "running") continue;
         if (now_ms >= watch.deadline) {
             finish(watch, "completed", "duration_elapsed", now_ms, tick);
-            return;
+            continue;
         }
         if (now_ms < watch.next_sample) continue;
         watch.next_sample = watch.interval < watch.deadline - now_ms
@@ -238,7 +238,6 @@ void Observations::pump(std::uint64_t now_ms, std::uint64_t tick, const Reader& 
         } catch (...) {
             finish(watch, "failed", "snapshot_read_failed", now_ms, tick);
         }
-        return;
     }
 }
 

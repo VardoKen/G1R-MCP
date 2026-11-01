@@ -235,7 +235,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             "development_tools": {"implemented": True, "availability": "requires_windows_and_configured_game",
                                   "operations": list(DEVELOPMENT_TOOLS),
                                   "launch_result": "launch_requested", "compiler_result": "requires_runtime_probe",
-                                  "companion_packages": {"supported": True, "max_packages": 4,
+                                  "companion_packages": {"supported": True, "max_packages": None,
                                                          "edit_target": "active_staging_packages",
                                                          "sources_modified": False, "retention": "retain_for_review"},
                                   "helpers": {"relative_package": "development/helpers/G1RMCPDevelopmentHelpers",

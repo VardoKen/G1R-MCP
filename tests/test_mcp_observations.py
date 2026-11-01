@@ -248,7 +248,7 @@ class MCPObservationTests(unittest.IsolatedAsyncioTestCase):
         start_params = {"handle": "obj-1", "properties": ["Enabled"], "duration_ms": 1000,
                         "interval_ms": 20, "capacity": 2}
         started = dict(watch_metadata(), start_seq=1, duration_ms=1000, interval_ms=20,
-                       sampling="at_most_one_due_watch_per_tick_no_catchup")
+                       sampling="all_due_watches_per_tick_no_catchup")
         event = {"seq": 3, "kind": "changed", "elapsed_ms": 40, "tick_count": 44,
                  "snapshot": native_snapshot(value=False, tick=44)}
         running = dict(watch_metadata(next_seq=4, dropped=1, oldest_seq=2), events=[event],
@@ -274,7 +274,7 @@ class MCPObservationTests(unittest.IsolatedAsyncioTestCase):
                 async with ClientSession(incoming, outgoing) as client:
                     await client.initialize()
                     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-                    self.assertEqual(len(tools), 44)
+                    self.assertEqual(len(tools), 49)
                     for name in ("g1r_snapshot", "g1r_compare_snapshots", "g1r_watch_read"):
                         self.assertTrue(tools[name].annotations.read_only_hint)
                     self.assertFalse(tools["g1r_watch_start"].annotations.read_only_hint)

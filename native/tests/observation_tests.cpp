@@ -178,11 +178,11 @@ void list_and_resume_without_restarting() {
     model.pump(14,2,[&](const json&){++calls;return snapshot(11);});
     require(calls==0,"Resume изменил следующий интервал sampling");
     model.pump(15,3,[&](const json&){++calls;return snapshot(11);});
-    require(calls==1 && model.read("client-b",query(id)).at("last_seq")==2,"Sampling после передачи владения перезапущен");
+    require(calls==3 && model.read("client-b",query(id)).at("last_seq")==2,"Sampling после передачи владения перезапущен");
     model.pump(105,4,[&](const json&){++calls;return snapshot(12);});
     model.pump(105,5,[&](const json&){++calls;return snapshot(12);});
     model.pump(105,6,[&](const json&){++calls;return snapshot(12);});
-    require(calls==1 && model.read("client-b",query(id)).at("state")=="completed",
+    require(calls==3 && model.read("client-b",query(id)).at("state")=="completed",
             "Resume изменил исходный deadline");
     const auto terminal_before=model.read("client-b",query(id));
     const auto terminal=model.resume("connection-1","client-c",current_claim);
@@ -206,9 +206,9 @@ void two_watches_and_scheduling() {
     auto two=model.start("owner",params(100,128),snapshot(1),0,1).at("watch_id").get<std::string>();
     int calls=0;
     model.pump(10,2,[&](const json&){++calls;return snapshot(2);});
-    require(calls==1,"Pump превысил одну due работу");
+    require(calls==2,"Не все due работы получили чтение в одном Tick");
     model.pump(11,3,[&](const json&){++calls;return snapshot(3);});
-    require(calls==2,"Вторая работа не получила чтение");
+    require(calls==2,"Повторный Tick до интервала выполнил лишнее чтение");
     model.stop("owner",query(one),12,4);
     model.pump(21,5,[&](const json&){++calls;return snapshot(4);});
     require(calls==3 && model.read("owner",query(two)).at("state")=="running","Stop одной работы затронул другую");

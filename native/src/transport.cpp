@@ -32,8 +32,8 @@ Transport::Transport(Handler handler, std::uint16_t port, std::chrono::milliseco
     : handler_(std::move(handler)), session_closed_(std::move(session_closed)),
       requested_port_(port), io_timeout_(io_timeout) {
     if (!handler_) throw std::invalid_argument("The transport handler is missing");
-    if (io_timeout_.count() <= 0 || io_timeout_.count() > 60000)
-        throw std::invalid_argument("Transport timeout must be between 1 and 60000 ms");
+    if (io_timeout_.count() <= 0)
+        throw std::invalid_argument("Transport timeout must be positive");
 }
 
 Transport::~Transport() { stop(); }

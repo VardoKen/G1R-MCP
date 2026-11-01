@@ -84,11 +84,11 @@ class DevelopmentLauncherTests(unittest.TestCase):
 
     def test_four_csv_packages_are_accepted(self):
         result = self.success("-ModsDirectory", str(self.mods), "-ModsCsv",
-                              "Main,Second,Third,Fourth")
-        self.assertEqual(result["mods"], ["Main", "Second", "Third", "Fourth"])
+                              "Main,Helper,Second,Third,Fourth")
+        self.assertEqual(result["mods"], ["Main", "Helper", "Second", "Third", "Fourth"])
 
     def test_rejects_empty_and_oversized_csv(self):
-        invalid = ("", " ", "Main,Helper,Second,Third,Fourth", "M" * 516,
+        invalid = ("", " ", "M" * 516,
                    "Main,", ",Main", "Main,,Helper")
         for raw in invalid:
             with self.subTest(raw=raw[:80]):
