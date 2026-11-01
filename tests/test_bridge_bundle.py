@@ -78,7 +78,7 @@ class BridgeBundleTests(unittest.TestCase):
         self.assertEqual(verified["file_count"], result["file_count"])
         manifest = json.loads((self.target / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["compatibility"]["native_version_marker"], self.version)
-        self.assertIn("не установщик", (self.target / "НАЧАТЬ.md").read_text(encoding="utf-8"))
+        self.assertIn("not an installer or a public release", (self.target / "START.md").read_text(encoding="utf-8"))
 
     def test_existing_outside_and_symlink_targets_refused(self):
         self.prepare()
@@ -231,7 +231,7 @@ class BridgeBundleDependencyTests(unittest.TestCase):
 
     def test_verification_rejects_each_missing_dependency(self):
         repository = TOOL.parents[1]
-        selected = set(bundle._enumerate(repository)) | {"НАЧАТЬ.md"}
+        selected = set(bundle._enumerate(repository)) | {"START.md"}
         # Состав baseline моделируется в памяти: инструкции и полный комплект не создаются.
         contents = {path: b"baseline" for path in selected}
         contents.update({path: bundle._read(repository / path, repository) for path in self.DEPENDENCIES})

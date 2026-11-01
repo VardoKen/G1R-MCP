@@ -20,7 +20,8 @@ from .sources import SourceCatalog, SourceError
 from .native_client import NativeClient, NativeError
 from .tool_catalog import build_tool_contracts
 from pydantic import StrictBool, StrictInt, StrictStr
-from .workspace import PackageWorkspace, WorkspaceError
+from .workspace import PackageWorkspace, WorkspaceError, _parts, _checked
+from .package_export import ExportError, export_package, verify_export
 from .snapshots import SnapshotError, compare_snapshots
 from .development import DevelopmentError, DevelopmentService
 from .patches import PatchError, ScriptPatchBuilder
@@ -51,6 +52,8 @@ WORKSPACE_TOOLS = (
     ("g1r_read_package_file", "Read a workspace file with SHA-256 for change verification", "read_only"),
     ("g1r_read_package_file_exact", "Exact workspace-file text for editing without normalization", "read_only"),
     ("g1r_write_package_file", "Write source or descriptor files with conflict detection", "local_write"),
+    ("g1r_export_package", "Export a complete workspace package to a new directory containing a ZIP and SHA-256 manifest", "local_write"),
+    ("g1r_verify_package_export", "Verify the package ZIP and manifest in a workspace export directory", "read_only"),
 )
 NATIVE_TOOLS = (
     ("g1r_native_status", "Live status of the experimental native channel"),
@@ -78,7 +81,7 @@ DEVELOPMENT_TOOLS = (
 )
 
 
-def _tool_failure(error: SourceError | PackageError | WorkspaceError | SnapshotError | PatchError | InspectionError) -> ToolError:
+def _tool_failure(error: SourceError | PackageError | WorkspaceError | SnapshotError | PatchError | InspectionError | ExportError) -> ToolError:
     return ToolError(json.dumps({"code": error.code, "message": str(error)}, ensure_ascii=False))
 
 
@@ -312,6 +315,11 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                 ],
                 "existing_session_sequence": ["g1r_native_status", "g1r_session_status", "g1r_find_objects", "g1r_object_functions"],
                 "edit_tools": ["g1r_read_source_exact", "g1r_read_package_file_exact", "g1r_write_package_file"],
+                "export_tools": ["g1r_export_package", "g1r_verify_package_export"],
+                "export_sequence": [
+                    {"tool": "g1r_export_package", "condition": "Export the complete package to a new directory under workspace artifacts"},
+                    {"tool": "g1r_verify_package_export", "condition": "Verify the ZIP and SHA-256 manifest in the export directory"},
+                ],
                 "argument_examples": {
                     "g1r_create_package": {"relative_path": "Example",
                                            "metadata": {"name": "Example", "title": "Example", "author": "Author", "modVersion": "1.0.0"}},
@@ -320,6 +328,8 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                     "g1r_invoke": {"handle": "use_handle_from_find_objects", "function": "use_name_from_object_functions",
                                    "arguments": {"use_reflected_parameter_name": None}},
                     "g1r_list_package_files": {"relative_path": "Example", "limit": 100, "offset": 0},
+                    "g1r_export_package": {"relative_package": "Example", "destination": "artifacts/Example-export"},
+                    "g1r_verify_package_export": {"relative_path": "artifacts/Example-export"},
                 },
                 "ownership": "one_native_tcp_client_session",
                 "reconnect": "discard_old_handles_and_watches_then_find_objects_again",
@@ -561,6 +571,26 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
         try:
             return workspace.write_package_file(relative_path, file_path, content, expected_sha256)
         except WorkspaceError as error:
+            raise _tool_failure(error) from None
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                                            idempotentHint=False, openWorldHint=False))
+    def g1r_export_package(relative_package: str, destination: str) -> dict[str, Any]:
+        """Export the complete package to a new workspace artifacts directory with ZIP and manifest; does not install or load it."""
+        try:
+            target = workspace_root.joinpath(*_parts(destination))
+            return export_package(workspace_root, relative_package, target,
+                                  modkit_root=modkit_root, game_root=configured_game_root)
+        except (ExportError, WorkspaceError, PackageError) as error:
+            raise _tool_failure(error) from None
+
+    @server.tool(annotations=read_only)
+    def g1r_verify_package_export(relative_path: str) -> dict[str, Any]:
+        """Verify the ZIP and SHA-256 manifest in a workspace export directory without accessing the game."""
+        try:
+            target = _checked(workspace_root.joinpath(*_parts(relative_path)), workspace_root, directory=True)
+            return verify_export(target)
+        except (ExportError, WorkspaceError, PackageError) as error:
             raise _tool_failure(error) from None
 
     @server.tool(annotations=read_only)

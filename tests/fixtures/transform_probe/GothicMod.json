@@ -1,1 +1,1 @@
-{"name":"G1RMCPTransformProbe","title":"G1R MCP Transform Probe","author":"G1R MCP","description":"Изолированный FTransform-вход на собственном UObject с независимым чтением компонентов и проверочным счётчиком.","modVersion":"1.0.0"}
+{"name":"G1RMCPTransformProbe","title":"G1R MCP Transform Probe","author":"G1R MCP","description":"Isolated FTransform input on an owned UObject with independent component reads and a probe counter.","modVersion":"1.0.0"}

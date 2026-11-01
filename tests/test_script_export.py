@@ -1,6 +1,5 @@
-"""Скриптовый ZIP: точные байты, закрытый состав и отсутствие установки."""
+"""ZIP официального пакета: точные байты и отсутствие установки."""
 import hashlib
-import importlib.util
 import json
 from pathlib import Path
 import tempfile
@@ -8,10 +7,7 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
-TOOL = Path(__file__).resolve().parents[1] / "tools" / "export_script_package.py"
-SPEC = importlib.util.spec_from_file_location("export_script_package", TOOL)
-export = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(export)
+from g1r_mcp import package_export as export
 
 
 class ScriptExportTests(unittest.TestCase):
@@ -83,23 +79,28 @@ class ScriptExportTests(unittest.TestCase):
             self.assertTrue(any(entry.extract_version == 45 for entry in archive.infolist()))
         self.assertFalse(result["compiled"])
 
-    def test_unknown_components_and_non_source_files_refused(self):
-        for path in ("Content", "Config", "Story", "ScriptPatches/Nested"):
-            with self.subTest(path=path):
-                directory = self.package / path
-                directory.mkdir()
-                try:
-                    with self.assertRaises(export.ExportError) as captured:
-                        self.prepare()
-                    self.assertEqual(captured.exception.code, "unsupported_entry")
-                    self.assertFalse(self.target.exists())
-                finally:
-                    directory.rmdir()
-        unknown = self.package / "Script" / "Binds.Cache"
-        unknown.write_bytes(b"user cache")
-        with self.assertRaises(export.ExportError):
-            self.prepare()
-        self.assertEqual(unknown.read_bytes(), b"user cache")
+    def test_official_components_and_non_source_files_preserve_bytes(self):
+        components = {
+            "Config/Nested/settings.json": b'\x00\xff{"setting":true}\r\n',
+            "Content/Nested/resource.pak": b"\x00\x80\xff\x01binary resource",
+            "Story/Nested/dialogue.bin": b"\xfe\xff\x00story\r\n",
+            "ScriptPatches/Nested/Example.patch": b"\x00\xffnested patch bytes",
+            "Script/Binds.Cache": b"\x00\xffuser cache\x80",
+        }
+        for relative, raw in components.items():
+            path = self.package / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(raw)
+        result = self.prepare()
+        verified = export.verify_export(self.target)
+        self.assertEqual(verified["file_count"], 3 + len(components))
+        self.assertFalse(result["compiled"])
+        self.assertFalse(result["installed"])
+        with zipfile.ZipFile(self.target / "ActualMod.zip") as archive:
+            for relative, raw in components.items():
+                with self.subTest(path=relative):
+                    self.assertEqual(archive.read("ActualMod/" + relative), raw)
+                    self.assertEqual((self.package / relative).read_bytes(), raw)
 
     def test_protected_roots_existing_target_and_redirects_refused(self):
         self.prepare()

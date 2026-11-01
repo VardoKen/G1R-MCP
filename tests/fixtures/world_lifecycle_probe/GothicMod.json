@@ -2,6 +2,6 @@
   "name": "G1RMCPWorldLifecycleProbe",
   "title": "G1R MCP World Lifecycle Probe",
   "author": "G1R MCP",
-  "description": "Счётчик собственного PostInitialize и явная проверка перезагрузки текущей карты с BlackScreen; без действий с сохранениями.",
+  "description": "Owned PostInitialize counter and explicit current-map reload probe with BlackScreen; no save operations.",
   "modVersion": "1.0.0"
 }
