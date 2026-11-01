@@ -16,6 +16,7 @@
 #include "g1r_mcp/enum_values.hpp"
 #include "g1r_mcp/object_serial.hpp"
 #include "g1r_mcp/job_state.hpp"
+#include "g1r_mcp/movieplayer_jobs.hpp"
 #include "g1r_mcp/vector_layout.hpp"
 #include "g1r_mcp/transform_layout.hpp"
 #include "g1r_mcp/linear_color_layout.hpp"
@@ -32,6 +33,10 @@ public:
 private:
     uintptr_t ensure_image_base();
     nlohmann::json compile_diagnostics();
+    nlohmann::json movieplayer_status(const std::string& session) const;
+    nlohmann::json request_movieplayer_finish(const nlohmann::json& envelope);
+    bool movieplayer_flag(std::uintptr_t player, std::size_t slot, std::uintptr_t expected_rva) const;
+    void movieplayer_stop(std::uintptr_t player) const;
     struct Job {
         nlohmann::json request;
         std::promise<nlohmann::json> result;
@@ -53,10 +58,16 @@ private:
     using ProcessEventFn = void(__fastcall*)(void*, void*, void*);
     using ASExceptionLoggerFn = void(__fastcall*)(const char*);
     using ASStackTraceFn = void(__fastcall*)(void*);
+    using MoviePlayerWaitFn = void(__fastcall*)(void*, bool);
+    using PlatformPumpMessagesFn = void(__fastcall*)(bool);
     TickFn original_tick_{};
     ASExceptionLoggerFn original_as_exception_logger_{};
     ASStackTraceFn original_as_stack_trace_{};
     ProcessEventFn process_event_{};
+    MoviePlayerWaitFn original_movieplayer_wait_{};
+    PlatformPumpMessagesFn original_platform_pump_messages_{};
+    MoviePlayerJobs movieplayer_jobs_;
+    std::atomic<bool> movieplayer_hooks_installed_{false};
     uintptr_t base_{};
     std::atomic<bool> enabled_{false};
     std::atomic<DWORD> game_thread_{0};
@@ -125,6 +136,8 @@ private:
     static void __fastcall hooked_tick(void* loop);
     static void __fastcall hooked_as_exception_logger(const char* message);
     static void __fastcall hooked_as_stack_trace(void* output);
+    static void __fastcall hooked_movieplayer_wait(void* player, bool allow_engine_tick);
+    static void __fastcall hooked_platform_pump_messages(bool from_main_loop);
     static GameAccess* active_;
 };
 }

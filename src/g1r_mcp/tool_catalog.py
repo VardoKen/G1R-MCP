@@ -111,6 +111,21 @@ _CONTRACTS = {
     "g1r_native_enable": _entry("native_hooks_and_tick_queue", ("native_tcp_channel", "compatible_loaded_dll"),
                                  "native/src/game_access.cpp:GameAccess::start", _NATIVE_STATUS,
                                  state_tools=("g1r_native_status",)),
+    "g1r_movieplayer_status": _entry(
+        "movieplayer_wait_cache", ("native_tcp_channel",),
+        "native/src/game_access.cpp:GameAccess::movieplayer_status",
+        ("source", "active_wait", "wait_id", "wait_returned", "thread_id", "caller_allow_engine_tick",
+         "entered_ms", "last_sample_ms", "sample_wait_id", "loading_finished", "movie_playing",
+         "finish_call_completed", "last_returned_wait_id", "last_returned_ms", "sample_error",
+         "hooks_installed", "wait_hook_installed", "message_pump_hook_installed", "adapter_source",
+         "game_calls_on_status", "ordinary_tick_ready", "session_id", "process_id", "protocol")),
+    "g1r_movieplayer_finish": _entry(
+        "movieplayer_wait_finish", ("native_tcp_channel", "loaded_movieplayer_hooks", "matching_observed_wait_id",
+                                  "loading_finished_at_platform_service", "http_game_claim"),
+        "native/src/game_access.cpp:GameAccess::request_movieplayer_finish",
+        ("source", "wait_id", "thread_id", "loading_finished", "finish_call_completed",
+         "session_id", "process_id", "protocol"),
+        state_tools=("g1r_movieplayer_status", "g1r_session_status")),
 }
 
 for _name, _implementation, _fields, _dynamic in (

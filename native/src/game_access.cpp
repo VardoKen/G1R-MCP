@@ -171,6 +171,17 @@ constexpr uintptr_t kASExceptionLogger = 0x4183050;
 constexpr uint8_t kASExceptionLoggerBytes[] = {0x48,0x89,0x5c,0x24,0x18,0x56,0x48,0x81,0xec,0xc0,0x01,0x00,0x00};
 constexpr uintptr_t kASStackTrace = 0x4180060;
 constexpr uint8_t kASStackTraceBytes[] = {0x40,0x55,0x53,0x57,0x41,0x55,0x41,0x56,0x48,0x8d,0xac,0x24,0xa0,0xfc,0xff,0xff};
+constexpr uintptr_t kMoviePlayerInterfaceVtable = 0x7e181d0;
+constexpr uintptr_t kMoviePlayerWait = 0x326c2c0;
+constexpr uint8_t kMoviePlayerWaitBytes[] = {0x40,0x55,0x53,0x41,0x56,0x41,0x57,0x48,0x8d,0xac,0x24,0x18,0xff,0xff,0xff,0x48,0x81,0xec,0xe8,0x01,0x00,0x00};
+constexpr uintptr_t kPlatformPumpMessages = 0x14405f0;
+constexpr uint8_t kPlatformPumpMessagesBytes[] = {0x48,0x81,0xec,0x88,0x00,0x00,0x00,0x0f,0xb6,0x05,0xde,0x06,0x97,0x08,0x84,0xc0};
+constexpr uintptr_t kMoviePlayerLoadingFinished = 0x32695c0;
+constexpr uint8_t kMoviePlayerLoadingFinishedBytes[] = {0x33,0xd2,0x33,0xc0,0xf0,0x0f,0xb1,0x91,0x9c,0x00,0x00,0x00,0x0f,0x95,0xc0,0xc3};
+constexpr uintptr_t kMoviePlayerPlaying = 0x32695d0;
+constexpr uint8_t kMoviePlayerPlayingBytes[] = {0x48,0x83,0xb9,0x90,0x00,0x00,0x00,0x00,0x75,0x0c,0x80,0xb9,0xa0,0x00,0x00,0x00,0x00,0x75,0x03,0x32,0xc0,0xc3,0xb0,0x01,0xc3};
+constexpr uintptr_t kMoviePlayerStop = 0x326bc80;
+constexpr uint8_t kMoviePlayerStopBytes[] = {0x48,0xc7,0x81,0x50,0x01,0x00,0x00,0x00,0x00,0x00,0x00,0xc6,0x81,0xa1,0x00,0x00,0x00,0x01,0xc3};
 constexpr uintptr_t kStringConstruct = 0x10316e0;
 constexpr uintptr_t kNameConstruct = 0x11b37a0;
 constexpr uintptr_t kObjectArrayRealloc = 0x108f6a0;
@@ -198,6 +209,23 @@ template<class T> T read(uintptr_t address) {
 bool call_event(void* function, void* object, void* event, void* params,native_exception::Diagnostic* fault) {
     __try { reinterpret_cast<void(__fastcall*)(void*,void*,void*)>(function)(object,event,params); return true; }
     __except(native_exception::capture(GetExceptionInformation(),fault)) { return false; }
+}
+bool safe_movieplayer_flag(uintptr_t function,uintptr_t player,bool* result,native_exception::Diagnostic* fault) {
+    __try {*result=reinterpret_cast<bool(__fastcall*)(void*)>(function)(reinterpret_cast<void*>(player));return true;}
+    __except(native_exception::capture(GetExceptionInformation(),fault)) {return false;}
+}
+bool safe_movieplayer_stop(uintptr_t function,uintptr_t player,native_exception::Diagnostic* fault) {
+    __try {reinterpret_cast<void(__fastcall*)(void*)>(function)(reinterpret_cast<void*>(player));return true;}
+    __except(native_exception::capture(GetExceptionInformation(),fault)) {return false;}
+}
+void movieplayer_wait_frame_cleanup(MoviePlayerJobs::WaitFrame* frame,bool returned) noexcept {
+    if(!frame)return;
+    if(returned)frame->returned(steady_ms());
+    delete frame;
+}
+void movieplayer_wait_with_frame(uintptr_t original,void* player,bool allow_engine_tick,MoviePlayerJobs::WaitFrame* frame) {
+    __try {reinterpret_cast<void(__fastcall*)(void*,bool)>(original)(player,allow_engine_tick);}
+    __finally {movieplayer_wait_frame_cleanup(frame,AbnormalTermination()==FALSE);}
 }
 bool free_string(uintptr_t free_address, void* memory) {
     if (!memory) return true;
@@ -304,13 +332,25 @@ bool GameAccess::start() {
     try {ensure_image_base();}
     catch(const HandlerError&) {return false;}
     uint8_t tick[sizeof(kTickBytes)]{},event[sizeof(kEventBytes)]{},exception_logger[sizeof(kASExceptionLoggerBytes)]{},stack_trace[sizeof(kASStackTraceBytes)]{};
+    uint8_t movie_wait[sizeof(kMoviePlayerWaitBytes)]{},platform_pump[sizeof(kPlatformPumpMessagesBytes)]{};
+    uint8_t movie_finished[sizeof(kMoviePlayerLoadingFinishedBytes)]{},movie_playing[sizeof(kMoviePlayerPlayingBytes)]{},movie_stop[sizeof(kMoviePlayerStopBytes)]{};
     if(!copy_memory(tick,reinterpret_cast<void*>(base_+kTick),sizeof(tick)) ||
        !copy_memory(event,reinterpret_cast<void*>(base_+kProcessEvent),sizeof(event)) ||
        !copy_memory(exception_logger,reinterpret_cast<void*>(base_+kASExceptionLogger),sizeof(exception_logger)) ||
        !copy_memory(stack_trace,reinterpret_cast<void*>(base_+kASStackTrace),sizeof(stack_trace)) ||
+        !copy_memory(movie_wait,reinterpret_cast<void*>(base_+kMoviePlayerWait),sizeof(movie_wait)) ||
+        !copy_memory(platform_pump,reinterpret_cast<void*>(base_+kPlatformPumpMessages),sizeof(platform_pump)) ||
+        !copy_memory(movie_finished,reinterpret_cast<void*>(base_+kMoviePlayerLoadingFinished),sizeof(movie_finished)) ||
+        !copy_memory(movie_playing,reinterpret_cast<void*>(base_+kMoviePlayerPlaying),sizeof(movie_playing)) ||
+        !copy_memory(movie_stop,reinterpret_cast<void*>(base_+kMoviePlayerStop),sizeof(movie_stop)) ||
        std::memcmp(tick,kTickBytes,sizeof(tick)) || std::memcmp(event,kEventBytes,sizeof(event)) ||
        std::memcmp(exception_logger,kASExceptionLoggerBytes,sizeof(exception_logger)) ||
-       std::memcmp(stack_trace,kASStackTraceBytes,sizeof(stack_trace))) {
+        std::memcmp(stack_trace,kASStackTraceBytes,sizeof(stack_trace)) ||
+        std::memcmp(movie_wait,kMoviePlayerWaitBytes,sizeof(movie_wait)) ||
+        std::memcmp(platform_pump,kPlatformPumpMessagesBytes,sizeof(platform_pump)) ||
+        std::memcmp(movie_finished,kMoviePlayerLoadingFinishedBytes,sizeof(movie_finished)) ||
+        std::memcmp(movie_playing,kMoviePlayerPlayingBytes,sizeof(movie_playing)) ||
+        std::memcmp(movie_stop,kMoviePlayerStopBytes,sizeof(movie_stop))) {
         startup_error_="signature_mismatch";return false;
     }
     auto initialized=MH_Initialize();
@@ -342,6 +382,29 @@ bool GameAccess::start() {
         MH_RemoveHook(reinterpret_cast<void*>(base_+kTick));MH_DisableHook(reinterpret_cast<void*>(base_+kASExceptionLogger));
         MH_RemoveHook(reinterpret_cast<void*>(base_+kASExceptionLogger));startup_error_="tick_hook_failed";return false;
     }
+    bool movie_wait_created=false,platform_pump_created=false;
+    const auto undo_movieplayer_installation=[&] {
+        if(platform_pump_created){MH_DisableHook(reinterpret_cast<void*>(base_+kPlatformPumpMessages));MH_RemoveHook(reinterpret_cast<void*>(base_+kPlatformPumpMessages));}
+        if(movie_wait_created){MH_DisableHook(reinterpret_cast<void*>(base_+kMoviePlayerWait));MH_RemoveHook(reinterpret_cast<void*>(base_+kMoviePlayerWait));}
+        MH_DisableHook(reinterpret_cast<void*>(base_+kTick));MH_RemoveHook(reinterpret_cast<void*>(base_+kTick));
+        MH_DisableHook(reinterpret_cast<void*>(base_+kASStackTrace));MH_RemoveHook(reinterpret_cast<void*>(base_+kASStackTrace));
+        MH_DisableHook(reinterpret_cast<void*>(base_+kASExceptionLogger));MH_RemoveHook(reinterpret_cast<void*>(base_+kASExceptionLogger));
+    };
+    if(MH_CreateHook(reinterpret_cast<void*>(base_+kMoviePlayerWait),reinterpret_cast<void*>(&hooked_movieplayer_wait),
+                     reinterpret_cast<void**>(&original_movieplayer_wait_))!=MH_OK) {
+        undo_movieplayer_installation();startup_error_="movieplayer_wait_hook_failed";return false;
+    }
+    movie_wait_created=true;
+    if(MH_CreateHook(reinterpret_cast<void*>(base_+kPlatformPumpMessages),reinterpret_cast<void*>(&hooked_platform_pump_messages),
+                     reinterpret_cast<void**>(&original_platform_pump_messages_))!=MH_OK) {
+        undo_movieplayer_installation();startup_error_="movieplayer_message_pump_hook_failed";return false;
+    }
+    platform_pump_created=true;
+    if(MH_EnableHook(reinterpret_cast<void*>(base_+kMoviePlayerWait))!=MH_OK ||
+       MH_EnableHook(reinterpret_cast<void*>(base_+kPlatformPumpMessages))!=MH_OK) {
+        undo_movieplayer_installation();startup_error_="movieplayer_hook_enable_failed";return false;
+    }
+    movieplayer_hooks_installed_=true;
     diagnostic("hook_enabled");enabled_=true;return true;
 }
 void __fastcall GameAccess::hooked_as_exception_logger(const char* message) {
@@ -387,6 +450,91 @@ void __fastcall GameAccess::hooked_tick(void* loop) {
     if(self->enabled_) self->pump();
     if(count<2)diagnostic("tick_pump_return");
 }
+bool GameAccess::movieplayer_flag(uintptr_t player,std::size_t slot,uintptr_t expected_rva) const {
+    uintptr_t table{},function{};
+    if(!copy_memory(&table,reinterpret_cast<void*>(player),sizeof(table)))
+        throw HandlerError("movieplayer_memory_unavailable","MoviePlayer interface memory is unavailable");
+    if(table!=base_+kMoviePlayerInterfaceVtable || !copy_memory(&function,reinterpret_cast<void*>(table+slot),sizeof(function))
+       || function!=base_+expected_rva)
+        throw HandlerError("movieplayer_interface_mismatch","MoviePlayer interface or method differs from the confirmed executable");
+    bool value=false;native_exception::Diagnostic fault{};
+    if(!safe_movieplayer_flag(base_+expected_rva,player,&value,&fault))
+        throw HandlerError("movieplayer_read_failed","MoviePlayer status call raised a native exception",
+            {{"executed",false},{"may_have_executed",false},{"do_not_retry",false},{"native_exception",native_exception::describe(fault)}});
+    return value;
+}
+void GameAccess::movieplayer_stop(uintptr_t player) const {
+    uintptr_t table{},function{};
+    if(!copy_memory(&table,reinterpret_cast<void*>(player),sizeof(table)))
+        throw HandlerError("movieplayer_memory_unavailable","MoviePlayer interface memory is unavailable");
+    if(table!=base_+kMoviePlayerInterfaceVtable || !copy_memory(&function,reinterpret_cast<void*>(table+0x50),sizeof(function))
+       || function!=base_+kMoviePlayerStop)
+        throw HandlerError("movieplayer_interface_mismatch","MoviePlayer StopMovie method differs from the confirmed executable");
+    native_exception::Diagnostic fault{};
+    if(!safe_movieplayer_stop(base_+kMoviePlayerStop,player,&fault))
+        throw HandlerError("movieplayer_stop_failed","MoviePlayer StopMovie call raised a native exception",
+            {{"executed",true},{"may_have_executed",true},{"do_not_retry",true},{"native_exception",native_exception::describe(fault)}});
+}
+void __fastcall GameAccess::hooked_movieplayer_wait(void* player,bool allow_engine_tick) {
+    auto* self=active_;if(!self)return;
+    MoviePlayerJobs::WaitFrame* frame=nullptr;
+    try {frame=new MoviePlayerJobs::WaitFrame(self->movieplayer_jobs_,reinterpret_cast<uintptr_t>(player),
+              GetCurrentThreadId(),allow_engine_tick,steady_ms());}
+    catch(...) {diagnostic("movieplayer_wait_frame_failed");}
+    movieplayer_wait_with_frame(reinterpret_cast<uintptr_t>(self->original_movieplayer_wait_),player,allow_engine_tick,frame);
+}
+void __fastcall GameAccess::hooked_platform_pump_messages(bool from_main_loop) {
+    auto* self=active_;if(!self)return;
+    self->original_platform_pump_messages_(from_main_loop);
+    if(!self->movieplayer_hooks_installed_)return;
+    try {
+        self->movieplayer_jobs_.sample_and_service(GetCurrentThreadId(),steady_ms(),
+            [self](uintptr_t player){return self->movieplayer_flag(player,0x60,kMoviePlayerLoadingFinished);},
+            [self](uintptr_t player){return self->movieplayer_flag(player,0x68,kMoviePlayerPlaying);},
+            [self](uintptr_t player){self->movieplayer_stop(player);});
+    } catch(...) {diagnostic("movieplayer_service_callback_setup_failed");}
+}
+json GameAccess::movieplayer_status(const std::string& session) const {
+    auto result=movieplayer_jobs_.cached_status();
+    result["hooks_installed"]=movieplayer_hooks_installed_.load();
+    result["wait_hook_installed"]=movieplayer_hooks_installed_.load();
+    result["message_pump_hook_installed"]=movieplayer_hooks_installed_.load();
+    result["adapter_source"]="movieplayer_wait_message_pump";
+    result["game_calls_on_status"]=false;
+    const auto observed=last_tick_ms_.load(),now=steady_ms();
+    result["ordinary_tick_ready"]=enabled_.load() && observed && now>=observed && now-observed<=kRequestWaitMs;
+    result["session_id"]=session.empty()?json(nullptr):json(session);
+    result["process_id"]=GetCurrentProcessId();result["protocol"]=1;
+    return result;
+}
+json GameAccess::request_movieplayer_finish(const json& envelope) {
+    if(!movieplayer_hooks_installed_)
+        throw HandlerError("movieplayer_adapter_not_ready","MoviePlayer hooks are not installed");
+    const auto& params=envelope.at("params");
+    if(!params.contains("expected_wait_id") || !params.at("expected_wait_id").is_string()
+       || params.at("expected_wait_id").get_ref<const std::string&>().empty())
+        throw HandlerError("invalid_movieplayer_request","A nonempty expected_wait_id string is required");
+    auto job=movieplayer_jobs_.request_finish(envelope.at("session_id").get<std::string>(),params.at("expected_wait_id").get<std::string>());
+    auto future=job->result.get_future();
+    const auto completed=[&] {
+        auto result=future.get();
+        result["session_id"]=envelope.at("session_id");result["process_id"]=GetCurrentProcessId();result["protocol"]=1;
+        return result;
+    };
+    if(future.wait_for(std::chrono::milliseconds(kRequestWaitMs))!=std::future_status::ready) {
+        if(movieplayer_jobs_.cancel_finish(job))
+            throw HandlerError("movieplayer_not_servicing","MoviePlayer request was cancelled before its wait-thread service started",
+                {{"executed",false},{"may_have_executed",false},{"do_not_retry",false},{"request_started",false},
+                 {"stage","queued_cancelled"},{"movieplayer_status",movieplayer_status(envelope.at("session_id").get<std::string>())}});
+        if(future.wait_for(std::chrono::milliseconds(0))==std::future_status::ready)return completed();
+        if(job->state.get()==JobState::cancelled)
+            throw HandlerError("session_closed","MoviePlayer request was cancelled before execution after its session closed");
+        throw HandlerError("movieplayer_timeout","MoviePlayer finish request started; its outcome is not yet known",
+            {{"executed",false},{"may_have_executed",true},{"do_not_retry",true},{"request_started",true},
+             {"stage","running_outcome_unknown"},{"movieplayer_status",movieplayer_status(envelope.at("session_id").get<std::string>())}});
+    }
+    return completed();
+}
 json GameAccess::status() const {
     const auto observed=last_tick_ms_.load(), now=steady_ms();
     const auto age=observed && now>=observed ? now-observed : 0;
@@ -400,7 +548,8 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.58"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.59"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+            {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
@@ -423,7 +572,7 @@ json GameAccess::status() const {
                 {"retained_allocations",object_array_inputs_retained_count_.load()},
                 {"retained_bytes",object_array_inputs_retained_bytes_.load()},
                 {"max_inputs",nullptr},{"max_elements",std::numeric_limits<int32_t>::max()},{"max_input_bytes",nullptr}}},
-            {"operations",{"status","enable_game","compile_diagnostics","objects","properties","functions","invoke","read_array","read_struct",
+            {"operations",{"status","enable_game","compile_diagnostics","movieplayer_status","movieplayer_finish","objects","properties","functions","invoke","read_array","read_struct",
                            "snapshot","watch_start","watch_read","watch_stop","watch_forget","watch_list","watch_resume"}},
             {"snapshot_limits",{{"objects",nullptr},{"properties_per_object",nullptr},{"scan_fields_per_object",nullptr},
                                 {"property_value_bytes",nullptr},{"object_path_bytes",nullptr},
@@ -480,6 +629,8 @@ json GameAccess::compile_diagnostics() {
 json GameAccess::request(const json& envelope) {
     if(envelope.at("op")=="status") return status();
     if(envelope.at("op")=="compile_diagnostics") return compile_diagnostics();
+    if(envelope.at("op")=="movieplayer_status")return movieplayer_status(envelope.at("session_id").get<std::string>());
+    if(envelope.at("op")=="movieplayer_finish")return request_movieplayer_finish(envelope);
     if(!enabled_) throw HandlerError("native_not_ready","Перехват игры не установлен: "+startup_error_);
     auto job=std::make_shared<Job>();job->request=envelope;auto future=job->result.get_future();
     {std::unique_lock lock(queue_mutex_,std::try_to_lock);
@@ -504,6 +655,7 @@ json GameAccess::request(const json& envelope) {
     return future.get();
 }
 void GameAccess::disconnect(const std::string& session) {
+    movieplayer_jobs_.disconnect(session);
     // Сетевой поток: только пометка и отмена ещё не вошедших в Tick работ.
     std::lock_guard lock(queue_mutex_);
     session_cleanup_pending_=true;

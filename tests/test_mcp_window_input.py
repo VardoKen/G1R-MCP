@@ -3,6 +3,7 @@
 import copy
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -15,11 +16,134 @@ from g1r_mcp.native_client import NativeClient
 from g1r_mcp.server import create_server
 from g1r_mcp.window_input import WindowInputError
 from tests.test_mcp_observations import SessionNativeFixture
+from tests.test_mcp_server import DropCompletedStopResponse
 
 
 class MCPHTTPWindowInputTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self._asyncioRunner.get_loop().slow_callback_duration = 2.0
+
+    async def test_movieplayer_finish_requires_owner_and_lost_http_response_is_not_retried(self):
+        cached = {"source": "native_movieplayer_cache", "active_wait": True, "wait_id": "wait-59",
+                  "wait_returned": False, "thread_id": 456, "caller_allow_engine_tick": False,
+                  "entered_ms": 590, "last_sample_ms": 591, "sample_wait_id": "wait-59",
+                  "loading_finished": True, "movie_playing": True, "finish_call_completed": False,
+                  "last_returned_wait_id": None, "last_returned_ms": None}
+        completed = {"source": "live_native_movieplayer", "wait_id": "wait-59", "thread_id": 456,
+                     "loading_finished": True, "finish_call_completed": True}
+        after_finish = {**cached, "finish_call_completed": True, "last_sample_ms": 592}
+        after_return = {**after_finish, "active_wait": False, "wait_id": None, "wait_returned": True,
+                        "last_returned_wait_id": "wait-59", "last_returned_ms": 593}
+        steps = [{"op": "movieplayer_status", "params": {}, "result": cached},
+                 {"op": "movieplayer_finish", "params": {"expected_wait_id": "wait-59"}, "result": completed},
+                 {"op": "movieplayer_status", "params": {}, "result": after_finish},
+                 {"op": "movieplayer_status", "params": {}, "result": after_return}]
+        with tempfile.TemporaryDirectory() as temporary, SessionNativeFixture(steps) as native:
+            root = Path(temporary)
+            modkit, workspace = root / "Modkit", root / "workspace"
+            (modkit / "Script").mkdir(parents=True)
+            source = modkit / "Script" / "Fixture.as"
+            source.write_bytes(b"class UFixture {}\r\n")
+            original = source.read_bytes()
+            workspace.mkdir()
+            backend = NativeClient(port=native.port)
+            self.addCleanup(backend.close)
+            with patch("g1r_mcp.server.NativeClient", return_value=backend) as factory, \
+                 patch("g1r_mcp.server.DevelopmentService") as development_factory:
+                server = create_server(modkit, workspace, native_port=native.port, transport="streamable-http")
+                security = TransportSecuritySettings(enable_dns_rebinding_protection=True,
+                    allowed_hosts=["127.0.0.1:27124"], allowed_origins=["http://127.0.0.1:27124"])
+                app = server.streamable_http_app(host="127.0.0.1", streamable_http_path="/mcp",
+                    stateless_http=False, json_response=True, max_request_body_size=sys.maxsize,
+                    transport_security=security)
+                lossy = DropCompletedStopResponse(app, "g1r_movieplayer_finish")
+                counter = 0
+
+                async def rpc(client, method, params, session=None):
+                    nonlocal counter
+                    counter += 1
+                    headers = {"Accept": "application/json, text/event-stream"}
+                    if session is not None:
+                        headers["Mcp-Session-Id"] = session
+                    response = await client.post("/mcp", headers=headers,
+                        json={"jsonrpc": "2.0", "id": counter, "method": method, "params": params})
+                    self.assertEqual(response.status_code, 200, response.text)
+                    return response
+
+                async def initialize(client, name):
+                    response = await rpc(client, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                                                               "clientInfo": {"name": name, "version": "1"}})
+                    session = response.headers["mcp-session-id"]
+                    notified = await client.post("/mcp", headers={"Mcp-Session-Id": session,
+                        "Accept": "application/json, text/event-stream"},
+                        json={"jsonrpc": "2.0", "method": "notifications/initialized"})
+                    self.assertEqual(notified.status_code, 202, notified.text)
+                    return session
+
+                async def tool(client, session, name, arguments=None):
+                    result = (await rpc(client, "tools/call", {"name": name, "arguments": arguments or {}}, session)).json()["result"]
+                    self.assertFalse(result.get("isError", False), result)
+                    return result["structuredContent"]
+
+                async with app.router.lifespan_context(app):
+                    async with httpx2.AsyncClient(transport=lossy, base_url="http://127.0.0.1:27124") as first, \
+                               httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app),
+                                                 base_url="http://127.0.0.1:27124") as second:
+                        owner, other = await initialize(first, "movie-finish-owner"), await initialize(second, "movie-status-reader")
+                        self.assertNotEqual(owner, other)
+                        claim = await tool(first, owner, "g1r_session_acquire", {"reason": "Проверка MoviePlayer Wait"})
+                        self.assertTrue(claim["claimed"])
+                        listed = (await rpc(second, "tools/list", {}, other)).json()["result"]["tools"]
+                        self.assertEqual(len(listed), 46)
+                        tools = {item["name"]: item for item in listed}
+                        self.assertTrue(tools["g1r_movieplayer_status"]["annotations"]["readOnlyHint"])
+                        self.assertFalse(tools["g1r_movieplayer_finish"]["annotations"]["readOnlyHint"])
+                        self.assertFalse(tools["g1r_movieplayer_finish"]["annotations"]["idempotentHint"])
+                        schema = tools["g1r_movieplayer_finish"]["inputSchema"]
+                        self.assertEqual(set(schema["properties"]), {"expected_wait_id"})
+                        self.assertEqual(schema["properties"]["expected_wait_id"]["type"], "string")
+                        observed = await tool(second, other, "g1r_movieplayer_status")
+                        self.assertEqual(observed, cached)
+                        refused = (await rpc(second, "tools/call", {"name": "g1r_movieplayer_finish",
+                            "arguments": {"expected_wait_id": "wait-59"}}, other)).json()["result"]
+                        self.assertTrue(refused.get("isError", False), refused)
+                        text = "\n".join(item.get("text", "") for item in refused["content"])
+                        self.assertEqual(json.loads(text[text.index("{"):])["code"], "game_session_owned")
+                        self.assertEqual(len(native.requests), 1)
+                        with self.assertRaises(httpx2.ReadError):
+                            await tool(first, owner, "g1r_movieplayer_finish", {"expected_wait_id": observed["wait_id"]})
+                        self.assertEqual(lossy.discarded, completed)
+                        self.assertTrue(lossy.discarded["finish_call_completed"])
+                        self.assertNotIn("game_ready", lossy.discarded)
+                        self.assertEqual(len(native.requests), 2)
+                        async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app),
+                                                     base_url="http://127.0.0.1:27124") as resumed:
+                            still_waiting = await tool(resumed, owner, "g1r_movieplayer_status")
+                            self.assertEqual(still_waiting, after_finish)
+                            self.assertTrue(still_waiting["finish_call_completed"])
+                            self.assertTrue(still_waiting["active_wait"])
+                            self.assertFalse(still_waiting["wait_returned"])
+                            returned = await tool(second, other, "g1r_movieplayer_status")
+                            self.assertEqual(returned, after_return)
+                            self.assertFalse(returned["active_wait"])
+                            self.assertTrue(returned["wait_returned"])
+                            self.assertNotIn("game_ready", returned)
+                            released = await tool(resumed, owner, "g1r_session_release")
+                            self.assertTrue(released["released"])
+                            self.assertFalse(released["game_stopped"])
+                            for client, session in ((resumed, owner), (second, other)):
+                                deleted = await client.delete("/mcp", headers={"Mcp-Session-Id": session,
+                                    "Accept": "application/json, text/event-stream"})
+                                self.assertEqual(deleted.status_code, 200, deleted.text)
+                        factory.assert_called_once_with(port=native.port)
+                        development_factory.assert_not_called()
+                self.assertEqual(native.connections, 1)
+                self.assertEqual([request["op"] for request in native.requests],
+                                 ["movieplayer_status", "movieplayer_finish", "movieplayer_status", "movieplayer_status"])
+                self.assertEqual(len({request["id"] for request in native.requests}), 4)
+                self.assertEqual(native.response_sessions, ["fixture-session-1"] * 4)
+                self.assertEqual(source.read_bytes(), original)
+                self.assertEqual(list(workspace.iterdir()), [])
 
     async def test_key_owner_strict_arguments_partial_receipt_and_shared_native_session(self):
         native_status = {"ready": True, "session_id": "fixture-session-1", "tick_count": 48}

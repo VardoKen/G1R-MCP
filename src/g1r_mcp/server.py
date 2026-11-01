@@ -68,6 +68,8 @@ NATIVE_TOOLS = (
     ("g1r_watch_forget", "Освободить завершённое наблюдение"),
     ("g1r_watch_list", "Метаданные наблюдений текущего native-соединения"),
     ("g1r_watch_resume", "Явная передача существующего наблюдения текущему клиенту"),
+    ("g1r_movieplayer_status", "Согласованная копия состояния ожидания MoviePlayer без игрового Tick"),
+    ("g1r_movieplayer_finish", "Явный запрос завершения точного ожидания MoviePlayer"),
 )
 DEVELOPMENT_TOOLS = (
     "g1r_session_status", "g1r_session_acquire", "g1r_session_release", "g1r_compile_diagnostics",
@@ -209,8 +211,10 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                 for name, description in LOCAL_TOOLS
             ],
             "native_tools": [{"name": name, "description": description, "implemented": True,
-                              "read_only_hint": name in {"g1r_native_status", "g1r_find_objects", "g1r_object_properties", "g1r_object_functions", "g1r_read_array", "g1r_read_struct", "g1r_snapshot", "g1r_watch_read", "g1r_watch_list"},
-                              "availability": "requires_live_native_status"} for name, description in NATIVE_TOOLS],
+                              "read_only_hint": name in {"g1r_native_status", "g1r_find_objects", "g1r_object_properties", "g1r_object_functions", "g1r_read_array", "g1r_read_struct", "g1r_snapshot", "g1r_watch_read", "g1r_watch_list", "g1r_movieplayer_status"},
+                              "availability": ("requires_native_tcp_channel" if name == "g1r_movieplayer_status"
+                                               else "requires_loaded_movieplayer_hooks_and_matching_wait" if name == "g1r_movieplayer_finish"
+                                               else "requires_live_native_status")} for name, description in NATIVE_TOOLS],
             "workspace_tools": [
                 {"name": name, "description": description, "implemented": True,
                  "available": True, "effects": effects, "validation": "local_only"}
@@ -429,6 +433,18 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                              "transfer_restarts_observation": False,
                              "native_disconnect_retains_observations": False,
                              "world_generation_confirmed": False},
+            "movieplayer": {"implemented": True, "status_tool": "g1r_movieplayer_status",
+                            "finish_tool": "g1r_movieplayer_finish", "source": "native_movieplayer_cache",
+                            "status_requires_game_tick": False,
+                            "finish_execution_context": "game_thread_platform_service_inside_active_movieplayer_wait",
+                            "finish_arguments": {"expected_wait_id": "wait-N"},
+                            "finish_requires_loading_finished": True,
+                            "finish_result": "finish_call_completed",
+                            "finish_proves_wait_returned": False, "finish_proves_ordinary_tick_ready": False,
+                            "arbitrary_calls_supported": False,
+                            "status_availability": "requires_native_tcp_channel",
+                            "finish_availability": "requires_loaded_movieplayer_hooks_and_matching_wait",
+                            "current_checked": False},
             "snapshot_comparison": {"implemented": True, "effects": "read_only",
                                     "tool": "g1r_compare_snapshots", "validation": "client_supplied_copies"},
             "limitations": [
@@ -744,6 +760,26 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     def g1r_native_status() -> dict[str, Any]:
         """Проверить DLL в текущей игре; не запускает игру или загрузчик."""
         return native_request("status", {})
+
+    @server.tool(annotations=read_only)
+    def g1r_movieplayer_status() -> dict[str, Any]:
+        """Прочитать согласованную копию состояния MoviePlayer; обычный игровой Tick не требуется."""
+        return native_request("movieplayer_status", {})
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                                            idempotentHint=False, openWorldHint=False))
+    def g1r_movieplayer_finish(expected_wait_id: StrictStr, ctx: Context = None) -> dict[str, Any]:
+        """Явно запросить завершение точного ожидания; вызов finish, возврат Wait и игровой Tick различаются."""
+        try:
+            if transport == "streamable-http":
+                with ownership.lock:
+                    ownership.require(request_owner(ctx))
+                    return native_request("movieplayer_finish", {"expected_wait_id": expected_wait_id})
+            return native_request("movieplayer_finish", {"expected_wait_id": expected_wait_id})
+        except DevelopmentError as error:
+            raise ToolError(json.dumps({"code": error.code, "message": str(error),
+                                       "outcome_unknown": error.outcome_unknown,
+                                       "retry": "only_explicit_new_request"}, ensure_ascii=False)) from None
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     def g1r_native_enable() -> dict[str, Any]:
