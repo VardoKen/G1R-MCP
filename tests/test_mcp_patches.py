@@ -120,7 +120,75 @@ class MCPScriptPatchTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(source.read_bytes(), before)
             self.assertFalse(any(path.name.startswith(".g1r-mcp-") for path in root.rglob("*")))
 
-    async def test_changed_source_unsafe_path_and_output_limit_are_explicit_errors(self):
+    async def test_large_source_diff_and_workspace_roundtrip_preserve_exact_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            modkit = root / "Modkit"
+            source = modkit / "Script/Large.as"
+            source.parent.mkdir(parents=True)
+
+            def script(character):
+                lines = ["\ufeffclass ULargePatch {", *(
+                    f"    // Строка {index:04d} {character * 2048}" for index in range(1025)),
+                    "    int ReadMarker() { return 42; }", "}"]
+                return "\r\n".join(lines).encode("utf-8")
+
+            before, after = script("a"), script("b")
+            self.assertGreater(len(before), 2 * 1024 * 1024)
+            self.assertGreater(len(after), 2 * 1024 * 1024)
+            source.write_bytes(before)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            parameters = StdioServerParameters(command=sys.executable,
+                args=["-B", "-m", "g1r_mcp.server", "--modkit-root", str(modkit),
+                      "--workspace-root", str(workspace)])
+            async with stdio_client(parameters) as (incoming, outgoing):
+                async with ClientSession(incoming, outgoing) as client:
+                    await client.initialize()
+                    exact = await self.call_ok(client, "g1r_read_source_exact", {"relative_path": "Script/Large.as"})
+                    self.assertEqual(exact["text"].encode("utf-8"), before)
+                    self.assertEqual(exact["sha256"], hashlib.sha256(before).hexdigest())
+                    self.assertTrue(exact["contains_bom"])
+                    self.assertFalse(exact["content_truncated"])
+                    built = await self.call_ok(client, "g1r_build_script_patch", {
+                        "source_path": "Script/Large.as", "replacement_content": after.decode("utf-8"),
+                        "expected_source_sha256": exact["sha256"], "context_lines": 64})
+                    patch_bytes = built["patch_text"].encode("utf-8")
+                    self.assertGreater(len(patch_bytes), 2 * 1024 * 1024)
+                    self.assertEqual(built["patch_bytes"], len(patch_bytes))
+                    self.assertEqual(built["source_bytes"], len(before))
+                    self.assertEqual(built["replacement_bytes"], len(after))
+                    self.assertEqual(built["replacement_sha256"], hashlib.sha256(after).hexdigest())
+                    self.assertEqual(built["context_lines"], 64)
+                    await self.call_ok(client, "g1r_create_package", {
+                        "relative_path": "LargePatch", "metadata": {
+                            "name": "LargePatch", "title": "Большой проверочный патч", "author": "Test", "modVersion": "1.0.0"}})
+                    await self.call_ok(client, "g1r_create_package_directory", {"relative_path": "LargePatch", "directory_path": "ScriptPatches"})
+                    written = await self.call_ok(client, "g1r_write_package_file", {
+                        "relative_path": "LargePatch", "file_path": "ScriptPatches/Large.patch", "content": built["patch_text"]})
+                    stored = await self.call_ok(client, "g1r_read_package_file_exact", {
+                        "relative_path": "LargePatch", "file_path": "ScriptPatches/Large.patch"})
+                    self.assertEqual(stored["text"].encode("utf-8"), patch_bytes)
+                    self.assertEqual(written["sha256"], hashlib.sha256(patch_bytes).hexdigest())
+                    self.assertEqual(stored["sha256"], written["sha256"])
+                    self.assertFalse(stored["truncated"])
+
+            target = root / "apply/Script/Large.as"
+            target.parent.mkdir(parents=True)
+            target.write_bytes(before)
+            patch_file = workspace / "LargePatch/ScriptPatches/Large.patch"
+            for options in (["--check"], [], ["--reverse", "--check"], ["--reverse"]):
+                result = subprocess.run(
+                    ["git", "-c", "core.autocrlf=false", "apply", *options, "--directory=Script", str(patch_file)],
+                    cwd=root / "apply", capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+                if not options:
+                    self.assertEqual(target.read_bytes(), after)
+            self.assertEqual(target.read_bytes(), before)
+            self.assertEqual(source.read_bytes(), before)
+            self.assertFalse(any(path.name.startswith(".g1r-mcp-") for path in root.rglob("*")))
+
+    async def test_changed_source_unsafe_paths_and_invalid_text_are_explicit_errors(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             modkit = root / "Modkit"
@@ -149,22 +217,20 @@ class MCPScriptPatchTests(unittest.IsolatedAsyncioTestCase):
                     await self.call_error(client, "g1r_build_script_patch",
                                           {**params, "source_path": "Examples/Sample/Script/Private.as"}, "unsupported_file")
                     await self.call_error(client, "g1r_build_script_patch",
-                                          {**params, "replacement_content": "x" * (1024 * 1024 + 1)}, "limit_exceeded")
+                                          {**params, "context_lines": -1}, "invalid_arguments")
                     await self.call_error(client, "g1r_build_script_patch",
-                                          {**params, "context_lines": 21}, "invalid_arguments")
-                    oversized = modkit / "Script/TooLarge.as"
-                    oversized.write_bytes(b"x" * (1024 * 1024 + 1))
-                    await self.call_error(client, "g1r_read_source_exact",
-                                          {"relative_path": "Script/TooLarge.as"}, "file_too_large")
+                                          {**params, "replacement_content": "x\0y",
+                                           "expected_source_sha256": hashlib.sha256(source.read_bytes()).hexdigest()}, "invalid_text")
                     package = workspace / "Limits"
                     (package / "Script").mkdir(parents=True)
                     large_script = package / "Script/TooLarge.as"
                     large_script.write_bytes(b"x" * (1024 * 1024 + 1))
                     large_descriptor = package / "GothicMod.json"
                     large_descriptor.write_bytes(b" " * (256 * 1024 + 1))
-                    await self.call_error(client, "g1r_read_package_file_exact", {
+                    large_read = await self.call_ok(client, "g1r_read_package_file_exact", {
                         "relative_path": "Limits", "file_path": "Script/TooLarge.as",
-                    }, "file_too_large")
+                    })
+                    self.assertEqual(large_read["text"].encode("utf-8"), large_script.read_bytes())
                     await self.call_error(client, "g1r_read_package_file_exact", {
                         "relative_path": "Limits", "file_path": "GothicMod.json",
                     }, "file_too_large")

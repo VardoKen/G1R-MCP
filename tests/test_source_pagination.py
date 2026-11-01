@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from g1r_mcp.sources import MAX_FILE_BYTES, SourceCatalog, SourceError
+from g1r_mcp.sources import SourceCatalog, SourceError
 
 
 class SourcePaginationTests(unittest.TestCase):
@@ -102,7 +102,7 @@ class SourcePaginationTests(unittest.TestCase):
         for index in range(205):
             self.write(f"Script/Good{index:03}.as", "class USharedType {}\n// shared needle\n")
         self.write("Script/Bad.as", b"\xff")
-        self.write("Script/Large.as", b"x" * (MAX_FILE_BYTES + 1))
+        self.write("Script/Large.as", b"// " + b"x" * (2 * 1024 * 1024 + 1))
         before = self.file_hashes()
         for operation, request in self.operations()[1:]:
             with self.subTest(operation=operation):
@@ -117,11 +117,11 @@ class SourcePaginationTests(unittest.TestCase):
                     self.assertFalse(page["scan_complete"])
                     self.assertIsNone(page["total_matches"])
                     self.assertEqual(page["total_matches_lower_bound"], 205)
-                    self.assertEqual(page["skipped_count"], 2)
+                    self.assertEqual(page["skipped_count"], 1)
                     self.assertEqual(page["scanned_files"], 207)
                     self.assertEqual(page["snapshot_kind"], "sequential_file_reads")
                     self.assertEqual({item["error_code"] for item in page["skipped_files"]},
-                                     {"invalid_encoding", "file_too_large"})
+                                     {"invalid_encoding"})
                 self.assertEqual([item["path"] for page in (first, final) for item in page["items"]],
                                  [f"Script/Good{index:03}.as" for index in range(205)])
         self.assertEqual(self.file_hashes(), before)

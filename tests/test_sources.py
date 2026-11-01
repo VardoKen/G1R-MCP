@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from g1r_mcp.sources import MAX_EXACT_READ_BYTES, MAX_FILE_BYTES, MAX_READ_BYTES, SourceCatalog, SourceError
+from g1r_mcp.sources import SourceCatalog, SourceError
 
 
 class SourceCatalogTests(unittest.TestCase):
@@ -31,17 +31,16 @@ class SourceCatalogTests(unittest.TestCase):
                 self.assertEqual(display["text_mode"], "display_lines")
                 self.assertTrue(display["exact_replacement_available"])
 
-    def test_exact_source_limits_are_all_or_nothing_and_examples_share_allowlist(self):
-        raw = b"x" * MAX_EXACT_READ_BYTES
-        path = self.write("Examples/Sample/Script/Exact.as", raw)
+    def test_large_exact_source_and_examples_share_allowlist(self):
+        raw = b"// " + b"x" * (2 * 1024 * 1024 + 1) + b"\r\nclass UExample {}\r\n"
+        self.write("Examples/Sample/Script/Exact.as", raw)
         result = self.catalog().read_file_exact("Examples/Sample/Script/Exact.as")
-        self.assertEqual(result["bytes"], MAX_EXACT_READ_BYTES)
+        self.assertEqual(result["bytes"], len(raw))
+        self.assertEqual(result["text"].encode("utf-8"), raw)
+        self.assertEqual(result["sha256"], hashlib.sha256(raw).hexdigest())
+        self.assertIsNone(result["max_text_bytes"])
         self.assertEqual(result["root_kind"], "example_script")
-        path.write_bytes(raw + b"x")
-        with self.assertRaises(SourceError) as captured:
-            self.catalog().read_file_exact("Examples/Sample/Script/Exact.as")
-        self.assertEqual(captured.exception.code, "file_too_large")
-        self.assertEqual(self.catalog().read_file("Examples/Sample/Script/Exact.as")["total_lines"], 1)
+        self.assertEqual(self.catalog().read_file("Examples/Sample/Script/Exact.as")["total_lines"], 2)
         for value in ("../private.as", "Other/Exact.as", "Script\\Exact.as", "C:/private.as"):
             with self.subTest(path=value), self.assertRaises(SourceError):
                 self.catalog().read_file_exact(value)
@@ -167,40 +166,73 @@ class SourceCatalogTests(unittest.TestCase):
             self.catalog().search_files("Local")
         self.assertEqual(captured.exception.code, "unsafe_path")
 
-    def test_encoding_and_file_size_failures_are_explicit(self):
+    def test_invalid_encoding_is_explicit_for_large_source(self):
         bad = self.write("Script/Test.as", b"\xffprivate")
         with self.assertRaises(SourceError) as captured:
             self.catalog().read_file("Script/Test.as")
         self.assertEqual(captured.exception.code, "invalid_encoding")
         self.assertNotIn("private", str(captured.exception))
-        bad.write_bytes(b" " * MAX_FILE_BYTES)
-        self.assertEqual(self.catalog().read_file("Script/Test.as")["total_lines"], 1)
-        bad.write_bytes(b" " * (MAX_FILE_BYTES + 1))
+        bad.write_bytes(b" " * (2 * 1024 * 1024 + 1) + b"\xffprivate")
         with self.assertRaises(SourceError) as captured:
             self.catalog().read_file("Script/Test.as")
-        self.assertEqual(captured.exception.code, "file_too_large")
+        self.assertEqual(captured.exception.code, "invalid_encoding")
+        self.assertNotIn("private", str(captured.exception))
 
     def test_partial_scans_report_skipped_files_and_lower_bound(self):
         self.write("Script/Good.as", "class Good {}")
         self.write("Script/Bad.as", b"\xffprivate")
-        self.write("Script/Large.as", b" " * (MAX_FILE_BYTES + 1))
+        self.write("Script/Large.as", b" " * (2 * 1024 * 1024 + 1))
         for result in (self.catalog().search_text("Good"), self.catalog().list_types("Good")):
             self.assertFalse(result["scan_complete"])
             self.assertIsNone(result["total_matches"])
             self.assertEqual(result["total_matches_lower_bound"], 1)
-            self.assertEqual(result["skipped_count"], 2)
-            self.assertEqual({item["error_code"] for item in result["skipped_files"]}, {"invalid_encoding", "file_too_large"})
+            self.assertEqual(result["skipped_count"], 1)
+            self.assertEqual({item["error_code"] for item in result["skipped_files"]}, {"invalid_encoding"})
             self.assertEqual(result["items"][0]["path"], "Script/Good.as")
 
-    def test_long_unicode_line_is_bounded_without_invalid_text(self):
-        self.write("Script/Long.as", "М" * MAX_READ_BYTES + "\nsecond")
-        result = self.catalog().read_file("Script/Long.as")
-        self.assertEqual(result["returned_utf8_bytes"], MAX_READ_BYTES)
+    def test_long_unicode_line_is_returned_in_full_with_requested_line_paging(self):
+        text = "М" * (64 * 1024 + 1)
+        self.write("Script/Long.as", text + "\nsecond")
+        result = self.catalog().read_file("Script/Long.as", line_count=1)
+        self.assertEqual(result["returned_utf8_bytes"], len(text.encode("utf-8")))
         self.assertTrue(result["content_truncated"])
-        self.assertTrue(result["last_line_truncated"])
+        self.assertFalse(result["last_line_truncated"])
         self.assertEqual(result["returned_lines"], 1)
         self.assertEqual(result["end_line"], 1)
-        self.assertEqual(result["text"], "М" * (MAX_READ_BYTES // 2))
+        self.assertEqual(result["text"], text)
+        self.assertIsNone(result["max_text_bytes"])
+        self.assertEqual(self.catalog().read_file("Script/Long.as", start_line=2, line_count=1)["text"], "second")
+
+    def test_large_valid_source_search_types_and_exact_preserve_end_marker_and_bytes(self):
+        raw = b"\xef\xbb\xbf// " + b"x" * (2 * 1024 * 1024 + 1) + b"\r\nclass ULargeEndMarker {}\r\n"
+        path = self.write("Script/Large.as", raw)
+        catalog = self.catalog()
+        digest = hashlib.sha256(raw).hexdigest()
+        searched = catalog.search_text("ULargeEndMarker")
+        self.assertTrue(searched["scan_complete"])
+        self.assertEqual(searched["skipped_count"], 0)
+        self.assertEqual(searched["items"][0]["line"], 2)
+        types = catalog.list_types("ULargeEndMarker")
+        self.assertTrue(types["scan_complete"])
+        self.assertEqual(types["items"][0]["file_sha256"], digest)
+        exact = catalog.read_file_exact("Script/Large.as")
+        self.assertEqual(exact["text"].encode("utf-8"), raw)
+        self.assertEqual(exact["sha256"], digest)
+        self.assertTrue(exact["contains_bom"])
+        self.assertFalse(exact["content_truncated"])
+        self.assertIsNone(exact["max_text_bytes"])
+        display = catalog.read_file("Script/Large.as", start_line=2, line_count=1)
+        self.assertEqual(display["text"], "class ULargeEndMarker {}")
+        self.assertEqual(display["sha256"], digest)
+        self.assertEqual(path.read_bytes(), raw)
+
+    def test_requested_line_count_can_exceed_legacy_display_limit(self):
+        lines = [f"int Entry{index} = {index};" for index in range(501)]
+        self.write("Script/Lines.as", "\r\n".join(lines))
+        result = self.catalog().read_file("Script/Lines.as", line_count=501)
+        self.assertEqual(result["text"], "\n".join(lines))
+        self.assertEqual(result["returned_lines"], 501)
+        self.assertFalse(result["content_truncated"])
 
     def test_types_mask_comments_strings_and_track_nested_namespaces(self):
         self.write("Script/Types.as", '''// class Wrong {}
@@ -271,7 +303,7 @@ class Outside {}
         self.assertEqual(captured.exception.code, "no_sources")
         self.write("Script/Test.as", "test")
         catalog = self.catalog()
-        for operation in (lambda: catalog.search_files(""), lambda: catalog.search_text("x", 0), lambda: catalog.list_types("", 201), lambda: catalog.read_file("Script/Test.as", 0), lambda: catalog.read_file("Script/Test.as", 1, 401), lambda: catalog.search_files("x", True)):
+        for operation in (lambda: catalog.search_files(""), lambda: catalog.search_text("x", 0), lambda: catalog.list_types("", 201), lambda: catalog.read_file("Script/Test.as", 0), lambda: catalog.read_file("Script/Test.as", 1, 0), lambda: catalog.read_file("Script/Test.as", 1, True), lambda: catalog.search_files("x", True)):
             with self.assertRaises(SourceError):
                 operation()
 

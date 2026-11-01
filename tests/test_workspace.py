@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from g1r_mcp.workspace import MAX_CONTENT_BYTES, MAX_EXACT_READ_BYTES, MAX_FILES, PackageWorkspace, WorkspaceError
+from g1r_mcp.workspace import MAX_FILES, PackageWorkspace, WorkspaceError
 
 
 class WorkspaceTests(unittest.TestCase):
@@ -104,7 +104,7 @@ class WorkspaceTests(unittest.TestCase):
                      "ScriptPatches/main.as", "ScriptPatches"):
             self.assert_error("unsupported_file", lambda: self.workspace.write_package_file("Example", path, "new"))
         self.assert_error("conflict", lambda: self.workspace.write_package_file("Example", "ScriptPatches/Changes.patch", "new", "0" * 64))
-        self.assert_error("limit_exceeded", lambda: self.workspace.write_package_file("Example", "ScriptPatches/Changes.patch", "a" * (MAX_CONTENT_BYTES + 1)))
+        self.assert_error("invalid_arguments", lambda: self.workspace.write_package_file("Example", "ScriptPatches/Changes.patch", "before\0after"))
         self.assertEqual(before, self.state())
 
     def test_new_patch_directory_is_cleaned_on_write_failure(self):
@@ -466,22 +466,42 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(sorted(result["created_count"] for result in results), [0, 2])
         self.assertTrue((self.root / "Example/Script/Same/Deep").is_dir())
 
-    def test_encoding_limits_and_read_truncation(self):
+    def test_encoding_errors_and_long_unicode_line_read(self):
         self.create()
         before = self.state()
         for content in ("a\0b", "\ud800"):
             code = "invalid_arguments" if "\0" in content else "invalid_encoding"
             self.assert_error(code, lambda: self.workspace.write_package_file("Example", "Script/A.as", content))
-        self.assert_error("limit_exceeded", lambda: self.workspace.write_package_file("Example", "Script/A.as", "a" * (MAX_CONTENT_BYTES + 1)))
+        self.assert_error("invalid_arguments", lambda: self.workspace.write_package_file("Example", "Script/A.as", "before\0after"))
         self.assertEqual(before, self.state())
         target = self.root / "Example/Script/A.as"
         target.write_bytes(b"\xff")
         self.assert_error("invalid_encoding", lambda: self.workspace.read_package_file("Example", "Script/A.as"))
         target.write_text("я" * 50_000, encoding="utf-8")
         result = self.workspace.read_package_file("Example", "Script/A.as")
-        self.assertTrue(result["truncated"])
-        self.assertLessEqual(len(result["text"].encode("utf-8")), 64 * 1024)
+        self.assertFalse(result["truncated"])
+        self.assertEqual(result["text"], "я" * 50_000)
+        self.assertEqual(result["returned_lines"], 1)
+        self.assertFalse(result["has_more"])
         self.assertEqual(result["sha256"], hashlib.sha256(target.read_bytes()).hexdigest())
+
+    def test_display_read_returns_all_requested_501_lines_and_keeps_pagination(self):
+        self.create()
+        lines = [f"Строка {index} 🐉" for index in range(503)]
+        raw = b"\xef\xbb\xbf" + ("\r\n".join(lines) + "\r\n").encode("utf-8")
+        (self.root / "Example/Script/Many.as").write_bytes(raw)
+        page = self.workspace.read_package_file("Example", "Script/Many.as", 2, 501)
+        self.assertEqual(page["text"], "\n".join(lines[1:502]))
+        self.assertEqual(page["returned_lines"], 501)
+        self.assertEqual(page["total_lines"], 503)
+        self.assertEqual(page["sha256"], hashlib.sha256(raw).hexdigest())
+        self.assertFalse(page["truncated"])
+        self.assertTrue(page["has_more"])
+        remaining = self.workspace.read_package_file("Example", "Script/Many.as", 503, 501)
+        self.assertEqual(remaining["text"], lines[-1])
+        self.assertEqual(remaining["returned_lines"], 1)
+        self.assertFalse(remaining["truncated"])
+        self.assertFalse(remaining["has_more"])
 
     def test_exact_text_round_trip_preserves_line_endings_bom_and_eof(self):
         self.create()
@@ -511,17 +531,46 @@ class WorkspaceTests(unittest.TestCase):
         self.workspace.write_package_file("Example", "GothicMod.json", exact["text"], exact["sha256"])
         self.assertEqual(descriptor.read_bytes(), raw)
 
-    def test_exact_text_size_limit_is_explicit_and_never_truncates(self):
+    def test_large_exact_script_preserves_bom_crlf_cas_and_display_pages(self):
         self.create()
+        raw = b"\xef\xbb\xbf" + ("// я 🐉\r\n" * 180_000).encode("utf-8") + b"int Value = 1;\r\n"
+        self.assertGreater(len(raw), 2 * 1024 * 1024)
+        content = raw.decode("utf-8")
+        created = self.workspace.write_package_file("Example", "Script/Exact.as", content)
         file = self.root / "Example/Script/Exact.as"
-        raw = "я" * (MAX_EXACT_READ_BYTES // 2)
-        file.write_bytes(raw.encode("utf-8"))
+        self.assertEqual(file.read_bytes(), raw)
+        self.assertEqual(created["sha256"], hashlib.sha256(raw).hexdigest())
         exact = self.workspace.read_package_file_exact("Example", "Script/Exact.as")
-        self.assertEqual(exact["bytes"], MAX_EXACT_READ_BYTES)
-        self.assertEqual(exact["text"], raw)
+        self.assertEqual(exact["bytes"], len(raw))
+        self.assertEqual(exact["text"], content)
+        self.assertEqual(exact["sha256"], hashlib.sha256(raw).hexdigest())
+        self.assertIsNone(exact["max_read_bytes"])
+        self.assertIsNone(exact["max_text_bytes"])
         self.assertFalse(exact["truncated"])
-        file.write_bytes(b"a" * (MAX_EXACT_READ_BYTES + 1))
-        self.assert_error("file_too_large", lambda: self.workspace.read_package_file_exact("Example", "Script/Exact.as"))
+        page = self.workspace.read_package_file("Example", "Script/Exact.as", 2, 2)
+        self.assertEqual(page["text"], "// я 🐉\n// я 🐉")
+        self.assertEqual(page["returned_lines"], 2)
+        self.assertTrue(page["has_more"])
+        self.assertEqual(page["sha256"], exact["sha256"])
+        replacement = content.replace("Value = 1", "Value = 2")
+        written = self.workspace.write_package_file("Example", "Script/Exact.as", replacement, exact["sha256"])
+        replacement_bytes = replacement.encode("utf-8")
+        self.assertEqual(file.read_bytes(), replacement_bytes)
+        self.assertEqual(written["sha256"], hashlib.sha256(replacement_bytes).hexdigest())
+        self.assert_error("conflict", lambda: self.workspace.write_package_file(
+            "Example", "Script/Exact.as", content, exact["sha256"]))
+        self.assertEqual(file.read_bytes(), replacement_bytes)
+
+    def test_large_patch_reads_and_writes_fully_while_descriptor_limit_remains(self):
+        self.create()
+        content = "\ufeff" + "+// я 🐉\r\n" * 170_000
+        self.assertGreater(len(content.encode("utf-8")), 2 * 1024 * 1024)
+        created = self.workspace.write_package_file("Example", "ScriptPatches/Large.patch", content)
+        exact = self.workspace.read_package_file_exact("Example", "ScriptPatches/Large.patch")
+        self.assertEqual(exact["text"], content)
+        self.assertEqual(exact["sha256"], created["sha256"])
+        self.assertIsNone(exact["max_read_bytes"])
+        self.assertFalse(exact["truncated"])
         descriptor = self.root / "Example/GothicMod.json"
         descriptor.write_bytes(b"a" * (256 * 1024 + 1))
         self.assert_error("file_too_large", lambda: self.workspace.read_package_file_exact("Example", "GothicMod.json"))
@@ -566,7 +615,7 @@ class WorkspaceTests(unittest.TestCase):
             self.assert_error("invalid_arguments", lambda: self.workspace.list_package_files("Example", value))
         for offset in (-1, MAX_FILES + 1, True, 1.5, "0", None):
             self.assert_error("invalid_arguments", lambda: self.workspace.list_package_files("Example", offset=offset))
-        for start, count in ((0, 1), (True, 1), (1, 401), (1, True)):
+        for start, count in ((0, 1), (True, 1), (1, 0), (1, True)):
             self.assert_error("invalid_arguments", lambda: self.workspace.read_package_file("Example", "GothicMod.json", start, count))
         self.assert_error("invalid_arguments", lambda: self.workspace.write_package_file("Example", "GothicMod.json", "{}", "bad-hash"))
 

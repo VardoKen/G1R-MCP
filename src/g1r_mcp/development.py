@@ -20,14 +20,13 @@ import threading
 import uuid
 from typing import Callable
 
-from .packages import PackageError, validate_package
+from .packages import MAX_DESCRIPTOR_BYTES, PackageError, validate_package
 from .workspace import (PackageWorkspace, WorkspaceError, _checked, _destination_lock,
                         _guard_directories, _read_bytes)
 
 MAX_PACKAGE_FILES = 10_000
 MAX_PACKAGE_DIRECTORIES = 10_000
 MAX_FILE_BYTES = 16 * 1024 * 1024
-MAX_PACKAGE_BYTES = 64 * 1024 * 1024
 MAX_PROCESS_OUTPUT = 256 * 1024
 MAX_MANIFEST_BYTES = 768 * 1024
 MAX_DEVELOPMENT_PACKAGES = 4
@@ -328,10 +327,9 @@ class DevelopmentService:
                         if len(entries) >= MAX_PACKAGE_FILES:
                             raise DevelopmentError("manifest_limit", "Пакет превышает предел 10000 файлов")
                         before = file.stat()
-                        data = _read_bytes(file, package, min(MAX_FILE_BYTES, MAX_PACKAGE_BYTES - total))
+                        data = _read_bytes(file, package,
+                                           MAX_DESCRIPTOR_BYTES if file == package / "GothicMod.json" else None)
                         total += len(data)
-                        if total > MAX_PACKAGE_BYTES:
-                            raise DevelopmentError("manifest_limit", "Пакет превышает общий предел 64 МиБ")
                         entries.append({"path": file.relative_to(package).as_posix(), "bytes": len(data),
                                         "sha256": hashlib.sha256(data).hexdigest()})
                         info = file.stat()
@@ -361,7 +359,8 @@ class DevelopmentService:
             # Валидатор должен описывать именно те байты дескриптора, которые вошли в хеш.
             final_validation = validate_package(self.workspace.root, normalized)
             descriptor_entry = next((entry for entry in entries if entry["path"] == "GothicMod.json"), None)
-            descriptor_hash = hashlib.sha256(_read_bytes(package / "GothicMod.json", package, MAX_FILE_BYTES)).hexdigest()
+            descriptor_hash = hashlib.sha256(_read_bytes(package / "GothicMod.json", package,
+                                                        MAX_DESCRIPTOR_BYTES)).hexdigest()
             if (not final_validation["valid_structure"] or final_validation["metadata"] != validation["metadata"]
                     or final_validation["script_count"] != validation["script_count"]
                     or final_validation.get("patch_count", 0) != validation.get("patch_count", 0)
@@ -450,7 +449,8 @@ class DevelopmentService:
                         (target / "Script").mkdir()
                 source_root, _ = self.workspace._package(source["package_path"])
                 for entry in source["files"]:
-                    data = _read_bytes(source_root / entry["path"], source_root, MAX_FILE_BYTES)
+                    data = _read_bytes(source_root / entry["path"], source_root,
+                                       MAX_DESCRIPTOR_BYTES if entry["path"] == "GothicMod.json" else None)
                     if len(data) != entry["bytes"] or hashlib.sha256(data).hexdigest() != entry["sha256"]:
                         raise DevelopmentError("package_changed", "Исходный пакет изменился при подготовке development-сеанса")
                     destination = target / entry["path"]

@@ -19,11 +19,8 @@ from .source_functions import declarations as function_declarations
 from .source_identity import inspect as inspect_source_identity
 
 
-MAX_FILE_BYTES = 2 * 1024 * 1024
 MAX_FILES = 100_000
 MAX_QUERY_CHARS = 512
-MAX_READ_BYTES = 64 * 1024
-MAX_EXACT_READ_BYTES = 1024 * 1024
 MAX_MATCH_OFFSET = 1_000_000
 
 
@@ -82,15 +79,15 @@ def _check_path(path: Path, boundary: Path | None = None, *, directory: bool = F
         raise SourceError("source_unavailable", "Источник отсутствует или недоступен") from None
 
 
-def _read_source_bytes(file: SourceFile, boundary: Path, maximum: int = MAX_FILE_BYTES) -> bytes:
+def _read_source_bytes(file: SourceFile, boundary: Path, maximum: int | None = None) -> bytes:
     try:
         path = _check_path(file.path, boundary)
         before = path.stat()
-        if before.st_size > maximum:
+        if maximum is not None and before.st_size > maximum:
             raise SourceError("file_too_large", "Исходник превышает предел выбранного режима чтения")
         with path.open("rb") as stream:
-            raw = stream.read(maximum + 1)
-        if len(raw) > maximum:
+            raw = stream.read() if maximum is None else stream.read(maximum + 1)
+        if maximum is not None and len(raw) > maximum:
             raise SourceError("file_too_large", "Исходник превышает предел выбранного режима чтения")
         _check_path(path, boundary)
         after = path.stat()
@@ -334,7 +331,7 @@ class SourceCatalog:
     def read_file_exact(self, relative_path: str) -> dict:
         """Прочитать полный UTF-8 исходник без изменения BOM, переводов строк и конца файла."""
         file = self._source_file(relative_path)
-        raw = _read_source_bytes(file, self.root, MAX_EXACT_READ_BYTES)
+        raw = _read_source_bytes(file, self.root)
         try:
             text = raw.decode("utf-8", errors="strict")
         except UnicodeDecodeError:
@@ -342,41 +339,27 @@ class SourceCatalog:
         item = self._item(file, text=text, sha256=hashlib.sha256(raw).hexdigest(),
                           bytes=len(raw), encoding="UTF-8", text_mode="exact",
                           contains_bom=raw.startswith(b"\xef\xbb\xbf"), content_truncated=False,
-                          max_text_bytes=MAX_EXACT_READ_BYTES)
+                          max_text_bytes=None)
         return self._result([item], 1, 1, **item)
 
     def read_file(self, relative_path: str, start_line: int = 1, line_count: int = 100) -> dict:
         file = self._source_file(relative_path)
         if isinstance(start_line, bool) or not isinstance(start_line, int) or start_line < 1:
             raise SourceError("invalid_arguments", "Номер первой строки должен быть положительным целым числом")
-        _limit(line_count, 400)
+        if isinstance(line_count, bool) or not isinstance(line_count, int) or line_count < 1:
+            raise SourceError("invalid_arguments", "Число строк должно быть положительным целым числом")
         source_text, source_sha256 = _read_source(file, self.root)
         lines = source_text.splitlines()
         selected = lines[start_line - 1:start_line - 1 + line_count]
-        returned = []
-        remaining = MAX_READ_BYTES
-        byte_truncated = False
-        last_line_truncated = False
-        for line in selected:
-            separator_bytes = 1 if returned else 0
-            if remaining <= separator_bytes:
-                byte_truncated = True
-                break
-            encoded = line.encode("utf-8")
-            if len(encoded) + separator_bytes > remaining:
-                returned.append(encoded[:remaining - separator_bytes].decode("utf-8", errors="ignore"))
-                byte_truncated = last_line_truncated = True
-                break
-            returned.append(line)
-            remaining -= len(encoded) + separator_bytes
+        returned = selected
         text = "\n".join(returned)
         item = self._item(file, sha256=source_sha256, text_mode="display_lines",
-                          exact_replacement_available=True, exact_max_text_bytes=MAX_EXACT_READ_BYTES,
+                          exact_replacement_available=True, exact_max_text_bytes=None,
                           start_line=start_line, end_line=start_line + len(returned) - 1 if returned else None,
                           total_lines=len(lines), text=text, returned_lines=len(returned),
-                          returned_utf8_bytes=len(text.encode("utf-8")), max_text_bytes=MAX_READ_BYTES,
-                          last_line_truncated=last_line_truncated,
-                          content_truncated=byte_truncated or start_line > 1 or start_line - 1 + line_count < len(lines))
+                          returned_utf8_bytes=len(text.encode("utf-8")), max_text_bytes=None,
+                          last_line_truncated=False,
+                          content_truncated=start_line > 1 or start_line - 1 + line_count < len(lines))
         return self._result([item], 1, 1, **item)
 
     def list_types(self, query: str = "", limit: int = 50, offset: int = 0) -> dict:

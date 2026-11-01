@@ -24,10 +24,7 @@ from g1r_mcp.workspace import (PackageWorkspace, WorkspaceError, _checked, _part
 
 MAX_FILES = 10_000
 MAX_DIRECTORIES = 10_000
-MAX_SOURCE_BYTES = 2 * 1024 * 1024
-MAX_TOTAL_BYTES = 64 * 1024 * 1024
 MAX_MANIFEST_BYTES = 4 * 1024 * 1024
-MAX_ARCHIVE_BYTES = MAX_TOTAL_BYTES + 4 * 1024 * 1024
 
 
 class ExportError(Exception):
@@ -65,7 +62,6 @@ def _source_files(workspace: PackageWorkspace, relative_package: str) -> tuple[P
     if _parts(name) != (name,):
         raise ExportError("invalid_package_name", "Имя пакета должно быть одним допустимым Windows-компонентом")
     files = {}
-    total = 0
     directories = 0
     folded = set()
 
@@ -93,16 +89,13 @@ def _source_files(workspace: PackageWorkspace, relative_package: str) -> tuple[P
                 if relative_path.casefold() in folded:
                     raise ExportError("duplicate_path", "Пакет содержит одинаковые Windows-пути")
                 folded.add(relative_path.casefold())
-                raw = _read_bytes(path, package, MAX_DESCRIPTOR_BYTES if len(parts) == 1 else MAX_SOURCE_BYTES)
+                raw = _read_bytes(path, package, MAX_DESCRIPTOR_BYTES if len(parts) == 1 else None)
                 try:
                     text = raw.decode("utf-8-sig")
                     if "\0" in text:
                         raise ValueError()
                 except (UnicodeError, ValueError):
                     raise ExportError("invalid_encoding", "Исходники экспорта должны быть UTF-8 без NUL") from None
-                total += len(raw)
-                if total > MAX_TOTAL_BYTES:
-                    raise ExportError("export_limit", "Пакет превышает предел 64 МиБ")
                 files[relative_path] = raw
     if not any(path.startswith(("Script/", "ScriptPatches/")) for path in files):
         raise ExportError("empty_package", "В пакете нет исходников или патчей для экспорта")
@@ -126,16 +119,13 @@ def _destination(path: Path, workspace: PackageWorkspace) -> Path:
 def _archive_bytes(files: dict[str, bytes], name: str) -> bytes:
     import io
     stream = io.BytesIO()
-    with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_STORED, allowZip64=False) as archive:
+    with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
         for relative, raw in sorted(files.items()):
             entry = zipfile.ZipInfo(name + "/" + relative, date_time=(1980, 1, 1, 0, 0, 0))
             entry.create_system = 3
             entry.external_attr = (stat.S_IFREG | 0o644) << 16
             archive.writestr(entry, raw)
-    raw = stream.getvalue()
-    if len(raw) > MAX_ARCHIVE_BYTES:
-        raise ExportError("export_limit", "ZIP превышает предел размера")
-    return raw
+    return stream.getvalue()
 
 
 def _cleanup(stage: Path, parent: Path, own_files: dict, stage_identity: tuple[int, int]) -> None:
@@ -145,7 +135,7 @@ def _cleanup(stage: Path, parent: Path, own_files: dict, stage_identity: tuple[i
                 return
             for name, (identity, digest) in own_files.items():
                 path = _checked(stage / name, stage)
-                if _identity(path) == identity and _sha(_read_bytes(path, stage, MAX_ARCHIVE_BYTES)) == digest:
+                if _identity(path) == identity and _sha(_read_bytes(path, stage, None)) == digest:
                     path.unlink()
         if not any(stage.iterdir()):
             stage.rmdir()
@@ -234,14 +224,14 @@ def export_package(workspace_root: Path, relative_package: str, destination: Pat
                     except OSError:
                         if partial is not None:
                             checked = _checked(file, stage)
-                            current = _read_bytes(checked, stage, MAX_ARCHIVE_BYTES)
+                            current = _read_bytes(checked, stage, None)
                             if _identity(checked) == partial and raw.startswith(current):
                                 checked.unlink()
                         raise
                 verify_export(stage)
                 for filename, (identity, digest) in owned.items():
                     checked = _checked(stage / filename, stage)
-                    if _identity(checked) != identity or _sha(_read_bytes(checked, stage, MAX_ARCHIVE_BYTES)) != digest:
+                    if _identity(checked) != identity or _sha(_read_bytes(checked, stage, None)) != digest:
                         raise ExportError("copy_changed", "Подготовленный ZIP или manifest изменился до публикации")
             if os.path.lexists(target):
                 raise ExportError("already_exists", "Каталог экспорта появился до публикации")
@@ -275,7 +265,7 @@ def verify_export(export_root: Path) -> dict:
     if not isinstance(archive_info, dict) or archive_info.get("filename") != name + ".zip":
         raise ExportError("invalid_manifest", "Недопустимое имя ZIP")
     archive_path = _checked(root / archive_info["filename"], root)
-    archive_raw = _read_bytes(archive_path, root, MAX_ARCHIVE_BYTES)
+    archive_raw = _read_bytes(archive_path, root, None)
     if type(archive_info.get("bytes")) is not int or len(archive_raw) != archive_info["bytes"] or _sha(archive_raw) != archive_info.get("sha256"):
         raise ExportError("integrity_mismatch", "Хеш ZIP не совпадает с manifest")
     files = manifest.get("files")
@@ -289,13 +279,12 @@ def verify_export(export_root: Path) -> dict:
             raise ExportError("invalid_manifest", "Неверная запись исходника")
         path = item["path"]
         _allowed(path)
-        if path.casefold() in folded or type(item.get("bytes")) is not int or item["bytes"] < 0 or item["bytes"] > (MAX_DESCRIPTOR_BYTES if path == "GothicMod.json" else MAX_SOURCE_BYTES):
+        if (path.casefold() in folded or type(item.get("bytes")) is not int or item["bytes"] < 0
+                or path == "GothicMod.json" and item["bytes"] > MAX_DESCRIPTOR_BYTES):
             raise ExportError("invalid_manifest", "Повторный путь или недопустимый размер исходника")
         folded.add(path.casefold())
         expected[name + "/" + path] = item
         total += item["bytes"]
-        if total > MAX_TOTAL_BYTES:
-            raise ExportError("export_limit", "Исходники ZIP превышают предел")
     if name + "/GothicMod.json" not in expected or not any(path.startswith((name + "/Script/", name + "/ScriptPatches/")) for path in expected):
         raise ExportError("incomplete_package", "ZIP не содержит дескриптор и скриптовый компонент")
     import io
@@ -314,7 +303,7 @@ def verify_export(export_root: Path) -> dict:
                 if (mode and not stat.S_ISREG(mode)) or entry.is_dir() or entry.file_size != expected[entry.filename]["bytes"]:
                     raise ExportError("unsafe_archive", "ZIP содержит не обычный файл или неверный размер")
                 with archive.open(entry) as stream:
-                    content = stream.read(MAX_SOURCE_BYTES + 1)
+                    content = stream.read()
                 if len(content) != entry.file_size or _sha(content) != expected[entry.filename]["sha256"]:
                     raise ExportError("integrity_mismatch", "Исходник ZIP отличается от manifest")
                 if "\0" in content.decode("utf-8-sig"):

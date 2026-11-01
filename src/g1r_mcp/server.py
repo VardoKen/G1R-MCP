@@ -508,7 +508,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_read_source_exact(relative_path: str) -> dict[str, Any]:
-        """Прочитать полный UTF-8 исходник до 1 МиБ для редактуры; сохраняет BOM, CRLF и EOF."""
+        """Прочитать полный UTF-8 исходник для редактуры без искусственного предела; сохраняет BOM, CRLF и EOF."""
         try:
             return sources.read_file_exact(relative_path)
         except SourceError as error:

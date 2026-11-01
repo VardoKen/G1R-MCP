@@ -20,11 +20,11 @@ from typing import Iterable, Iterator
 
 from .packages import MAX_DESCRIPTOR_BYTES, PackageError, validate_package
 
-MAX_FILE_BYTES = 2 * 1024 * 1024
-MAX_READ_BYTES = 64 * 1024
-MAX_EXACT_READ_BYTES = 1024 * 1024
+MAX_FILE_BYTES = None
+MAX_READ_BYTES = None
+MAX_EXACT_READ_BYTES = None
 MAX_FILES = 10_000
-MAX_CONTENT_BYTES = 2 * 1024 * 1024
+MAX_CONTENT_BYTES = None
 MAX_DIRECTORY_PARTS = 32
 _RESERVED = re.compile(r"^(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³])(?:\..*)?$", re.I)
 
@@ -136,26 +136,26 @@ def _destination_lock(path: Path) -> Iterator[None]:
         close(handle)
 
 
-def _read_bytes(path: Path, boundary: Path, maximum: int) -> bytes:
+def _read_bytes(path: Path, boundary: Path, maximum: int | None) -> bytes:
     checked = _checked(path, boundary)
     if not checked.is_file():
         raise WorkspaceError("invalid_path", "Исходник должен быть обычным файлом")
     try:
         before = checked.stat()
-        if before.st_size > maximum:
+        if maximum is not None and before.st_size > maximum:
             raise WorkspaceError("limit_exceeded", "Файл превышает разрешённый размер")
         with checked.open("rb") as stream:
             opened = os.fstat(stream.fileno())
             if (opened.st_ino, opened.st_dev) != (before.st_ino, before.st_dev):
                 raise WorkspaceError("file_changed", "Файл изменился во время чтения")
-            raw = stream.read(maximum + 1)
+            raw = stream.read() if maximum is None else stream.read(maximum + 1)
             after_read = os.fstat(stream.fileno())
         _checked(checked, boundary)
         after = checked.stat()
         stamp = lambda info: (info.st_size, info.st_mtime_ns, info.st_ino, info.st_dev)
         if stamp(before) != stamp(after_read) or stamp(before) != stamp(after):
             raise WorkspaceError("file_changed", "Файл изменился во время чтения")
-        if len(raw) > maximum:
+        if maximum is not None and len(raw) > maximum:
             raise WorkspaceError("limit_exceeded", "Файл превышает разрешённый размер")
         return raw
     except WorkspaceError:
@@ -397,8 +397,8 @@ class PackageWorkspace:
                           start_line: int = 1, line_count: int = 100) -> dict:
         parts = self._file_parts(file_path)
         if (isinstance(start_line, bool) or not isinstance(start_line, int) or start_line < 1
-                or isinstance(line_count, bool) or not isinstance(line_count, int) or not 1 <= line_count <= 400):
-            raise WorkspaceError("invalid_arguments", "Нужны положительный номер строки и число строк от 1 до 400")
+            or isinstance(line_count, bool) or not isinstance(line_count, int) or line_count < 1):
+            raise WorkspaceError("invalid_arguments", "Нужны положительные целые номер строки и число строк")
         with self._lock:
             package, name = self._package(relative_path)
             path = self._unprotected(_checked(package.joinpath(*parts), package))
@@ -410,13 +410,11 @@ class PackageWorkspace:
                 raise WorkspaceError("invalid_encoding", "Файл должен быть корректным UTF-8") from None
             selected = lines[start_line - 1:start_line - 1 + line_count]
             text = "\n".join(selected)
-            limited = text.encode("utf-8")[:MAX_READ_BYTES].decode("utf-8", errors="ignore")
-            truncated = limited != text
             return _result(package_path=name, file_path="/".join(parts), sha256=hashlib.sha256(raw).hexdigest(),
                            bytes=len(raw), total_lines=len(lines), start_line=start_line,
-                           returned_lines=len(limited.splitlines()), text=limited, truncated=truncated,
+                       returned_lines=len(selected), text=text, truncated=False,
                            text_mode="display_lines",
-                           has_more=truncated or start_line - 1 + len(selected) < len(lines))
+                       has_more=start_line - 1 + len(selected) < len(lines))
 
     def read_package_file_exact(self, relative_path: str, file_path: str) -> dict:
         """Вернуть полный редактируемый UTF-8 текст без изменения BOM, строк и EOF."""
@@ -426,7 +424,7 @@ class PackageWorkspace:
             path = self._unprotected(_checked(package.joinpath(*parts), package))
             maximum = MAX_DESCRIPTOR_BYTES if len(parts) == 1 else MAX_EXACT_READ_BYTES
             with _guard_directories(path.parent, self.root):
-                if path.stat().st_size > maximum:
+                if maximum is not None and path.stat().st_size > maximum:
                     raise WorkspaceError("file_too_large", "Файл превышает предел полного текстового чтения")
                 raw = _read_bytes(path, package, maximum)
             try:
@@ -435,7 +433,7 @@ class PackageWorkspace:
                 raise WorkspaceError("invalid_encoding", "Файл должен быть корректным UTF-8") from None
             return _result(package_path=name, file_path="/".join(parts), sha256=hashlib.sha256(raw).hexdigest(),
                            bytes=len(raw), text=text, text_mode="exact", truncated=False,
-                           max_read_bytes=maximum)
+                           max_read_bytes=maximum, max_text_bytes=maximum)
 
     def write_package_file(self, relative_path: str, file_path: str, content: str,
                            expected_sha256: str | None = None) -> dict:
@@ -450,7 +448,7 @@ class PackageWorkspace:
         except UnicodeEncodeError:
             raise WorkspaceError("invalid_encoding", "Содержимое должно быть корректным UTF-8") from None
         maximum = MAX_DESCRIPTOR_BYTES if len(parts) == 1 else MAX_CONTENT_BYTES
-        if len(raw) > maximum:
+        if maximum is not None and len(raw) > maximum:
             raise WorkspaceError("limit_exceeded", "Содержимое превышает разрешённый размер")
         with self._lock:
             package, name = self._package(relative_path)

@@ -12,9 +12,6 @@ import re
 
 from .workspace import WorkspaceError, _checked, _guard_directories, _parts, _read_bytes
 
-MAX_SOURCE_BYTES = 1024 * 1024
-MAX_PATCH_BYTES = 2 * 1024 * 1024
-
 
 class PatchError(Exception):
     """Предсказуемая ошибка создания патча без раскрытия абсолютного пути."""
@@ -40,7 +37,7 @@ class ScriptPatchBuilder:
                 raise PatchError("unsupported_file", "Источником патча должен быть Script/**/*.as официального Modkit")
             path = _checked(self.root.joinpath(*parts), self.script_root)
             with _guard_directories(path.parent, self.script_root):
-                raw = _read_bytes(path, self.script_root, MAX_SOURCE_BYTES)
+                raw = _read_bytes(path, self.script_root, None)
         except WorkspaceError as error:
             raise PatchError(error.code, str(error)) from None
         self._text(raw)
@@ -62,23 +59,21 @@ class ScriptPatchBuilder:
         path, raw = self._source(source_path)
         return {"source": "official_modkit", "revision": self.revision, "path": path,
                 "bytes": len(raw), "source_sha256": hashlib.sha256(raw).hexdigest(),
-                "max_source_bytes": MAX_SOURCE_BYTES}
+                "max_source_bytes": None}
 
     def build_script_patch(self, source_path: str, replacement_content: str,
                            expected_source_sha256: str, context_lines: int = 3) -> dict:
         if (not isinstance(expected_source_sha256, str)
                 or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_source_sha256)):
             raise PatchError("invalid_arguments", "Нужен SHA-256 исходника из 64 шестнадцатеричных символов")
-        if isinstance(context_lines, bool) or not isinstance(context_lines, int) or not 0 <= context_lines <= 20:
-            raise PatchError("invalid_arguments", "Число строк контекста должно быть целым от 0 до 20")
+        if isinstance(context_lines, bool) or not isinstance(context_lines, int) or context_lines < 0:
+            raise PatchError("invalid_arguments", "Число строк контекста должно быть неотрицательным целым")
         if not isinstance(replacement_content, str):
             raise PatchError("invalid_arguments", "Замена должна быть текстом UTF-8")
         try:
             replacement = replacement_content.encode("utf-8")
         except UnicodeEncodeError:
             raise PatchError("invalid_encoding", "Замена должна быть корректным UTF-8") from None
-        if len(replacement) > MAX_SOURCE_BYTES:
-            raise PatchError("limit_exceeded", "Замена превышает предел 1 МиБ")
         path, source = self._source(source_path)
         source_sha = hashlib.sha256(source).hexdigest()
         if source_sha != expected_source_sha256.lower():
@@ -101,8 +96,6 @@ class ScriptPatchBuilder:
             if not line.endswith("\n"):
                 line += "\n\\ No newline at end of file\n"
             patch_size += len(line.encode("utf-8"))
-            if patch_size > MAX_PATCH_BYTES:
-                raise PatchError("limit_exceeded", "Патч превышает предел 2 МиБ")
             chunks.append(line)
         patch_text = "".join(chunks)
         return {"source": "official_modkit", "revision": self.revision, "path": path,

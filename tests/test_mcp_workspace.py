@@ -14,6 +14,110 @@ class MCPWorkspaceTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self._asyncioRunner.get_loop().slow_callback_duration = 2.0
 
+    async def test_large_exact_source_patch_and_workspace_cas_preserve_utf8_bytes(self):
+        source_path = "Script/Tests/Большой исходник.as"
+        first_line = "\ufeff// Официальный исходник"
+        context_line = "// Перед последней строкой"
+        last_line = "class ULarge { int ReadMarker() { return 1; } }; // " + "Ж🙂" * 400000
+        replacement_line = last_line.replace("return 1;", "return 2;", 1)
+        source_text = first_line + "\r\n" + context_line + "\r\n" + last_line
+        replacement = first_line + "\r\n" + context_line + "\r\n" + replacement_line
+        source_bytes = source_text.encode("utf-8")
+        replacement_bytes = replacement.encode("utf-8")
+        self.assertGreater(len(source_bytes), 2 * 1024 * 1024)
+        source_sha = hashlib.sha256(source_bytes).hexdigest()
+        replacement_sha = hashlib.sha256(replacement_bytes).hexdigest()
+        expected_patch = (
+            "--- a/Tests/Большой исходник.as\n"
+            "+++ b/Tests/Большой исходник.as\n"
+            "@@ -2,2 +2,2 @@\n"
+            " " + context_line + "\r\n"
+            "-" + last_line + "\n\\ No newline at end of file\n"
+            "+" + replacement_line + "\n\\ No newline at end of file\n"
+        )
+        patch_bytes = expected_patch.encode("utf-8")
+        self.assertGreater(len(patch_bytes), 4 * 1024 * 1024)
+        patch_sha = hashlib.sha256(patch_bytes).hexdigest()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            modkit, workspace = root / "Modkit", root / "workspace"
+            source = modkit / source_path
+            source.parent.mkdir(parents=True)
+            source.write_bytes(source_bytes)
+            workspace.mkdir()
+            parameters = StdioServerParameters(command=sys.executable, args=[
+                "-B", "-m", "g1r_mcp.server", "--modkit-root", str(modkit),
+                "--workspace-root", str(workspace),
+            ])
+
+            async def call(client, name, arguments):
+                result = await client.call_tool(name, arguments)
+                self.assertFalse(result.is_error, str(result.content)[:500])
+                return result.structured_content
+
+            async with stdio_client(parameters) as (incoming, outgoing):
+                async with ClientSession(incoming, outgoing) as client:
+                    await client.initialize()
+                    exact = await call(client, "g1r_read_source_exact", {"relative_path": source_path})
+                    self.assertEqual(exact["text"].encode("utf-8"), source_bytes)
+                    self.assertEqual(exact["sha256"], source_sha)
+                    self.assertIs(exact["contains_bom"], True)
+                    self.assertIs(exact["content_truncated"], False)
+                    built = await call(client, "g1r_build_script_patch", {
+                        "source_path": source_path,
+                        "replacement_content": exact["text"].replace("return 1;", "return 2;", 1),
+                        "expected_source_sha256": exact["sha256"], "context_lines": 1,
+                    })
+                    self.assertEqual(built["source_sha256"], source_sha)
+                    self.assertEqual(built["replacement_sha256"], replacement_sha)
+                    self.assertEqual(built["source_bytes"], len(source_bytes))
+                    self.assertEqual(built["replacement_bytes"], len(replacement_bytes))
+                    self.assertEqual(built["patch_text"].encode("utf-8"), patch_bytes)
+                    self.assertEqual(built["patch_bytes"], len(patch_bytes))
+                    self.assertEqual(built["hunks"], 1)
+                    self.assertIs(built["changed"], True)
+                    self.assertIs(built["compiled"], False)
+                    self.assertEqual(built["engine_apply"], "not_performed")
+                    await call(client, "g1r_create_package", {"relative_path": "LargeExample",
+                        "metadata": {"name": "LargeExample", "title": "Большой пакет",
+                                     "author": "Author", "modVersion": "1.0.0-dev.1"}})
+                    written = await call(client, "g1r_write_package_file", {
+                        "relative_path": "LargeExample", "file_path": "ScriptPatches/Large.patch",
+                        "content": built["patch_text"],
+                    })
+                    self.assertEqual(written["sha256"], patch_sha)
+                    stored = await call(client, "g1r_read_package_file_exact", {
+                        "relative_path": "LargeExample", "file_path": "ScriptPatches/Large.patch",
+                    })
+                    self.assertEqual(stored["text"].encode("utf-8"), patch_bytes)
+                    self.assertEqual(stored["sha256"], patch_sha)
+                    self.assertIs(stored["truncated"], False)
+                    copied = await call(client, "g1r_write_package_file", {
+                        "relative_path": "LargeExample", "file_path": "Script/Large.as",
+                        "content": exact["text"],
+                    })
+                    self.assertEqual(copied["sha256"], source_sha)
+                    before_cas = await call(client, "g1r_read_package_file_exact", {
+                        "relative_path": "LargeExample", "file_path": "Script/Large.as",
+                    })
+                    self.assertEqual(before_cas["text"].encode("utf-8"), source_bytes)
+                    replaced = await call(client, "g1r_write_package_file", {
+                        "relative_path": "LargeExample", "file_path": "Script/Large.as",
+                        "content": replacement, "expected_sha256": before_cas["sha256"],
+                    })
+                    self.assertIs(replaced["created"], False)
+                    self.assertEqual(replaced["sha256"], replacement_sha)
+                    after_cas = await call(client, "g1r_read_package_file_exact", {
+                        "relative_path": "LargeExample", "file_path": "Script/Large.as",
+                    })
+                    self.assertEqual(after_cas["text"].encode("utf-8"), replacement_bytes)
+                    self.assertEqual(after_cas["sha256"], replacement_sha)
+                    self.assertIs(after_cas["truncated"], False)
+            self.assertEqual(source.read_bytes(), source_bytes)
+            self.assertEqual((workspace / "LargeExample/ScriptPatches/Large.patch").read_bytes(), patch_bytes)
+            self.assertEqual((workspace / "LargeExample/Script/Large.as").read_bytes(), replacement_bytes)
+            self.assertFalse(any(path.name.startswith(".g1r-mcp-") for path in root.rglob("*")))
+
     async def test_package_creation_editing_conflicts_and_boundary_over_stdio(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

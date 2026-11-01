@@ -234,10 +234,29 @@ class DevelopmentTests(unittest.TestCase):
             self.service.start("Nested/Probe", recipe["manifest"]["manifest_sha256"])
         self.assertTrue(captured.exception.outcome_unknown)
 
-    def test_manifest_rejects_unbounded_and_redirected_package(self):
-        with patch("g1r_mcp.development.MAX_FILE_BYTES", 1):
-            with self.assertRaises(DevelopmentError):
-                self.recipe()
+    def test_large_source_manifest_and_staging_preserve_exact_bytes(self):
+        source = b"UCLASS()\nclass UProbe : UObject\n{\n}\n/*" + b"x" * (16 * 1024 * 1024) + b"*/\n"
+        (self.package / "Script" / "Probe.as").write_bytes(source)
+
+        manifest = self.service._composition_manifest("Nested/Probe", [])
+        entry = next(item for item in manifest["files"] if item["path"] == "Script/Probe.as")
+        self.assertEqual(entry["bytes"], len(source))
+        self.assertEqual(entry["sha256"], hashlib.sha256(source).hexdigest())
+
+        companion = self.workspace / "Companion"
+        (companion / "Script").mkdir(parents=True)
+        (companion / "Script" / "Companion.as").write_text("class UCompanion {}", encoding="utf-8")
+        (companion / "GothicMod.json").write_text(json.dumps({"name": "Companion", "title": "Companion",
+                                                           "author": "Test", "modVersion": "0.0.0"}),
+                                                encoding="utf-8")
+        composition = self.service._composition_manifest("Nested/Probe", ["Companion"])
+        stage = self.service._stage_composition(composition)
+        staged = self.workspace / stage["packages"][0]["relative_package"] / "Script" / "Probe.as"
+        self.assertEqual(staged.read_bytes(), source)
+        self.assertEqual(stage["packages"][0]["manifest"]["files"], manifest["files"])
+        self.assertEqual(self.calls, [])
+
+    def test_manifest_rejects_excessive_directories_and_redirected_package(self):
         with patch("g1r_mcp.development.MAX_PACKAGE_DIRECTORIES", 1):
             with self.assertRaises(DevelopmentError) as captured:
                 self.recipe()

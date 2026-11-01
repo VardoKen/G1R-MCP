@@ -54,6 +54,35 @@ class ScriptExportTests(unittest.TestCase):
         self.assertEqual((self.target / "ActualMod.zip").read_bytes(), (second / "ActualMod.zip").read_bytes())
         self.assertEqual((self.package / "Script/Nested/Probe.as").read_bytes(), self.source)
 
+    def test_large_utf8_source_preserves_bytes_hashes_and_determinism(self):
+        source = b"\xef\xbb\xbf" + "// Готика 😀\r\n".encode("utf-8") * 110_000 + b"class UProbe {}\r\n"
+        self.assertGreater(len(source), 2 * 1024 * 1024)
+        path = self.package / "Script/Nested/Probe.as"
+        path.write_bytes(source)
+        result = self.prepare()
+        verified = export.verify_export(self.target)
+        self.assertTrue(verified["verified_files"])
+        manifest = json.loads((self.target / "manifest.json").read_text(encoding="utf-8"))
+        entry = next(item for item in manifest["files"] if item["path"] == "Script/Nested/Probe.as")
+        self.assertEqual(entry["bytes"], len(source))
+        self.assertEqual(entry["sha256"], hashlib.sha256(source).hexdigest())
+        with zipfile.ZipFile(self.target / "ActualMod.zip") as archive:
+            self.assertEqual(archive.read("ActualMod/Script/Nested/Probe.as"), source)
+        second = self.workspace / "artifacts/large-second"
+        second_result = self.prepare(second)
+        self.assertEqual(second_result["archive_sha256"], result["archive_sha256"])
+        self.assertEqual((second / "ActualMod.zip").read_bytes(), (self.target / "ActualMod.zip").read_bytes())
+        self.assertEqual(path.read_bytes(), source)
+
+    def test_zip64_representation_uses_existing_archive_support(self):
+        with patch.object(zipfile, "ZIP64_LIMIT", 16):
+            result = self.prepare()
+        self.assertTrue(export.verify_export(self.target)["verified_files"])
+        with zipfile.ZipFile(self.target / "ActualMod.zip") as archive:
+            self.assertEqual(archive.read("ActualMod/Script/Nested/Probe.as"), self.source)
+            self.assertTrue(any(entry.extract_version == 45 for entry in archive.infolist()))
+        self.assertFalse(result["compiled"])
+
     def test_unknown_components_and_non_source_files_refused(self):
         for path in ("Content", "Config", "Story", "ScriptPatches/Nested"):
             with self.subTest(path=path):

@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from g1r_mcp.patches import MAX_SOURCE_BYTES, PatchError, ScriptPatchBuilder
+from g1r_mcp.patches import PatchError, ScriptPatchBuilder
 
 
 class ScriptPatchTests(unittest.TestCase):
@@ -108,7 +108,7 @@ class ScriptPatchTests(unittest.TestCase):
         self.assert_error("conflict", lambda: self.builder.build_script_patch("Script/Test.as", "new\n", "0" * 64))
         for digest_argument in ("bad", None, True):
             self.assert_error("invalid_arguments", lambda: self.builder.build_script_patch("Script/Test.as", "new\n", digest_argument))
-        for context in (-1, 21, True, 1.5):
+        for context in (-1, True, 1.5):
             self.assert_error("invalid_arguments", lambda: self.builder.build_script_patch("Script/Test.as", "new\n", digest, context))
         self.assert_error("invalid_arguments", lambda: self.builder.build_script_patch("Script/Test.as", 10, digest))
         self.assertEqual(source.read_bytes(), b"original\n")
@@ -122,24 +122,44 @@ class ScriptPatchTests(unittest.TestCase):
             self.assert_error("unsupported_file", lambda: self.builder.source_info(path))
         self.assert_error("access_error", lambda: self.builder.source_info("Script/Missing.as"))
 
-    def test_invalid_utf8_binary_cr_and_size_limits(self):
+    def test_invalid_utf8_binary_and_cr_are_rejected(self):
         self.write(b"valid\n")
         digest = hashlib.sha256(b"valid\n").hexdigest()
         self.assert_error("invalid_encoding", lambda: self.builder.build_script_patch("Script/Test.as", "\ud800", digest))
         self.assert_error("invalid_text", lambda: self.builder.build_script_patch("Script/Test.as", "a\0b", digest))
         self.assert_error("unsupported_line_endings", lambda: self.builder.build_script_patch("Script/Test.as", "a\rb", digest))
-        self.assert_error("limit_exceeded", lambda: self.builder.build_script_patch("Script/Test.as", "a" * (MAX_SOURCE_BYTES + 1), digest))
-        for raw, code in ((b"\xff", "invalid_encoding"), (b"a\0b", "invalid_text"), (b"a\rb", "unsupported_line_endings"),
-                          (b"a" * (MAX_SOURCE_BYTES + 1), "limit_exceeded")):
+        for raw, code in ((b"\xff", "invalid_encoding"), (b"a\0b", "invalid_text"), (b"a\rb", "unsupported_line_endings")):
             self.write(raw)
             self.assert_error(code, lambda: self.builder.source_info("Script/Test.as"))
 
-    def test_large_but_valid_texts_are_rejected_if_diff_exceeds_output_limit(self):
-        before = b"a" * MAX_SOURCE_BYTES
-        self.write(before)
-        self.assert_error("limit_exceeded", lambda: self.builder.build_script_patch(
-            "Script/Test.as", "b" * MAX_SOURCE_BYTES, hashlib.sha256(before).hexdigest()))
-        self.assertEqual((self.modkit / "Script/Test.as").read_bytes(), before)
+    def test_large_utf8_source_replacement_and_diff_reconstruct_and_reverse_exact_bytes(self):
+        def script(character):
+            lines = ["\ufeffclass ULargePatch {", *(
+                f"    // Строка {index:04d} {character * 2048}" for index in range(1025)),
+                "    int ReadMarker() { return 42; }", "}"]
+            return "\r\n".join(lines).encode("utf-8")
+
+        before, after = script("a"), script("b")
+        self.assertGreater(len(before), 2 * 1024 * 1024)
+        self.assertGreater(len(after), 2 * 1024 * 1024)
+        result = self.apply_exact(before, after, context=64)
+        self.assertGreater(result["patch_bytes"], 2 * 1024 * 1024)
+        self.assertEqual(result["context_lines"], 64)
+        self.assertIsNone(self.builder.source_info("Script/Test.as")["max_source_bytes"])
+        reversed_patch = subprocess.run(
+            ["git", "-c", "core.autocrlf=false", "apply", "--reverse", "--directory=Script", str(self.root / "Changes.patch")],
+            cwd=self.root / "apply", capture_output=True)
+        self.assertEqual(reversed_patch.returncode, 0, reversed_patch.stderr.decode(errors="replace"))
+        self.assertEqual((self.root / "apply/Script/Test.as").read_bytes(), before)
+
+    def test_explicit_context_larger_than_twenty_includes_requested_source_lines(self):
+        before = "".join(f"line {index}\n" for index in range(100)).encode()
+        after = before.replace(b"line 50\n", b"changed 50\n")
+        result = self.apply_exact(before, after, context=40)
+        self.assertIn(" line 10\n", result["patch_text"])
+        self.assertIn(" line 90\n", result["patch_text"])
+        self.assertNotIn(" line 9\n", result["patch_text"])
+        self.assertNotIn(" line 91\n", result["patch_text"])
 
     def test_symlink_source_never_reads_outside_file(self):
         target = self.root / "Outside.as"
