@@ -15,14 +15,14 @@ class MCPStringInputTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self._asyncioRunner.get_loop().slow_callback_duration = 2.0
 
-    async def test_const_string_unicode_empty_cleanup_errors_and_no_retry(self):
+    async def test_value_string_unicode_empty_cleanup_errors_and_no_retry(self):
         handle = "obj-string-probe"
         constraints = {"max_utf16_units": 2147483646, "embedded_nul": "rejected", "ownership": "engine_owned_copy"}
         functions = {"items": [{"name": "EchoString", "signature_token": "sig-70", "signature_status": "supported",
                      "parameter_count": 2, "parameter_size": 32, "parameters": [
                          {"name": "Input", "type": "StrProperty", "element_size": 16, "array_dim": 1,
-                          "offset": 0, "flags": 0x80 | 0x2 | 0x100, "return": False, "out": True,
-                          "reference": False, "const": True, "direction": "input", "passing": "const_reference",
+                "offset": 0, "flags": 0x80, "return": False, "out": False,
+                "reference": False, "const": False, "direction": "input", "passing": "value",
                           "argument_constraints": constraints},
                          {"name": "ReturnValue", "type": "StrProperty", "element_size": 16, "array_dim": 1,
                           "offset": 16, "flags": 0x80 | 0x400, "return": True, "out": False,
@@ -69,12 +69,33 @@ class MCPStringInputTests(unittest.IsolatedAsyncioTestCase):
             async with stdio_client(parameters) as (incoming, outgoing):
                 async with ClientSession(incoming, outgoing) as client:
                     await client.initialize()
+                    tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+                    invoke_schema = tools["g1r_invoke"].input_schema
+                    self.assertEqual(set(invoke_schema["properties"]),
+                                     {"handle", "function", "arguments", "expected_signature_token"})
+                    self.assertEqual(set(invoke_schema["required"]), {"handle", "function"})
+                    self.assertEqual(invoke_schema["properties"]["arguments"], {
+                        "anyOf": [{"additionalProperties": True, "type": "object"}, {"type": "null"}],
+                        "default": None, "title": "Arguments"})
+                    capabilities = await client.call_tool("g1r_capabilities", {})
+                    self.assertFalse(capabilities.is_error, capabilities.content)
+                    string_input = capabilities.structured_content["invoke_arguments"]["string"]
+                    self.assertEqual(string_input["input_shape"], "string")
+                    self.assertEqual(string_input["passing"], "value_or_const_reference")
+                    self.assertFalse(string_input["const_reference_required"])
+                    self.assertTrue(string_input["by_value_input_supported"])
+                    self.assertEqual(string_input["runtime_passing"], "normalized_const_reference")
+                    self.assertEqual(string_input["runtime_passing_source"],
+                                     "current_unreal_angelscript_function_builder")
                     listed = await client.call_tool("g1r_object_functions", {"handle": handle, "function_query": "EchoString"})
                     self.assertFalse(listed.is_error, listed.content)
                     self.assertEqual(listed.structured_content, functions)
                     declaration = listed.structured_content["items"][0]
                     parameter = declaration["parameters"][0]
-                    self.assertEqual(parameter["passing"], "const_reference")
+                    self.assertEqual(parameter["passing"], "value")
+                    self.assertFalse(parameter["const"])
+                    self.assertFalse(parameter["out"])
+                    self.assertEqual(parameter["flags"], 0x80)
                     self.assertEqual(parameter["direction"], "input")
                     self.assertEqual(parameter["argument_constraints"], constraints)
                     token = declaration["signature_token"]

@@ -400,7 +400,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.50"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.51"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
@@ -1063,9 +1063,7 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
             supported=size==16;
             if(offset%8)throw HandlerError("unsupported_signature","FString требует выравнивание параметра 8 байт");
             if(!returned && vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
-                throw HandlerError("unsupported_signature","FString требует const reference input");
-            if(!returned && !(flags&kConstParm))
-                throw HandlerError("unsupported_signature","FString вход по значению пока не поддержан");
+                throw HandlerError("unsupported_signature","FString requires value or const reference input");
         }
         else if(type=="ArrayProperty") {
             if(returned || !(flags&kConstParm) || vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
@@ -1135,7 +1133,7 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
             public_parameter["passing"]=!returned && (flags&kConstParm)?"const_reference":"value";
         }
         if(type=="StrProperty" && !returned) {
-            public_parameter["direction"]="input";public_parameter["passing"]="const_reference";
+            public_parameter["direction"]="input";public_parameter["passing"]=(flags&kConstParm)?"const_reference":"value";
             public_parameter["argument_constraints"]={{"max_utf16_units",string_arguments::max_utf16_units},{"embedded_nul","rejected"},{"ownership","engine_owned_copy"}};
         }
         if(!array_public.is_null()) {
@@ -1588,9 +1586,9 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             const auto flags=read<uint64_t>(field+0x38);
             if((flags&0x400) || field_type(field,[this](auto value){return name(value);})!="StrProperty")continue;
             const auto offset=read<int32_t>(field+0x44),size=read<int32_t>(field+0x34),dim=read<int32_t>(field+0x30);
-            if(size!=16 || dim!=1 || offset%8 || !(flags&kConstParm)
+            if(size!=16 || dim!=1 || offset%8
                || vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
-                throw HandlerError("unsupported_signature","FString требует выровненный const reference input размером 16 байт");
+                throw HandlerError("unsupported_signature","FString requires aligned value or const reference input of 16 bytes");
             const auto key=name(read<uint64_t>(field+0x20));
             if(!arguments.contains(key))throw HandlerError("missing_argument","Не задан FString аргумент "+key);
             auto source=string_arguments::encode(arguments.at(key));budget.add(source.size());
