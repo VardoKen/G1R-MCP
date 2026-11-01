@@ -44,6 +44,20 @@ class UG1RMCPObjectArrayInputProbe : UObject
     }
 
     UFUNCTION(BlueprintCallable)
+    FString ReadMixedEcho(const TArray<UObject>&in Input, const FString&in Text)
+    {
+        CallsCount++;
+        return Text;
+    }
+
+    UFUNCTION(BlueprintCallable)
+    FString ReadArrayMarker(const TArray<UObject>&in Input)
+    {
+        CallsCount++;
+        return "mixed-array";
+    }
+
+    UFUNCTION(BlueprintCallable)
     int ReadCallsCount()
     {
         return CallsCount;
