@@ -167,8 +167,17 @@ void scalar_argument_boundaries() {
     require(g1r_mcp::parameter_extent(8,8,1,1)==9,"AS bool return beyond ParmsSize не включён");
     require(g1r_mcp::parameter_extent(8,8,8,1)==16,"AS object return beyond ParmsSize не включён");
     require(g1r_mcp::parameter_extent(8,0,8,1)==8,"Обычный параметр изменил размер");
-    error("unsupported_signature",[]{g1r_mcp::parameter_extent(8,4096,1,1);});
+    require(g1r_mcp::parameter_extent(8192,8192,8,1)==8200,"Параметр за 4096 байт не включён");
+    require(g1r_mcp::parameter_extent(0,0,8192,1)==8192,"Поле больше 4096 байт не принимается");
+    require(g1r_mcp::parameter_extent(65535,65535,8,1)==65543,"AS return за uint16 ParmsSize не включён");
+    constexpr int maximum_extent=std::numeric_limits<int>::max();
+    require(g1r_mcp::parameter_extent(0,maximum_extent-8,8,1)==maximum_extent,"INT_MAX extent не принимается");
+    require(g1r_mcp::parameter_extent(maximum_extent,0,1,1)==maximum_extent,"Текущий INT_MAX extent не сохраняется");
+    error("unsupported_signature",[]{g1r_mcp::parameter_extent(0,maximum_extent-7,8,1);});
+    error("unsupported_signature",[]{g1r_mcp::parameter_extent(-1,0,1,1);});
     error("unsupported_signature",[]{g1r_mcp::parameter_extent(8,-1,1,1);});
+    error("unsupported_signature",[]{g1r_mcp::parameter_extent(8,0,0,1);});
+    error("unsupported_signature",[]{g1r_mcp::parameter_extent(8,0,-1,1);});
     error("unsupported_signature",[]{g1r_mcp::parameter_extent(8,0,1,2);});
     g1r_mcp::validate_bool_layout(1,0,1);
     g1r_mcp::validate_bool_layout(1,0,255);

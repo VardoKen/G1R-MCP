@@ -9,8 +9,8 @@
 namespace g1r_mcp {
 
 inline int parameter_extent(int current, int offset, int size, int array_dim) {
-    if (current<0 || current>4096 || offset<0 || size<1 || size>4096
-        || offset>4096-size || array_dim!=1)
+    if (current<0 || offset<0 || size<1
+        || offset>std::numeric_limits<int>::max()-size || array_dim!=1)
         throw HandlerError("unsupported_signature", "Некорректные отражённые параметры");
     return std::max(current,offset+size);
 }

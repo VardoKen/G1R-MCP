@@ -400,7 +400,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.44"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.45"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
@@ -972,7 +972,6 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
     const auto declared_count=read<uint8_t>(function+0xb4);
     const auto parameter_bytes=read<uint16_t>(function+0xb6);
     const auto return_offset=read<uint16_t>(function+0xb8);
-    if(parameter_bytes>4096)throw HandlerError("unsupported_signature","Параметры UFunction превышают 4096 байтов");
     json parameters=json::array();int count{},returns{},extent=parameter_bytes;
     const auto fields=capture_function_field_chain(field_head,[&](uintptr_t field) {
         const auto field_class=read<uintptr_t>(field+8),field_name=read<uint64_t>(field+0x20);
@@ -1340,7 +1339,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             throw HandlerError("signature_token_mismatch","Токен выдан другой реализации одноимённой функции");
         require_same_function_contract(expected_contract,capture_function_contract(object,function_owner,function,target_handle));
     }
-    auto bytes=read<uint16_t>(function+0xb6);if(bytes>4096)throw HandlerError("unsupported_signature","Слишком большой буфер параметров");
+    auto bytes=read<uint16_t>(function+0xb6);
     std::vector<uintptr_t> parameter_fields;
     std::set<uintptr_t> visited_fields;
     auto parameter=read<uintptr_t>(function+0x50);
@@ -1623,7 +1622,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         auto flags=read<uint64_t>(field+0x38);if(!(flags&0x80))continue;
         auto type=field_type(field,[this](auto f){return name(f);});int offset=read<int32_t>(field+0x44),size=read<int32_t>(field+0x34);
         const auto current_extent=parameter_extent(extent,offset,size,read<int32_t>(field+0x30));
-        if(strict_pod_contract && current_extent>extent)
+        if(current_extent>extent)
             throw HandlerError("unsupported_signature","Параметр изменился и выходит за выделенный буфер UFunction");
         if(flags&0x400){
             if(return_field)throw HandlerError("unsupported_signature","У функции обнаружено несколько возвращаемых параметров");
