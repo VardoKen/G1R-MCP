@@ -646,6 +646,47 @@ class DevelopmentService:
                     "edit_target": "staged_copy_only", "hot_reload": "function_bodies_file_watch",
                     "staging_retention": "retain_for_review"} if stage is not None else {})}
 
+    def apply_staged_file(self, relative_package: str, file_path: str,
+                          expected_source_sha256: str, expected_staged_sha256: str,
+                          expected_process: dict) -> dict:
+        with self._observation_lock:
+            if self._closed:
+                raise DevelopmentError("service_closed", "The development service is already closed")
+            state = self._process_state()
+            expected = self._expected_process(expected_process, state)
+            record = state["launch_observation"]
+            if not record or record.get("stage") != "process_running" or record.get("process") != expected:
+                raise DevelopmentError("process_changed", "The active development launch was not confirmed")
+            staging = record.get("development_staging")
+            if not staging:
+                raise DevelopmentError("staging_unavailable", "The active launch has no staging composition")
+            for value in (expected_source_sha256, expected_staged_sha256):
+                if not isinstance(value, str) or not _SHA.fullmatch(value):
+                    raise DevelopmentError("invalid_arguments", "Expected source and staging SHA-256 values are required")
+            try:
+                parts = self.workspace._file_parts(file_path)
+                if parts[0] != "Script":
+                    raise DevelopmentError("unsupported_file", "Staged application accepts only Script/**/*.as files")
+                with self.workspace._lock:
+                    source = self.workspace.read_package_file_exact(relative_package, file_path)
+                    matches = [item for item in staging["packages"]
+                               if item["source_package_path"] == source["package_path"]]
+                    if len(matches) != 1:
+                        raise DevelopmentError("package_not_active", "The source package is not in the active composition")
+                    item = matches[0]
+                    if source["sha256"] != expected_source_sha256.lower():
+                        raise DevelopmentError("package_changed", "The source file changed before application")
+                    result = self.workspace.write_package_file(
+                        item["relative_package"], source["file_path"], source["text"], expected_staged_sha256)
+            except WorkspaceError as error:
+                raise DevelopmentError(error.code, str(error)) from error
+            return {**result, "source_package_path": source["package_path"],
+                    "staged_package_path": item["relative_package"], "source_sha256": source["sha256"],
+                    "staged_before_sha256": expected_staged_sha256.lower(),
+                    "process": expected, "launch_id": record["launch_id"], "source_modified": False,
+                    "hot_reload": "function_bodies_file_watch", "compiled": False,
+                    "runtime_validation": "not_performed"}
+
     def queue_key(self, expected_process: dict, virtual_key: int,
                   expected_window: int | None = None) -> dict:
         with self._observation_lock:

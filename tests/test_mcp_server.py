@@ -135,7 +135,7 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
 
                         native.request.side_effect = boundary
                         listed = (await rpc(second, "tools/list", {}, two)).json()["result"]["tools"]
-                        self.assertEqual(len(listed), 48)
+                        self.assertEqual(len(listed), 49)
                         schemas = {item["name"]: item["inputSchema"] for item in listed}
                         self.assertEqual(set(schemas["g1r_watch_list"].get("properties", {})), set())
                         self.assertEqual(set(schemas["g1r_watch_resume"]["properties"]), set(resume))
@@ -405,7 +405,7 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(initialized.server_info.version, __version__)
                     tools = (await client.list_tools()).tools
                     names = {tool.name for tool in tools}
-                    self.assertEqual(len(names), 48)
+                    self.assertEqual(len(names), 49)
                     self.assertTrue({"g1r_movieplayer_status", "g1r_movieplayer_finish"}.issubset(names))
                     self.assertIn("g1r_development_key", names)
                     source_tools = {"g1r_source_identity", "g1r_verify_source_game", "g1r_list_source_functions"}
@@ -417,7 +417,7 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIsNone(relative_schema["default"])
                     mutations = {"g1r_invoke", "g1r_native_enable", "g1r_create_package",
                                  "g1r_write_package_file", "g1r_export_package", "g1r_watch_start", "g1r_watch_stop", "g1r_watch_forget",
-                                 "g1r_watch_resume", "g1r_movieplayer_finish",
+                                 "g1r_watch_resume", "g1r_movieplayer_finish", "g1r_apply_staged_file",
                                  "g1r_development_start", "g1r_development_stop", "g1r_development_key", "g1r_native_load",
                                  "g1r_create_package_directory"}
                     mutations.update({"g1r_session_acquire", "g1r_session_release"})

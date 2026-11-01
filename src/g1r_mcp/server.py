@@ -77,7 +77,7 @@ NATIVE_TOOLS = (
 DEVELOPMENT_TOOLS = (
     "g1r_session_status", "g1r_session_acquire", "g1r_session_release", "g1r_compile_diagnostics",
     "g1r_development_recipe", "g1r_development_processes", "g1r_development_start",
-    "g1r_development_stop", "g1r_development_key", "g1r_native_load",
+    "g1r_development_stop", "g1r_development_key", "g1r_native_load", "g1r_apply_staged_file",
 )
 
 
@@ -314,7 +314,15 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                     {"tool": "g1r_development_stop", "condition": "When explicitly ending your development session with the expected identity"},
                 ],
                 "existing_session_sequence": ["g1r_native_status", "g1r_session_status", "g1r_find_objects", "g1r_object_functions"],
-                "edit_tools": ["g1r_read_source_exact", "g1r_read_package_file_exact", "g1r_write_package_file"],
+                "edit_tools": ["g1r_read_source_exact", "g1r_read_package_file_exact", "g1r_write_package_file", "g1r_apply_staged_file"],
+                "hot_reload_sequence": [
+                    {"tool": "g1r_read_package_file_exact", "condition": "Read the canonical source and its active staged counterpart with exact SHA-256"},
+                    {"tool": "g1r_write_package_file", "condition": "Edit the canonical source using its expected SHA-256"},
+                    {"tool": "g1r_apply_staged_file", "condition": "Apply one canonical file to the owned active staging package using both expected hashes and the exact process identity"},
+                    {"tool": "g1r_development_recipe", "condition": "Obtain the current manifest SHA-256 for the returned staged package"},
+                    {"tool": "g1r_compile_diagnostics", "condition": "Read compiler diagnostics for that staged package; a successful file write does not confirm compilation"},
+                    {"tool": "g1r_object_functions", "condition": "Refresh the reflected signature before an explicit call to observe the hot-reloaded behavior"},
+                ],
                 "export_tools": ["g1r_export_package", "g1r_verify_package_export"],
                 "export_sequence": [
                     {"tool": "g1r_export_package", "condition": "Export the complete package to a new directory under workspace artifacts"},
@@ -429,7 +437,9 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                   "nested_fields_supported": False, "string_fields_supported": False},
             },
             "hot_reload": {"mechanism_confirmed": True, "method": "file_watch_development_mode",
-                           "scope": "function_bodies", "runtime_result_requires_verification": True},
+                           "scope": "function_bodies", "runtime_result_requires_verification": True,
+                           "apply_tool": "g1r_apply_staged_file", "apply_source": "canonical_workspace_package",
+                           "apply_target": "owned_active_staging_package", "apply_result_proves_compile": False},
             "observations": {"implemented": True, "availability": "requires_live_native_status",
                              "source": "selected_reflected_properties_on_existing_tick",
                              "ownership": "mcp_client_in_shared_native_connection",
@@ -632,7 +642,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     def development_request(operation: str, *, ctx: Context | None = None, session_reason: str = "Workspace package verification", **params: Any) -> dict[str, Any]:
         nonlocal native
         try:
-            if transport == "streamable-http" and operation in ("start", "stop", "queue_key", "load_native"):
+            if transport == "streamable-http" and operation in ("start", "stop", "queue_key", "load_native", "apply_staged_file"):
                 owner = request_owner(ctx)
                 with ownership.lock:
                     acquired_here = False
@@ -742,6 +752,17 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     def g1r_development_processes() -> dict[str, Any]:
         """Read exact PIDs, creation times, and process paths for the selected game."""
         return development_request("process_state")
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                                            idempotentHint=False, openWorldHint=False))
+    def g1r_apply_staged_file(relative_package: str, file_path: str,
+                               expected_source_sha256: str, expected_staged_sha256: str,
+                               expected_process: dict[str, Any], ctx: Context = None) -> dict[str, Any]:
+        """Apply one canonical package file to its owned active staging copy using both SHA-256 hashes; verify compilation and runtime behavior separately."""
+        return development_request("apply_staged_file", relative_package=relative_package,
+                                   file_path=file_path, expected_source_sha256=expected_source_sha256,
+                                   expected_staged_sha256=expected_staged_sha256,
+                                   expected_process=expected_process, ctx=ctx)
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False,
         destructiveHint=False, idempotentHint=False, openWorldHint=False))
