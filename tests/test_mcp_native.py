@@ -113,6 +113,42 @@ class FakeNativeServer:
 
 
 class MCPNativeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_angelscript_exception_preserves_diagnostics_and_next_request(self):
+        details = {"executed": True, "may_have_executed": True, "do_not_retry": True,
+                   "process_event_returned": True, "script_completion_confirmed": False,
+                   "script_errors": {"source": "observed_logging_entry", "exception_count": 2,
+                       "full_capture": True, "stack_captured": False,
+                       "messages": ["Array index out of bounds.", None],
+                       "message_bytes": [{"index": 1, "encoding": "hex", "bytes": "726177ff"}]}}
+        status = {"ready": True, "tick_count": 16, "version": "1.0.0-dev.39"}
+        steps = [
+            ("invoke", {"handle": "obj-1", "function": "RaiseArrayBounds", "arguments": {}}, None,
+             {"code": "angelscript_exception", "message": "Ошибка выполнения AS", "details": details}),
+            ("status", {}, status, None),
+        ]
+        with tempfile.TemporaryDirectory() as temporary, FakeNativeServer(steps) as native:
+            root = Path(temporary)
+            modkit = root / "Modkit"
+            (modkit / "Script").mkdir(parents=True)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            parameters = StdioServerParameters(command=sys.executable, args=[
+                "-B", "-m", "g1r_mcp.server", "--modkit-root", str(modkit),
+                "--workspace-root", str(workspace), "--native-port", str(native.port)])
+            async with stdio_client(parameters) as (incoming, outgoing):
+                async with ClientSession(incoming, outgoing) as client:
+                    await client.initialize()
+                    failure = await client.call_tool("g1r_invoke", {"handle": "obj-1", "function": "RaiseArrayBounds"})
+                    self.assertTrue(failure.is_error)
+                    message = next(item.text for item in failure.content if item.type == "text")
+                    error = json.loads(message[message.index("{"):])
+                    self.assertEqual(error["code"], "angelscript_exception")
+                    self.assertEqual(error["effect"], details)
+                    following = await client.call_tool("g1r_native_status", {})
+                    self.assertEqual(following.structured_content, status)
+            self.assertEqual(native.connections, 1)
+            self.assertEqual(len(native.requests), 2)
+
     async def asyncSetUp(self):
         self._asyncioRunner.get_loop().slow_callback_duration = 2.0
 

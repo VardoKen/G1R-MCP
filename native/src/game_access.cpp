@@ -29,6 +29,7 @@
 #include "g1r_mcp/linear_color_arguments.hpp"
 #include "g1r_mcp/cleanup_once.hpp"
 #include "g1r_mcp/native_exception.hpp"
+#include "g1r_mcp/as_exception_capture.hpp"
 #include <MinHook.h>
 #include <bcrypt.h>
 #include <algorithm>
@@ -166,6 +167,8 @@ constexpr uintptr_t kProcessEvent = 0x13a6ad0;
 constexpr uintptr_t kFree = 0x1081690;
 constexpr uintptr_t kAngelscriptManager = 0xa02fdb8;
 constexpr uintptr_t kFormatDiagnostics = 0x417d2b0;
+constexpr uintptr_t kASExceptionLogger = 0x4183050;
+constexpr uint8_t kASExceptionLoggerBytes[] = {0x48,0x89,0x5c,0x24,0x18,0x56,0x48,0x81,0xec,0xc0,0x01,0x00,0x00};
 constexpr uintptr_t kStringConstruct = 0x10316e0;
 constexpr uintptr_t kNameConstruct = 0x11b37a0;
 constexpr uintptr_t kObjectArrayRealloc = 0x108f6a0;
@@ -298,19 +301,38 @@ bool GameAccess::start() {
     if(enabled_) return true;
     try {ensure_image_base();}
     catch(const HandlerError&) {return false;}
-    uint8_t tick[sizeof(kTickBytes)]{},event[sizeof(kEventBytes)]{};
+    uint8_t tick[sizeof(kTickBytes)]{},event[sizeof(kEventBytes)]{},exception_logger[sizeof(kASExceptionLoggerBytes)]{};
     if(!copy_memory(tick,reinterpret_cast<void*>(base_+kTick),sizeof(tick)) ||
        !copy_memory(event,reinterpret_cast<void*>(base_+kProcessEvent),sizeof(event)) ||
-       std::memcmp(tick,kTickBytes,sizeof(tick)) || std::memcmp(event,kEventBytes,sizeof(event))) {
+       !copy_memory(exception_logger,reinterpret_cast<void*>(base_+kASExceptionLogger),sizeof(exception_logger)) ||
+       std::memcmp(tick,kTickBytes,sizeof(tick)) || std::memcmp(event,kEventBytes,sizeof(event)) ||
+       std::memcmp(exception_logger,kASExceptionLoggerBytes,sizeof(exception_logger))) {
         startup_error_="signature_mismatch";return false;
     }
     auto initialized=MH_Initialize();
     if(initialized!=MH_OK && initialized!=MH_ERROR_ALREADY_INITIALIZED) {startup_error_="hook_initialize_failed";return false;}
     active_=this;process_event_=reinterpret_cast<ProcessEventFn>(base_+kProcessEvent);
+    if(MH_CreateHook(reinterpret_cast<void*>(base_+kASExceptionLogger),reinterpret_cast<void*>(&hooked_as_exception_logger),
+                     reinterpret_cast<void**>(&original_as_exception_logger_))!=MH_OK) {startup_error_="as_exception_hook_failed";return false;}
+    if(MH_EnableHook(reinterpret_cast<void*>(base_+kASExceptionLogger))!=MH_OK) {
+        MH_RemoveHook(reinterpret_cast<void*>(base_+kASExceptionLogger));startup_error_="as_exception_hook_failed";return false;
+    }
     diagnostic("hook_create_enter");
-    if(MH_CreateHook(reinterpret_cast<void*>(base_+kTick),reinterpret_cast<void*>(&hooked_tick),reinterpret_cast<void**>(&original_tick_))!=MH_OK ||
-       MH_EnableHook(reinterpret_cast<void*>(base_+kTick))!=MH_OK) {startup_error_="tick_hook_failed";return false;}
+    if(MH_CreateHook(reinterpret_cast<void*>(base_+kTick),reinterpret_cast<void*>(&hooked_tick),reinterpret_cast<void**>(&original_tick_))!=MH_OK) {
+        MH_DisableHook(reinterpret_cast<void*>(base_+kASExceptionLogger));MH_RemoveHook(reinterpret_cast<void*>(base_+kASExceptionLogger));
+        startup_error_="tick_hook_failed";return false;
+    }
+    if(MH_EnableHook(reinterpret_cast<void*>(base_+kTick))!=MH_OK) {
+        MH_RemoveHook(reinterpret_cast<void*>(base_+kTick));MH_DisableHook(reinterpret_cast<void*>(base_+kASExceptionLogger));
+        MH_RemoveHook(reinterpret_cast<void*>(base_+kASExceptionLogger));startup_error_="tick_hook_failed";return false;
+    }
     diagnostic("hook_enabled");enabled_=true;return true;
+}
+void __fastcall GameAccess::hooked_as_exception_logger(const char* message) {
+    as_exception_capture::record(message,[](uintptr_t address,char& value) {
+        return copy_memory(&value,reinterpret_cast<const void*>(address),sizeof(value));
+    });
+    active_->original_as_exception_logger_(message);
 }
 void __fastcall GameAccess::hooked_tick(void* loop) {
     static std::atomic<int> reports{0};auto count=reports.fetch_add(1);
@@ -334,7 +356,9 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.38"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.39"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+            {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
+                {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_captured",false}}},
             {"game_thread_id",game_thread_.load()},{"tick_count",ticks_.load()},{"ready",enabled_.load()&&recent},
             {"pump",{{"state",!observed?"not_observed":recent?"recent_tick":"tick_stale"},
                      {"last_tick_monotonic_ms",observed?json(observed):json(nullptr)},
@@ -1487,6 +1511,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     struct StringInput {uintptr_t field{};int offset{};uint64_t flags{};std::string key;std::u16string source;StringHeader header{};};
     std::vector<StringInput> string_inputs;
     string_input_lifetime::Ledger string_ledger;
+    as_exception_capture::State script_errors;
     bool string_event_started=false,string_event_completed=false,string_return_registered=false,string_cleanup_done=false;
     CleanupOnce<string_input_lifetime::Cleanup> string_cleanup_once;
     std::size_t extra_retained_count{},extra_retained_bytes{};
@@ -1886,7 +1911,12 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     }
     string_event_started=true;
     native_exception::Diagnostic native_fault{};
-    if(!call_event(reinterpret_cast<void*>(process_event_),object,reinterpret_cast<void*>(function),buffer,&native_fault)) {
+    bool event_returned{};
+    {
+        as_exception_capture::Scope capture(script_errors);
+        event_returned=call_event(reinterpret_cast<void*>(process_event_),object,reinterpret_cast<void*>(function),buffer,&native_fault);
+    }
+    if(!event_returned) {
         if(contains_string_input){string_ledger.mark_uncertain();string_quarantine_cause=2;}
         if(contains_object_array){array_ledger.mark_uncertain();array_quarantine_cause=2;}
         json details={{"executed",false},{"may_have_executed",true},{"do_not_retry",true},
@@ -1898,6 +1928,31 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         throw HandlerError("game_call_fault","Игровой вызов вызвал native exception; эффект неизвестен",std::move(details));
     }
     string_event_completed=true;
+    if(script_errors.exception_count) {
+        json details={{"executed",true},{"may_have_executed",true},{"do_not_retry",true},
+            {"process_event_returned",true},{"script_completion_confirmed",false},
+            {"script_errors",as_exception_capture::describe(script_errors)}};
+        if(return_type=="StrProperty")details["return_cleanup_confirmed"]=false;
+        if(contains_string_input) {
+            try {validate_string_inputs();}
+            catch(const HandlerError& error) {string_ledger.mark_uncertain();string_quarantine_cause=3;details["cleanup_error"]=error.code();}
+            catch(...) {string_ledger.mark_uncertain();string_quarantine_cause=3;details["cleanup_error"]="input_validation_failed";}
+            const auto cleanup=release_strings();
+            details["input_cleanup_confirmed"]=cleanup.confirmed;
+            details["cleanup_confirmed"]=cleanup.confirmed;
+            details["cleanup_attempted"]=cleanup.attempted;
+        }
+        if(contains_object_array) {
+            try {validate_array_inputs();}
+            catch(const HandlerError& error) {array_ledger.mark_uncertain();array_quarantine_cause=3;details["cleanup_error"]=error.code();}
+            catch(...) {array_ledger.mark_uncertain();array_quarantine_cause=3;details["cleanup_error"]="input_validation_failed";}
+            const auto cleanup=release_arrays();
+            details["array_input_cleanup_confirmed"]=cleanup.confirmed;
+            details["cleanup_confirmed"]=cleanup.confirmed;
+            details["cleanup_attempted"]=cleanup.attempted;
+        }
+        throw HandlerError("angelscript_exception","Во время ProcessEvent зарегистрировано исключение AngelScript",std::move(details));
+    }
     validate_array_inputs();
     validate_string_inputs();
     json result,return_enum,result_metadata=nullptr,out_parameters=json::object(),out_parameter_metadata=json::object();
@@ -2074,6 +2129,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     }
     return append_pod_results(std::move(response));
     } catch(const HandlerError& error) {
+        if(error.code()=="angelscript_exception")throw;
         if(contains_object_array) {
             if(string_event_completed && !array_cleanup_done && !array_ledger.uncertain()) {
                 try{validate_array_inputs();}
@@ -2085,6 +2141,10 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                 {"cleanup_attempted",cleanup.attempted},{"cleanup_confirmed",cleanup.confirmed},
                 {"array_input_cleanup_confirmed",cleanup.confirmed},{"cleanup_state",cleanup.confirmed?"released":"unknown"},
                 {"object_array_input_quarantined",object_array_inputs_quarantined_.load()}};
+            if(script_errors.exception_count) {
+                details["script_errors"]=as_exception_capture::describe(script_errors);
+                details["script_completion_confirmed"]=false;
+            }
             if(string_event_started || !cleanup.confirmed)
                 throw HandlerError("game_result_error",string_event_completed?"Вызов выполнен; обработка или очистка Object array не завершена":
                     string_event_started?"Эффект вызова неизвестен; владение Object array не подтверждено":"Вызов не выполнен; владение Object array не подтверждено",std::move(details));
@@ -2095,7 +2155,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             try{validate_string_inputs();}
             catch(...) {string_ledger.mark_uncertain();string_quarantine_cause=3;}
         }
-        if(string_event_completed && !string_cleanup_done && return_type=="StrProperty" && !string_return_registered && !string_ledger.uncertain()) {
+        if(!script_errors.exception_count && string_event_completed && !string_cleanup_done && return_type=="StrProperty" && !string_return_registered && !string_ledger.uncertain()) {
             StringHeader header{};
             try {
                 if(!copy_memory(&header,buffer+return_offset,sizeof(header)))throw HandlerError("invalid_string_storage","FString результат недоступен");
@@ -2107,6 +2167,11 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             {"cause_code",error.code()},{"cleanup_attempted",cleanup.attempted},{"cleanup_confirmed",cleanup.confirmed},
             {"input_cleanup_confirmed",cleanup.confirmed},{"cleanup_state",cleanup.confirmed?"released":"unknown"},
             {"string_input_quarantined",string_inputs_quarantined_.load()}};
+        if(script_errors.exception_count) {
+            details["script_errors"]=as_exception_capture::describe(script_errors);
+            details["script_completion_confirmed"]=false;
+            if(return_type=="StrProperty")details["return_cleanup_confirmed"]=false;
+        }
         if(string_event_started || !cleanup.confirmed)
             throw HandlerError("game_result_error",string_event_completed?"Вызов выполнен; обработка или очистка FString не завершена":
                 string_event_started?"Эффект вызова неизвестен; владение FString не подтверждено":"Вызов не выполнен; владение FString не подтверждено",std::move(details));
@@ -2118,21 +2183,41 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                 catch(...) {array_ledger.mark_uncertain();array_quarantine_cause=3;}
             }
             const auto cleanup=release_arrays();
+            if(script_errors.exception_count)
+                throw HandlerError("angelscript_exception","Исключение AngelScript зарегистрировано; подготовка полного отчёта не завершена",
+                    {{"executed",true},{"may_have_executed",true},{"do_not_retry",true},{"process_event_returned",string_event_completed},
+                     {"script_completion_confirmed",false},{"script_errors",{{"source","observed_logging_entry"},
+                        {"exception_count",script_errors.exception_count},{"full_capture",false},{"messages",json::array()},{"stack_captured",false}}},
+                     {"array_input_cleanup_confirmed",cleanup.confirmed},{"cleanup_confirmed",cleanup.confirmed}});
             throw HandlerError("game_result_error","Обработка Object array не завершена; повтор запрещён",
                 {{"executed",string_event_completed},{"may_have_executed",string_event_started},{"do_not_retry",true},
                  {"cause_code","result_processing_failed"},{"cleanup_attempted",cleanup.attempted},{"cleanup_confirmed",cleanup.confirmed},
                  {"array_input_cleanup_confirmed",cleanup.confirmed},{"cleanup_state",cleanup.confirmed?"released":"unknown"},
                  {"object_array_input_quarantined",object_array_inputs_quarantined_.load()}});
         }
-        if(!contains_string_input)throw;
+        if(!contains_string_input) {
+            if(script_errors.exception_count)
+                throw HandlerError("angelscript_exception","Исключение AngelScript зарегистрировано; подготовка полного отчёта не завершена",
+                    {{"executed",true},{"may_have_executed",true},{"do_not_retry",true},{"process_event_returned",string_event_completed},
+                     {"script_completion_confirmed",false},{"script_errors",{{"source","observed_logging_entry"},
+                        {"exception_count",script_errors.exception_count},{"full_capture",false},{"messages",json::array()},{"stack_captured",false}}}});
+            throw;
+        }
         if(string_event_completed && !string_cleanup_done && !string_ledger.uncertain()) {
             try{validate_string_inputs();}
             catch(...) {string_ledger.mark_uncertain();string_quarantine_cause=3;}
         }
-        if(string_event_completed && !string_cleanup_done && return_type=="StrProperty" && !string_return_registered) {
+        if(!script_errors.exception_count && string_event_completed && !string_cleanup_done && return_type=="StrProperty" && !string_return_registered) {
             string_ledger.mark_uncertain();string_quarantine_cause=4;
         }
         const auto cleanup=release_strings();
+        if(script_errors.exception_count)
+            throw HandlerError("angelscript_exception","Исключение AngelScript зарегистрировано; подготовка полного отчёта не завершена",
+                {{"executed",true},{"may_have_executed",true},{"do_not_retry",true},{"process_event_returned",string_event_completed},
+                 {"script_completion_confirmed",false},{"script_errors",{{"source","observed_logging_entry"},
+                    {"exception_count",script_errors.exception_count},{"full_capture",false},{"messages",json::array()},{"stack_captured",false}}},
+                 {"input_cleanup_confirmed",cleanup.confirmed},{"cleanup_confirmed",cleanup.confirmed},
+                 {"return_cleanup_confirmed",return_type!="StrProperty"}});
         throw HandlerError("game_result_error","Обработка FString не завершена; повтор запрещён",
             {{"executed",string_event_completed},{"may_have_executed",string_event_started},{"do_not_retry",true},{"cause_code","result_processing_failed"},
              {"cleanup_attempted",cleanup.attempted},{"cleanup_confirmed",cleanup.confirmed},{"input_cleanup_confirmed",cleanup.confirmed},

@@ -226,6 +226,11 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             "compiler_reports": {"tool": "g1r_compile_diagnostics", "implemented": True,
                                  "source": "native_formatter_or_caller_selected_workspace_file", "compiler_api_available": True,
                                  "absence_of_errors_proves_compile": False},
+            "script_runtime_errors": {"tool": "g1r_invoke", "implemented": True,
+                                      "source": "observed_logging_entry", "scope": "current_thread_process_event",
+                                      "error_code": "angelscript_exception", "details_field": "script_errors",
+                                      "historical_errors_available": False, "stack_captured": False,
+                                      "absence_of_logged_errors_proves_script_completion": False},
             "source_functions": {"tool": "g1r_list_source_functions", "parser_kind": "lexical",
                                  "result_field": "items", "prototype": "raw_source",
                                  "item_fields": ["name", "owner", "namespace", "kind", "prototype", "path",
@@ -757,7 +762,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def g1r_invoke(handle: str, function: str, arguments: dict[str, Any] | None = None,
                     expected_signature_token: StrictStr | None = None) -> dict[str, Any]:
-        """Вызвать UFunction; необязательный token связывает вызов с прочитанной сигнатурой. Неизвестный эффект не повторять."""
+        """Вызвать UFunction по сигнатуре; зарегистрированная runtime-ошибка AS возвращается как angelscript_exception. Неизвестный эффект не повторять."""
         params = {"handle": handle, "function": function, "arguments": arguments or {}}
         if expected_signature_token is not None:
             params["expected_signature_token"] = expected_signature_token

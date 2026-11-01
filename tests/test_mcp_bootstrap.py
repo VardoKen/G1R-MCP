@@ -117,6 +117,10 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIsNone(array_input["max_inputs"])
                     self.assertIsNone(array_input["max_allocated_input_bytes"])
                     self.assertEqual(array_input["max_elements"], 2147483647)
+                    script_errors = catalog["script_runtime_errors"]
+                    self.assertEqual(script_errors["error_code"], "angelscript_exception")
+                    self.assertFalse(script_errors["stack_captured"])
+                    self.assertFalse(script_errors["absence_of_logged_errors_proves_script_completion"])
                     functions = await self.call_ok(client, "g1r_list_source_functions", {
                         "query": "ReadValue", "relative_path": "Script/Official.as", "limit": 500, "offset": 0})
                     self.assertEqual(functions["parser_kind"], "lexical")

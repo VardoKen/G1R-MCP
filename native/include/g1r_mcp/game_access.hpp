@@ -51,7 +51,9 @@ private:
     static ObjectSerialIdentity serial_identity(const Handle& value);
     using TickFn = void(__fastcall*)(void*);
     using ProcessEventFn = void(__fastcall*)(void*, void*, void*);
+    using ASExceptionLoggerFn = void(__fastcall*)(const char*);
     TickFn original_tick_{};
+    ASExceptionLoggerFn original_as_exception_logger_{};
     ProcessEventFn process_event_{};
     uintptr_t base_{};
     std::atomic<bool> enabled_{false};
@@ -119,6 +121,7 @@ private:
     nlohmann::json invoke(void* object, const std::string& function_name, const nlohmann::json& arguments,
                           const std::string& target_handle, const nlohmann::json* expected_token);
     static void __fastcall hooked_tick(void* loop);
+    static void __fastcall hooked_as_exception_logger(const char* message);
     static GameAccess* active_;
 };
 }
