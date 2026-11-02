@@ -131,19 +131,19 @@ class MCPPODReadTests(unittest.IsolatedAsyncioTestCase):
                 async with ClientSession(incoming, outgoing) as client:
                     await client.initialize()
                     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-                    self.assertEqual(len(tools), 44)
+                    self.assertEqual(len(tools), 49)
                     struct_schema = tools["g1r_read_struct"].input_schema
-                    self.assertEqual(set(struct_schema["properties"]), {"handle", "property_name"})
+                    self.assertEqual(set(struct_schema["properties"]), {"handle", "property_name", "timeout_seconds"})
                     self.assertEqual(set(struct_schema["required"]), {"handle", "property_name"})
                     array_schema = tools["g1r_read_array"].input_schema
-                    self.assertEqual(set(array_schema["properties"]), {"handle", "property_name", "offset", "limit"})
+                    self.assertEqual(set(array_schema["properties"]), {"handle", "property_name", "offset", "limit", "timeout_seconds"})
                     self.assertEqual(set(array_schema["required"]), {"handle", "property_name"})
                     self.assertEqual(array_schema["properties"]["offset"]["default"], 0)
                     self.assertEqual(array_schema["properties"]["limit"]["default"], 64)
                     capabilities = await client.call_tool("g1r_capabilities", {})
                     self.assertFalse(capabilities.is_error, capabilities.content)
                     contract = capabilities.structured_content["struct_values"]
-                    self.assertEqual(contract["component_fields"], ["name", "type", "element_size", "offset", "value"])
+                    self.assertEqual(contract["component_fields"], ["name", "type", "element_size", "offset", "array_dim", "supported", "value", "enum", "error", "struct_path"])
                     self.assertEqual(contract["component_count"], "reflected")
                     self.assertEqual(contract["properties_size"], "reflected")
                     self.assertTrue(contract["own_fields_only"])

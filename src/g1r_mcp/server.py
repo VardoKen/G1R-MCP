@@ -61,7 +61,7 @@ NATIVE_TOOLS = (
     ("g1r_find_objects", "Find objects in the current game process"),
     ("g1r_object_properties", "Read reflected scalar properties"),
     ("g1r_read_array", "Copy an array page, including structures with owned scalar fields"),
-    ("g1r_read_struct", "Copy a structure's owned reflected scalar fields"),
+    ("g1r_read_struct", "Copy a structure's owned reflected fields with per-field support and errors"),
     ("g1r_object_functions", "List an object's reflected functions"),
     ("g1r_invoke", "One explicit reflected-function call"),
     ("g1r_snapshot", "Copy selected object properties on one Tick"),
@@ -267,12 +267,16 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                              "current_checked": False},
             "struct_values": {"tool": "g1r_read_struct", "source": "runtime_reflection",
                               "result_field": "components",
-                              "component_fields": ["name", "type", "element_size", "offset", "value"],
+                              "component_fields": ["name", "type", "element_size", "offset", "array_dim", "supported", "value", "enum", "error", "struct_path"],
                               "field_types": ["BoolProperty", "IntProperty", "Int64Property", "UInt32Property",
-                                              "UInt64Property", "FloatProperty", "DoubleProperty"],
-                              "own_fields_only": True, "layout": "reflected_scalar_fields",
+                                              "UInt64Property", "FloatProperty", "DoubleProperty", "ByteProperty",
+                                              "EnumProperty", "NameProperty", "StrProperty", "ObjectProperty",
+                                              "ClassProperty", "StructProperty"],
+                              "own_fields_only": True, "layout": "reflected_fields",
                               "properties_size": "reflected", "component_count": "reflected",
-                              "nested_fields_supported": False, "string_fields_supported": False,
+                              "known_nested_struct_types": ["/Script/CoreUObject.Vector", "/Script/CoreUObject.Rotator",
+                                                            "/Script/CoreUObject.Transform", "/Script/CoreUObject.LinearColor"],
+                              "unknown_nested_structs_supported": False, "string_fields_supported": True,
                               "consistency": "copied_bytes_then_metadata_revalidated",
                               "availability": "requires_live_native_status_and_current_game_tick",
                               "current_checked": False},
@@ -875,7 +879,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_read_struct(handle: str, property_name: str, timeout_seconds: float | None = None) -> dict[str, Any]:
-        """Copy a structure's owned scalar fields using reflected size and layout without game writes."""
+        """Copy owned reflected fields with per-field support/errors and known nested Vector, Rotator, Transform, and LinearColor layouts."""
         return native_request("read_struct", {"handle": handle, "property_name": property_name}, timeout_seconds)
 
     @server.tool(annotations=read_only)
