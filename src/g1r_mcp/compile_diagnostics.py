@@ -101,15 +101,9 @@ def parse_report(text: str, package_name: str, files: list[dict]) -> dict:
             "report_matches_runtime_compile": False}
 
 
-def read_report(service, relative_package: str, expected_manifest_sha256: str,
+def read_report(service, relative_package: str, expected_manifest_sha256: str | None,
                 report_path: str, enable_ingame_tools: bool = False, *,
                 show_script_errors: bool = False) -> dict:
-    before = service._manifest(relative_package, enable_ingame_tools=enable_ingame_tools,
-                               show_script_errors=show_script_errors)
-    if not isinstance(expected_manifest_sha256, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_manifest_sha256):
-        raise DevelopmentError("invalid_manifest_hash", "The SHA-256 of the full development recipe package is required")
-    if before["manifest_sha256"] != expected_manifest_sha256.lower():
-        raise DevelopmentError("package_changed", "The package changed after the recipe was prepared")
     try:
         target = service.workspace._unprotected(_checked(service.workspace.root.joinpath(*_parts(report_path)), service.workspace.root))
         if target.suffix.lower() not in (".txt", ".log"):
@@ -122,31 +116,23 @@ def read_report(service, relative_package: str, expected_manifest_sha256: str,
         raise DevelopmentError("access_error", "Could not read the diagnostic report") from None
     except UnicodeError:
         raise DevelopmentError("invalid_report_encoding", "The diagnostic report must be UTF-8") from None
-    after = service._manifest(relative_package, enable_ingame_tools=enable_ingame_tools,
-                              show_script_errors=show_script_errors)
-    if after["manifest_sha256"] != before["manifest_sha256"]:
-        raise DevelopmentError("package_changed", "The package changed while diagnostics were being read")
-    return {"package_name": before["package_name"], "manifest_sha256": before["manifest_sha256"],
-            "report_sha256": hashlib.sha256(raw).hexdigest(), **parse_report(text, before["package_name"], before["files"])}
+    manifest = service._manifest(relative_package, enable_ingame_tools=enable_ingame_tools,
+                                 show_script_errors=show_script_errors)
+    return {"package_name": manifest["package_name"], "manifest_sha256": manifest["manifest_sha256"],
+            "report_sha256": hashlib.sha256(raw).hexdigest(),
+            **parse_report(text, manifest["package_name"], manifest["files"]),
+            "source_current_correlation": "unknown"}
 
 
-def read_runtime_report(service, relative_package: str, expected_manifest_sha256: str, native_call,
+def read_runtime_report(service, relative_package: str, expected_manifest_sha256: str | None, native_call,
                         *, enable_ingame_tools: bool = False, show_script_errors: bool = False) -> dict:
-    before = service._manifest(relative_package, enable_ingame_tools=enable_ingame_tools,
-                               show_script_errors=show_script_errors)
-    if not isinstance(expected_manifest_sha256, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_manifest_sha256):
-        raise DevelopmentError("invalid_manifest_hash", "The SHA-256 of the full development recipe package is required")
-    if before["manifest_sha256"] != expected_manifest_sha256.lower():
-        raise DevelopmentError("package_changed", "The package changed after the recipe was prepared")
     native_report = native_call()
     text = native_report["text"]
-    after = service._manifest(relative_package, enable_ingame_tools=enable_ingame_tools,
-                              show_script_errors=show_script_errors)
-    if after["manifest_sha256"] != before["manifest_sha256"]:
-        raise DevelopmentError("package_changed", "The package changed while diagnostics were being read")
-    return {"package_name": before["package_name"], "manifest_sha256": before["manifest_sha256"],
+    manifest = service._manifest(relative_package, enable_ingame_tools=enable_ingame_tools,
+                                 show_script_errors=show_script_errors)
+    return {"package_name": manifest["package_name"], "manifest_sha256": manifest["manifest_sha256"],
             "report_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-            **parse_report(text, before["package_name"], before["files"]),
+            **parse_report(text, manifest["package_name"], manifest["files"]),
             "text": text, "native_report": native_report, "process_id": native_report.get("process_id"),
             "source": native_report.get("source"), "status": native_report.get("status"),
             "compiler_api_available": True, "report_provenance": "native_compiler_formatter",

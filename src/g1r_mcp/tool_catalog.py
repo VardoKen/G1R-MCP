@@ -84,7 +84,7 @@ _CONTRACTS = {
     "g1r_session_release": _entry("shared_game_claim", ("own_claim_or_abandoned_claim_with_empty_process_snapshot",),
                                    "src/g1r_mcp/session_ownership.py:SessionOwnership.release",
                                    ("released", "previous_claim", "game_stopped")),
-    "g1r_compile_diagnostics": _entry("compiler_diagnostic_text", ("workspace_package", "expected_manifest_hash",
+    "g1r_compile_diagnostics": _entry("compiler_diagnostic_text", ("workspace_package",
                                                                 "supplied_report_file_or_native_channel_and_angelscript_manager"),
                                        "src/g1r_mcp/compile_diagnostics.py:read_runtime_report/read_report",
                                        ("package_name", "manifest_sha256", "diagnostics", "compiled"),

@@ -22,7 +22,7 @@ class CompileDiagnosticsTests(unittest.TestCase):
         self.assertEqual(empty["compilation_state"], "unknown")
         self.assertFalse(empty["compiled"])
 
-    def test_read_report_bounds_paths_hash_and_changed_package(self):
+    def test_read_report_bounds_paths_and_reports_current_changed_package_hash(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); workspace = root / "workspace"; package = workspace / "Probe"
             (package / "Script").mkdir(parents=True)
@@ -38,8 +38,10 @@ class CompileDiagnosticsTests(unittest.TestCase):
             for path in ("../diagnostic.txt", str(workspace / "diagnostic.txt"), "Probe/Script/Probe.as"):
                 with self.assertRaises(DevelopmentError): read_report(service, "Probe", manifest["manifest_sha256"], path)
             script.write_text("class UChanged {}", encoding="utf-8")
-            with self.assertRaises(DevelopmentError) as caught: read_report(service, "Probe", manifest["manifest_sha256"], "diagnostic.txt")
-            self.assertEqual(caught.exception.code, "package_changed")
+            result = read_report(service, "Probe", manifest["manifest_sha256"], "diagnostic.txt")
+            self.assertEqual(result["manifest_sha256"], service._manifest("Probe")["manifest_sha256"])
+            self.assertEqual(result["diagnostics"][0]["source_sha256"], hashlib.sha256(script.read_bytes()).hexdigest())
+            self.assertEqual(result["source_current_correlation"], "unknown")
 
     def test_all_diagnostics_and_unparsed_lines_are_returned(self):
         text = "\n".join("Script/A.as (1:1) : Error: item" for _ in range(205))

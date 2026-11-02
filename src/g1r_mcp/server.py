@@ -734,7 +734,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             raise ToolError(json.dumps({"code": error.code, "message": str(error), "outcome_unknown": error.outcome_unknown}, ensure_ascii=False)) from None
 
     @server.tool(annotations=read_only)
-    def g1r_compile_diagnostics(relative_package: str, expected_manifest_sha256: str, report_path: str | None = None,
+    def g1r_compile_diagnostics(relative_package: str, expected_manifest_sha256: str | None = None, report_path: str | None = None,
                                 enable_ingame_tools: StrictBool = False,
                                 show_script_errors: StrictBool = False) -> dict[str, Any]:
         """Get native-compiler diagnostics; report_path selects a supplied UTF-8 report."""

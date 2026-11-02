@@ -162,7 +162,7 @@ with patch("g1r_mcp.server.DevelopmentService", return_value=service):
             self.assertEqual(args[args.index("-ExpectedCreationTime") + 1], self.identity["creation_time"])
         self.assertEqual(mutations[1][0][mutations[1][0].index("-ExpectedDllSha256") + 1], self.dll_sha256)
 
-    async def test_compiler_report_mcp_is_hash_bound_and_does_not_claim_runtime(self):
+    async def test_compiler_report_mcp_reports_current_hash_and_does_not_claim_runtime(self):
         recipe = await self.tool("g1r_development_recipe", {"relative_package": "Nested/Probe"})
         report = self.workspace / "errors.txt"
         report.write_text("Script/Probe.as (48:1) : Error: fixture override", encoding="utf-8")
@@ -177,10 +177,11 @@ with patch("g1r_mcp.server.DevelopmentService", return_value=service):
         tools = {tool.name:tool for tool in await self.server.list_tools()}
         self.assertTrue(tools["g1r_compile_diagnostics"].annotations.read_only_hint)
         self.script.write_text("class UChanged {}", encoding="utf-8")
-        with self.assertRaises(ToolError) as caught:
-            await self.server.call_tool("g1r_compile_diagnostics", {"relative_package":"Nested/Probe",
-                "expected_manifest_sha256":recipe["manifest"]["manifest_sha256"],"report_path":"errors.txt"})
-        self.assertIn("package_changed", str(caught.exception))
+        response = await self.tool("g1r_compile_diagnostics", {"relative_package":"Nested/Probe",
+            "expected_manifest_sha256":recipe["manifest"]["manifest_sha256"],"report_path":"errors.txt"})
+        self.assertEqual(response["manifest_sha256"], self.service._manifest("Nested/Probe")["manifest_sha256"])
+        self.assertEqual(response["diagnostics"][0]["source_sha256"], hashlib.sha256(self.script.read_bytes()).hexdigest())
+        self.assertEqual(response["source_current_correlation"], "unknown")
 
     async def test_ingame_tools_is_optional_boolean_in_public_schema(self):
         tools = {tool.name: tool for tool in await self.server.list_tools()}
