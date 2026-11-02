@@ -111,7 +111,8 @@ class _EnglishOperatingSystemLog(logging.Filter):
 
 
 def create_server(modkit_root: Path, workspace_root: Path, source_revision: str | None = None,
-                  native_port: int = 27123, game_root: Path | None = None, *, transport: str = "stdio") -> MCPServer:
+                  native_port: int = 27123, game_root: Path | None = None, *, transport: str = "stdio",
+                  runtime_root: Path | None = None) -> MCPServer:
     """Create a server with a Modkit catalog and a separate package workspace."""
     if source_revision is not None and not re.fullmatch(r"[0-9a-fA-F]{40}", source_revision):
         raise ValueError("Source revision must be a full Git SHA or omitted")
@@ -131,6 +132,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     native_lock = threading.Lock()
     development_lock = threading.Lock()
     configured_game_root = game_root or Path(r"E:\SteamLibrary\steamapps\common\Gothic 1 Remake")
+    configured_runtime_root = runtime_root.resolve() if runtime_root is not None else Path(__file__).resolve().parents[2]
     development = None
     ownership = SessionOwnership()
     local_owner = object()
@@ -159,7 +161,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
         nonlocal development
         with development_lock:
             if development is None:
-                development = DevelopmentService(repository_root=Path(__file__).resolve().parents[2],
+                development = DevelopmentService(repository_root=configured_runtime_root,
                                                  workspace_root=workspace_root, modkit_root=modkit_root,
                                                  game_root=configured_game_root)
             return development
@@ -207,7 +209,8 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     def g1r_status() -> dict[str, Any]:
         """Get the server version and identify results that are not confirmed in the game."""
         return {
-            "server": {"name": "G1R MCP", "version": __version__, "transport": transport, "ready": True},
+            "server": {"name": "G1R MCP", "version": __version__, "transport": transport, "ready": True,
+                       "runtime_root": str(configured_runtime_root)},
             "sources": {"kind": "official_modkit_static", "root": str(sources.root), "revision": source_revision,
                         "revision_source": "caller_label", "validation": "source_only",
                         "identity_tool": "g1r_source_identity"},
@@ -1148,6 +1151,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-revision", help="Full Modkit Git SHA; revision is unknown when omitted")
     parser.add_argument("--native-port", type=int, default=27123, help="Localhost port of the experimental DLL")
     parser.add_argument("--game-root", type=Path, help="Selected game root for development-launch commands")
+    parser.add_argument("--runtime-root", type=Path, help="Root of native DLL, loader, and fixed development tools")
     parser.add_argument("--transport", choices=("stdio", "streamable-http"), default="stdio",
                         help="MCP transport; default: stdio")
     parser.add_argument("--host", choices=("127.0.0.1",), default="127.0.0.1",
@@ -1158,7 +1162,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("HTTP port must be in the range 1024–65535")
     try:
         server = create_server(args.modkit_root, args.workspace_root, args.source_revision, args.native_port, args.game_root,
-                               transport=args.transport)
+                               transport=args.transport, runtime_root=args.runtime_root)
     except OSError as error:
         print(f"Could not create G1R MCP: operating system access error (errno={error.errno}, winerror={getattr(error, 'winerror', None)})", file=sys.stderr)
         return 2

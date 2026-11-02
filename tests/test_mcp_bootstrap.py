@@ -44,6 +44,9 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             modkit, workspace, game, parameters = self.create_fixture(root)
+            runtime = root / "runtime"
+            runtime.mkdir()
+            parameters.args.extend(["--runtime-root", str(runtime)])
             (modkit / "Script/Official.as").write_bytes(
                 b"class UOfficial\r\n{\r\n    int ReadValue(int Amount) const\r\n    { return Amount; }\r\n}\r\n")
             before = (modkit / "Script/Official.as").read_bytes()
@@ -62,6 +65,7 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(tools["g1r_source_identity"].annotations.read_only_hint)
                     self.assertTrue(tools["g1r_verify_source_game"].annotations.read_only_hint)
                     status = await self.call_ok(client, "g1r_status")
+                    self.assertEqual(status["server"]["runtime_root"], str(runtime))
                     self.assertEqual(status["sources"]["root"], str(modkit))
                     self.assertEqual(status["sources"]["identity_tool"], "g1r_source_identity")
                     self.assertEqual(status["workspace"]["root"], str(workspace))
