@@ -43,6 +43,7 @@ private:
         std::promise<nlohmann::json> result;
         JobState state;
         std::uint64_t world_generation{};
+        std::uint64_t script_generation{};
     };
     struct Handle {
         void* object{};
@@ -55,6 +56,8 @@ private:
         int32_t class_serial{};
         void* bound_world{};
         std::uint64_t world_generation{};
+        bool script_bound{};
+        std::uint64_t script_generation{};
     };
     struct SlotIdentity {void* object{};int32_t serial{};};
     static ObjectSerialIdentity serial_identity(const Handle& value);
@@ -62,11 +65,17 @@ private:
     using ProcessEventFn = void(__fastcall*)(void*, void*, void*);
     using ASExceptionLoggerFn = void(__fastcall*)(const char*);
     using ASStackTraceFn = void(__fastcall*)(void*);
+    using ASReloadFn = bool(__fastcall*)(void*,std::uint8_t,void*);
     using MoviePlayerWaitFn = void(__fastcall*)(void*, bool);
     using PlatformPumpMessagesFn = void(__fastcall*)(bool);
     TickFn original_tick_{};
     ASExceptionLoggerFn original_as_exception_logger_{};
     ASStackTraceFn original_as_stack_trace_{};
+    ASReloadFn original_as_reload_{};
+    std::atomic<bool> script_reload_hook_installed_{false};
+    std::atomic<std::uint64_t> successful_script_reloads_{0};
+    std::atomic<std::uint64_t> failed_script_reloads_{0};
+    std::uint64_t script_generation_{};
     ProcessEventFn process_event_{};
     MoviePlayerWaitFn original_movieplayer_wait_{};
     PlatformPumpMessagesFn original_platform_pump_messages_{};
@@ -106,6 +115,8 @@ private:
     std::atomic<std::uint64_t> world_generation_{0};
     nlohmann::json world_metadata_{{"source","GameEngine.GameViewport.World"},{"state","unavailable"},{"generation",0},{"current",nullptr}};
     void refresh_world();
+    void refresh_scripts();
+    bool script_object(void* object) const;
     void change_world(const Handle& world);
     void* object_world(void* object);
     std::uintptr_t object_field(void* object,const std::string& property_name) const;
@@ -158,6 +169,7 @@ private:
     static void __fastcall hooked_tick(void* loop);
     static void __fastcall hooked_as_exception_logger(const char* message);
     static void __fastcall hooked_as_stack_trace(void* output);
+    static bool __fastcall hooked_as_reload(void* manager,std::uint8_t mode,void* changed_files);
     static void __fastcall hooked_movieplayer_wait(void* player, bool allow_engine_tick);
     static void __fastcall hooked_platform_pump_messages(bool from_main_loop);
     static GameAccess* active_;

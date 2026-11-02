@@ -180,6 +180,8 @@ constexpr uintptr_t kFormatDiagnostics = 0x417d2b0;
 constexpr uintptr_t kASExceptionLogger = 0x4183050;
 constexpr uint8_t kASExceptionLoggerBytes[] = {0x48,0x89,0x5c,0x24,0x18,0x56,0x48,0x81,0xec,0xc0,0x01,0x00,0x00};
 constexpr uintptr_t kASStackTrace = 0x4180060;
+constexpr uintptr_t kASReload = 0x4183ae0;
+constexpr uint8_t kASReloadBytes[] = {0x48,0x89,0x5c,0x24,0x10,0x55,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57};
 constexpr uint8_t kASStackTraceBytes[] = {0x40,0x55,0x53,0x57,0x41,0x55,0x41,0x56,0x48,0x8d,0xac,0x24,0xa0,0xfc,0xff,0xff};
 constexpr uintptr_t kMoviePlayerInterfaceVtable = 0x7e181d0;
 constexpr uintptr_t kMoviePlayerWait = 0x326c2c0;
@@ -395,8 +397,27 @@ bool GameAccess::start() {
         MH_RemoveHook(reinterpret_cast<void*>(base_+kTick));MH_DisableHook(reinterpret_cast<void*>(base_+kASExceptionLogger));
         MH_RemoveHook(reinterpret_cast<void*>(base_+kASExceptionLogger));startup_error_="tick_hook_failed";return false;
     }
+    uint8_t reload_bytes[sizeof(kASReloadBytes)]{};
+    if(!copy_memory(reload_bytes,reinterpret_cast<void*>(base_+kASReload),sizeof(reload_bytes))
+       || std::memcmp(reload_bytes,kASReloadBytes,sizeof(reload_bytes))
+       || MH_CreateHook(reinterpret_cast<void*>(base_+kASReload),reinterpret_cast<void*>(&hooked_as_reload),
+           reinterpret_cast<void**>(&original_as_reload_))!=MH_OK) {
+        MH_DisableHook(reinterpret_cast<void*>(base_+kTick));MH_RemoveHook(reinterpret_cast<void*>(base_+kTick));
+        MH_DisableHook(reinterpret_cast<void*>(base_+kASStackTrace));MH_RemoveHook(reinterpret_cast<void*>(base_+kASStackTrace));
+        MH_DisableHook(reinterpret_cast<void*>(base_+kASExceptionLogger));MH_RemoveHook(reinterpret_cast<void*>(base_+kASExceptionLogger));
+        startup_error_="script_reload_hook_failed";return false;
+    }
+    if(MH_EnableHook(reinterpret_cast<void*>(base_+kASReload))!=MH_OK) {
+        MH_RemoveHook(reinterpret_cast<void*>(base_+kASReload));
+        MH_DisableHook(reinterpret_cast<void*>(base_+kTick));MH_RemoveHook(reinterpret_cast<void*>(base_+kTick));
+        MH_DisableHook(reinterpret_cast<void*>(base_+kASStackTrace));MH_RemoveHook(reinterpret_cast<void*>(base_+kASStackTrace));
+        MH_DisableHook(reinterpret_cast<void*>(base_+kASExceptionLogger));MH_RemoveHook(reinterpret_cast<void*>(base_+kASExceptionLogger));
+        startup_error_="script_reload_hook_failed";return false;
+    }
+    script_reload_hook_installed_=true;
     bool movie_wait_created=false,platform_pump_created=false;
     const auto undo_movieplayer_installation=[&] {
+        MH_DisableHook(reinterpret_cast<void*>(base_+kASReload));MH_RemoveHook(reinterpret_cast<void*>(base_+kASReload));script_reload_hook_installed_=false;
         if(platform_pump_created){MH_DisableHook(reinterpret_cast<void*>(base_+kPlatformPumpMessages));MH_RemoveHook(reinterpret_cast<void*>(base_+kPlatformPumpMessages));}
         if(movie_wait_created){MH_DisableHook(reinterpret_cast<void*>(base_+kMoviePlayerWait));MH_RemoveHook(reinterpret_cast<void*>(base_+kMoviePlayerWait));}
         MH_DisableHook(reinterpret_cast<void*>(base_+kTick));MH_RemoveHook(reinterpret_cast<void*>(base_+kTick));
@@ -419,6 +440,12 @@ bool GameAccess::start() {
     }
     movieplayer_hooks_installed_=true;
     diagnostic("hook_enabled");enabled_=true;return true;
+}
+bool __fastcall GameAccess::hooked_as_reload(void* manager,std::uint8_t mode,void* changed_files) {
+    auto self=active_;
+    const bool result=self->original_as_reload_(manager,mode,changed_files);
+    if(result)++self->successful_script_reloads_;else ++self->failed_script_reloads_;
+    return result;
 }
 void __fastcall GameAccess::hooked_as_exception_logger(const char* message) {
     as_exception_capture::LoggerScope logger;
@@ -563,7 +590,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.90"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.91"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -599,12 +626,15 @@ json GameAccess::status() const {
                              {"buffer_bytes",nullptr},{"read_events",nullptr},
                              {"due_watches_per_tick",nullptr}}},
             {"snapshot_consistency","single_tick_sequential"},
-            {"world_generation_supported",true},{"world",world},{"script_reload_generation_supported",false},
+            {"world_generation_supported",true},{"world",world},{"script_reload_generation_supported",true},
+            {"scripts",{{"source","observed_native_reload_return"},{"hook_installed",script_reload_hook_installed_.load()},
+                {"generation",successful_script_reloads_.load()},{"failed_attempts",failed_script_reloads_.load()},
+                {"generation_semantics","successful_reload_attempt_completed"},{"specific_source_compiled_confirmed",false}}},
             {"serial_guard",{{"policy","strict_observed_equality_including_zero"},
                               {"checks",{"object_serial","class_identity","class_serial"}},
                               {"coverage","conditional_on_observed_nonzero_object_and_class_serial"},
                               {"allocates_serial",false},{"zero_aba_protection",false}}},
-            {"limitations",{"Experimental binding to one executable","Zero serial values do not protect against ABA; an observed serial change invalidates the previous handle","One active connection; handles and observations belong to its session","World generation follows GameEngine.GameViewport.World identity; script reload does not have a separate generation","The DLL cannot be unloaded; close the game to terminate it"}}};
+            {"limitations",{"Experimental binding to one executable","Zero serial values do not protect against ABA; an observed serial change invalidates the previous handle","One active connection; handles and observations belong to its session","World generation follows GameEngine.GameViewport.World identity; script generation counts successful reload attempts and does not prove a particular source changed","The DLL cannot be unloaded; close the game to terminate it"}}};
 }
 json GameAccess::compile_diagnostics() {
     const auto image_base=ensure_image_base();
@@ -652,7 +682,7 @@ json GameAccess::request(const json& envelope) {
     {std::unique_lock lock(queue_mutex_,std::try_to_lock);
      if(!lock.owns_lock())throw HandlerError("game_thread_busy","The game thread is servicing the queue; the request was not queued",
         {{"executed",false},{"may_have_executed",false},{"do_not_retry",false},{"request_started",false},{"stage","not_queued"}});
-     job->world_generation=world_generation_.load();queue_.push_back(job);}
+     job->world_generation=world_generation_.load();job->script_generation=successful_script_reloads_.load();queue_.push_back(job);}
     if(future.wait_for(wait)!=std::future_status::ready) {
         if(job->state.cancel()) {
             ++cancelled_jobs_;
@@ -689,6 +719,7 @@ void GameAccess::pump() {
     if(game_thread_.load()!=GetCurrentThreadId()) return;
     ++ticks_;
     last_tick_ms_=steady_ms();
+    refresh_scripts();
     try {refresh_world();}
     catch(const HandlerError& error) {
         change_world({});
@@ -712,6 +743,7 @@ void GameAccess::pump() {
             {std::lock_guard lock(queue_mutex_);active_job_.reset();}
         }
     }
+    refresh_scripts();
     try {refresh_world();}
     catch(const HandlerError& error) {
         change_world({});
@@ -886,13 +918,63 @@ void GameAccess::refresh_world() {
     if(!class_is(world.object,"/Script/Engine.World"))throw HandlerError("unsupported_world_layout","GameViewport.World is not a World");
     change_world(world);
 }
+bool GameAccess::script_object(void* object) const {
+    if(read<uint32_t>(reinterpret_cast<uintptr_t>(object)+8)&0x10) {
+        const auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);
+        if(!class_is(reinterpret_cast<void*>(klass),"/Script/AngelscriptCode.ASClass"))return false;
+    }
+    std::set<uintptr_t> seen;
+    if(class_is(object,"/Script/AngelscriptCode.ASClass"))return true;
+    if(class_is(object,"/Script/CoreUObject.Class")) {
+        for(auto represented=reinterpret_cast<uintptr_t>(object);represented;represented=read<uintptr_t>(represented+0x40)) {
+            if(!seen.insert(represented).second)throw HandlerError("invalid_object_class","The represented class hierarchy contains a cycle");
+            if(class_is(reinterpret_cast<void*>(represented),"/Script/AngelscriptCode.ASClass"))return true;
+        }
+        seen.clear();
+    }
+    for(auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);klass;klass=read<uintptr_t>(klass+0x40)) {
+        if(!seen.insert(klass).second)throw HandlerError("invalid_object_class","The class hierarchy contains a cycle");
+        if(class_is(reinterpret_cast<void*>(klass),"/Script/AngelscriptCode.ASClass"))return true;
+    }
+    return class_is(object,"/Script/AngelscriptCode.ASFunction");
+}
+void GameAccess::refresh_scripts() {
+    const auto generation=successful_script_reloads_.load();
+    if(generation==script_generation_)return;
+    std::lock_guard lock(queue_mutex_);
+    const auto previous=script_generation_;script_generation_=generation;
+    std::vector<std::string> affected;
+    for(const auto& [id,handle]:handles_)
+        if(handle.script_bound && handle.script_generation!=generation)affected.push_back(id);
+    observations_.invalidate_script(affected,previous,generation,steady_ms(),ticks_.load());
+    for(auto entry=queue_.begin();entry!=queue_.end();) {
+        const auto& job=*entry;
+        const auto references_script=[&](const auto& self,const json& value)->bool {
+            if(value.is_object() && value.contains("handle") && value.at("handle").is_string()) {
+                const auto found=handles_.find(value.at("handle").get<std::string>());
+                if(found!=handles_.end() && found->second.script_bound)return true;
+            }
+            if(value.is_structured())for(const auto& child:value)if(self(self,child))return true;
+            return false;
+        };
+        if(job->script_generation!=generation && references_script(references_script,job->request.at("params")) && job->state.cancel()) {
+            ++cancelled_jobs_;
+            job->result.set_exception(std::make_exception_ptr(HandlerError("script_reloaded","The script context changed before the request executed",
+                {{"executed",false},{"may_have_executed",false},{"request_started",false},{"stage","queued_cancelled"},
+                 {"previous_script_generation",job->script_generation},{"script_generation",generation}})));
+            entry=queue_.erase(entry);
+        } else ++entry;
+    }
+}
 std::string GameAccess::handle_for(void* object,int index) {
     auto identity=validate_object(object);
     if(identity.index!=index)throw HandlerError("stale_handle","The object index changed");
     identity.bound_world=object_world(object);
     identity.world_generation=identity.bound_world?world_generation_.load():0;
+    identity.script_bound=script_object(object);identity.script_generation=identity.script_bound?successful_script_reloads_.load():0;
     for(const auto& [id,existing]:handles_) {
         if(existing.world_generation==identity.world_generation && existing.bound_world==identity.bound_world
+           && existing.script_bound==identity.script_bound && existing.script_generation==identity.script_generation
            && same_serial_identity(serial_identity(existing),serial_identity(identity)))return id;
     }
     auto id="obj-"+std::to_string(++next_handle_);
@@ -979,6 +1061,7 @@ json GameAccess::object_descriptor(void* object,void* expected_class) {
         {"session_id",handle_session_}};
     const auto& reference=handles_.at(result.at("handle").get<std::string>());
     result["world_generation"]=reference.world_generation?json(reference.world_generation):json(nullptr);
+    result["script_generation"]=reference.script_bound?json(reference.script_generation):json(nullptr);
     const auto after=validate_object(object);
     if(!same_serial_identity(serial_identity(identity),serial_identity(after)))
         throw HandlerError("stale_handle","The object value changed while being copied");
@@ -1126,6 +1209,9 @@ json GameAccess::enum_property(uintptr_t address,const std::string& type,int siz
 void* GameAccess::resolve(const std::string& id) {
     auto found=handles_.find(id);if(found==handles_.end())throw HandlerError("stale_handle","The handle is unknown or expired");
     const auto& h=found->second;
+    if(h.script_bound && h.script_generation!=successful_script_reloads_.load())
+        throw HandlerError("script_reloaded","The handle belongs to a previous script context; obtain a new handle",
+            {{"previous_script_generation",h.script_generation},{"script_generation",successful_script_reloads_.load()}});
     if(h.bound_world && h.world_generation!=world_generation_.load())
         throw HandlerError("world_changed","The handle belongs to a previous selected world; obtain a new handle",
             {{"previous_world_generation",h.world_generation},{"world_generation",world_generation_.load()}});
@@ -1140,7 +1226,8 @@ json GameAccess::object_info(void* object,int index) {
     const auto& reference=handles_.at(handle);
     auto ptr=reinterpret_cast<uintptr_t>(object);return {{"handle",handle},{"index",index},{"name",object_name(object)},
         {"path",object_path(object)},{"class",object_name(reinterpret_cast<void*>(read<uintptr_t>(ptr+0x10)))},{"flags",read<uint32_t>(ptr+8)},
-        {"world_generation",reference.world_generation?json(reference.world_generation):json(nullptr)}};
+        {"world_generation",reference.world_generation?json(reference.world_generation):json(nullptr)},
+        {"script_generation",reference.script_bound?json(reference.script_generation):json(nullptr)}};
 }
 json GameAccess::properties(void* object,std::size_t limit) {
     json items=json::array();auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);bool truncated=false;
@@ -1227,6 +1314,7 @@ json GameAccess::snapshot(const json& targets) {
     Observations::validate_targets(targets);
     json result={{"snapshot_id","snapshot-"+std::to_string(++next_snapshot_)},
         {"source","live_native"},{"session_id",handle_session_},{"process_id",GetCurrentProcessId()},{"world_generation",world_generation_.load()},
+        {"script_generation",successful_script_reloads_.load()},
         {"thread_id",GetCurrentThreadId()},{"tick_count",ticks_.load()},
         {"consistency","single_tick_sequential"},{"objects",json::array()},
         {"partial",false},{"truncated",false},
@@ -1516,6 +1604,7 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
     if(count!=declared_count)throw HandlerError("unsupported_signature","NumParms does not match the complete CPF_Parm chain");
     json result={{"session",handle_session_},{"target_handle",target_handle},{"function_name",function_name},
         {"world_generation",handles_.at(target_handle).world_generation},
+        {"script_generation",(handles_.at(target_handle).script_bound || class_is(reinterpret_cast<void*>(function),"/Script/AngelscriptCode.ASFunction"))?json(successful_script_reloads_.load()):json(nullptr)},
         {"target",identity(object_identity)},{"owner",identity(owner_identity)},{"function",identity(function_identity)},
         {"function_outer",read<uintptr_t>(function+0x20)},{"function_flags",function_flags},
         {"header",{{"parameter_count",declared_count},{"parameter_size",parameter_bytes},{"return_offset",return_offset},
@@ -1706,6 +1795,22 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         }
     }
     if(!function)throw HandlerError("function_not_found","Reflected function not found");
+    const auto script_reference=[&](const auto& self,const json& value)->bool {
+        if(value.is_object() && value.contains("handle") && value.at("handle").is_string()) {
+            const auto found=handles_.find(value.at("handle").get<std::string>());
+            if(found!=handles_.end() && found->second.script_bound)return true;
+        }
+        if(value.is_structured())for(const auto& child:value)if(self(self,child))return true;
+        return false;
+    };
+    const bool script_call=handles_.at(target_handle).script_bound || class_is(reinterpret_cast<void*>(function),"/Script/AngelscriptCode.ASFunction")
+        || script_reference(script_reference,arguments);
+    const auto call_script_generation=successful_script_reloads_.load();
+    if(active_job_ && active_job_->script_generation!=successful_script_reloads_.load()
+       && script_call)
+        throw HandlerError("script_reloaded","The script context changed after the call was queued",
+            {{"executed",false},{"may_have_executed",false},{"request_started",false},
+             {"previous_script_generation",active_job_->script_generation},{"script_generation",successful_script_reloads_.load()}});
     if(expected_token) {
         if(expected_contract.at("function").at("object")!=function || expected_contract.at("owner").at("object")!=function_owner)
             throw HandlerError("signature_token_mismatch","The token belongs to a different implementation of the same function name");
@@ -2391,6 +2496,10 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         if(expected_token)require_same_function_contract(expected_contract,final_contract);
         if(strict_pod_contract)require_same_function_contract(pod_function_contract,final_contract);
     }
+    if(script_call && call_script_generation!=successful_script_reloads_.load())
+        throw HandlerError("script_reloaded","The script context changed before ProcessEvent",
+            {{"executed",false},{"may_have_executed",false},{"request_started",false},
+             {"previous_script_generation",call_script_generation},{"script_generation",successful_script_reloads_.load()}});
     string_event_started=true;
     native_exception::Diagnostic native_fault{};
     bool event_returned{};

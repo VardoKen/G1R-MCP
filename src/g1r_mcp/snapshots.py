@@ -55,7 +55,7 @@ def _object_value(value: Any, session_id: str, property_type: str) -> None:
     if value is None:
         return
     expected = {"handle", "index", "name", "path", "class", "session_id"}
-    if not isinstance(value, dict) or set(value) != expected:
+    if not isinstance(value, dict) or not expected <= value.keys() or not value.keys() <= expected | {"world_generation", "script_generation"}:
         _invalid(f"{property_type} must contain null or an exact object descriptor")
     _text(value["handle"], f"Value reference for {property_type}")
     _integer(value["index"], f"Value index for {property_type}")
@@ -66,10 +66,14 @@ def _object_value(value: Any, session_id: str, property_type: str) -> None:
     _text(value["session_id"], f"Value session for {property_type}")
     if value["session_id"] != session_id:
         _invalid(f"Descriptor {property_type} belongs to another snapshot session")
+    if "world_generation" in value and value["world_generation"] is not None:
+        _integer(value["world_generation"], f"{property_type}.world_generation", positive=True)
+    if "script_generation" in value and value["script_generation"] is not None:
+        _integer(value["script_generation"], f"{property_type}.script_generation")
 
 
 def _value_kind(prop: dict[str, Any]) -> str:
-    if prop["type"] in {"ObjectProperty", "ClassProperty"}:
+    if prop["type"] in {"ObjectProperty", "ClassProperty", "WeakObjectProperty"}:
         return "class_reference" if prop["type"] == "ClassProperty" else "object_reference"
     return type(prop["value"]).__name__
 
@@ -129,8 +133,8 @@ def _snapshot(value: Any) -> dict[str, dict[str, Any]]:
         _invalid("The snapshot must be a JSON object")
     _encoded_size(value)
     allowed = {"snapshot_id", "source", "session_id", "process_id", "thread_id", "tick_count",
-               "consistency", "objects", "truncated", "partial", "limits"}
-    required = allowed - {"source", "limits"}
+               "consistency", "objects", "truncated", "partial", "limits", "world_generation", "script_generation"}
+    required = allowed - {"source", "limits", "world_generation", "script_generation"}
     if not required <= value.keys() or not value.keys() <= allowed:
         _invalid("Invalid snapshot field set")
     for key in ("snapshot_id", "session_id", "consistency"):
@@ -140,6 +144,9 @@ def _snapshot(value: Any) -> dict[str, dict[str, Any]]:
     for key in ("process_id", "thread_id"):
         _integer(value[key], key, positive=True)
     _integer(value["tick_count"], "tick_count")
+    for generation in ("world_generation", "script_generation"):
+        if generation in value:
+            _integer(value[generation], generation)
     for key in ("truncated", "partial"):
         if type(value[key]) is not bool:
             _invalid(f"{key}: a boolean value is required")
@@ -195,7 +202,7 @@ def _snapshot(value: Any) -> dict[str, dict[str, Any]]:
             if prop["supported"]:
                 if "value" not in prop or "type" not in prop or "error" in prop:
                     _invalid("A supported property must have a type and value without an error")
-                if prop["type"] in {"ObjectProperty", "ClassProperty"}:
+                if prop["type"] in {"ObjectProperty", "ClassProperty", "WeakObjectProperty"}:
                     _object_value(prop["value"], value["session_id"], prop["type"])
                 elif type(prop["value"]) not in {bool, int, float, str}:
                     _invalid("A supported value must be a scalar")
@@ -239,11 +246,25 @@ def compare_snapshots(before: dict[str, Any], after: dict[str, Any], limit: int 
                      "complete": not any((before["partial"], after["partial"], before["truncated"],
                                           after["truncated"], old_incomplete, new_incomplete))},
     }
+    for label, snapshot in (("before", before), ("after", after)):
+        for generation in ("world_generation", "script_generation"):
+            if generation in snapshot:
+                result[f"{label}_{generation}"] = snapshot[generation]
     for field, reason in (("process_id", "different_process"), ("session_id", "different_session")):
         if before[field] != after[field]:
             result.update(comparable=False, reason=reason)
             result["coverage"]["complete"] = False
             return result
+    if ("world_generation" in before and "world_generation" in after
+            and before["world_generation"] != after["world_generation"]):
+        result.update(comparable=False, reason="different_world_generation")
+        result["coverage"]["complete"] = False
+        return result
+    if ("script_generation" in before and "script_generation" in after
+            and before["script_generation"] != after["script_generation"]):
+        result.update(comparable=False, reason="different_script_generation")
+        result["coverage"]["complete"] = False
+        return result
 
     entries: list[dict[str, Any]] = []
     annotations: list[dict[str, Any]] = []
@@ -308,7 +329,7 @@ def compare_snapshots(before: dict[str, Any], after: dict[str, Any], limit: int 
                      reason="source_not_claimed_live_native" if not source_known else "property_not_readable",
                      before_error=a.get("error"), after_error=b.get("error"))
                 continue
-            if a["type"] == b["type"] and a["type"] in {"ObjectProperty", "ClassProperty"}:
+            if a["type"] == b["type"] and a["type"] in {"ObjectProperty", "ClassProperty", "WeakObjectProperty"}:
                 av, bv = a["value"], b["value"]
                 if av is not None and bv is not None and av["handle"] == bv["handle"] and av != bv:
                     emit("unknown", handle=handle, property=name, reason="object_reference_identity_mismatch")

@@ -33,6 +33,9 @@ public:
     void invalidate_world(const std::vector<std::string>& affected_handles,
                           std::uint64_t previous_generation, std::uint64_t generation,
                           std::uint64_t now_ms, std::uint64_t tick);
+    void invalidate_script(const std::vector<std::string>& affected_handles,
+                           std::uint64_t previous_generation, std::uint64_t generation,
+                           std::uint64_t now_ms, std::uint64_t tick);
     void pump(std::uint64_t now_ms, std::uint64_t tick, const Reader& reader);
     std::size_t size() const noexcept { return watches_.size(); }
 
@@ -67,7 +70,10 @@ private:
     static void finish(Watch& watch, const std::string& state,
                        const std::string& reason, std::uint64_t now_ms,
                        std::uint64_t tick, const Json* snapshot = nullptr,
-                       const Json* world_transition = nullptr);
+                       const Json* transition = nullptr);
+    void invalidate_handles(const std::vector<std::string>& affected_handles,
+                            const std::string& reason, const Json& transition,
+                            std::uint64_t now_ms, std::uint64_t tick);
 };
 
 } // namespace g1r_mcp
