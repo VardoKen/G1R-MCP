@@ -562,7 +562,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.82"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.83"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -1153,13 +1153,15 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         ++count;extent=parameter_extent(extent,offset,size,array_dim);
         const bool returned=(flags&0x400)!=0;
         if(returned && ++returns>1)throw HandlerError("unsupported_signature","UFunction has multiple return parameters");
+        const bool const_name_input_reference=type=="NameProperty" && !returned && (flags&kConstParm) && (flags&(0x100|kReferenceParm));
+        if(const_name_input_reference)validate_name_argument_layout(size,array_dim);
         const bool scalar_output=!returned && supported_scalar_output_type(type) && (flags&0x100);
         json scalar_public=nullptr;
         if(scalar_output) {
             if(parameter_direction::classify(flags)!=parameter_direction::Direction::output)
                 throw HandlerError("unsupported_signature","The scalar parameter is not a pure output");
             scalar_public=scalar_output_metadata(capture_scalar_output_layout(field,type,size,array_dim));
-        } else if(!returned && type!="StructProperty" && type!="StrProperty" && type!="ArrayProperty" && (flags&(0x100|kReferenceParm)))
+        } else if(!returned && !const_name_input_reference && type!="StructProperty" && type!="StrProperty" && type!="ArrayProperty" && (flags&(0x100|kReferenceParm)))
             throw HandlerError("unsupported_signature","Out or reference arguments of this type are unsupported");
         if(returned && supported_scalar_output_type(type) && (flags&(kReferenceParm|kConstParm)))
             throw HandlerError("unsupported_signature","Const or reference scalar returns are unsupported");
@@ -1282,6 +1284,9 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
             {"array_dim",array_dim},{"flags",flags},{"return",returned},{"out",(flags&0x100)!=0},
             {"reference",(flags&kReferenceParm)!=0},{"const",(flags&kConstParm)!=0}};
         if(captured.contains("aux"))public_parameter.update(public_parameter_type_metadata(type,captured.at("aux")));
+        if(const_name_input_reference) {
+            public_parameter["direction"]="input";public_parameter["passing"]="const_reference";
+        }
         if(!vector_public.is_null()) {
             public_parameter["struct"]=vector_public;public_parameter["direction"]=vector_direction;
             if(vector_direction=="input")public_parameter["passing"]=(flags&kConstParm)?"const_reference":"value";
@@ -1953,7 +1958,9 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             scalar_parameters.push_back({field,offset,flags,key,layout});
             ++input_count;continue;
         }
-        if(flags&(0x100|kReferenceParm))throw HandlerError("unsupported_signature","Out or reference arguments of this type are unsupported");
+        const bool const_name_input_reference=type=="NameProperty" && (flags&kConstParm) && (flags&(0x100|kReferenceParm)) && !(flags&0x400);
+        if((flags&(0x100|kReferenceParm)) && !const_name_input_reference)
+            throw HandlerError("unsupported_signature","Out or reference arguments of this type are unsupported");
         if(type=="NameProperty")validate_name_argument_layout(size,read<int32_t>(field+0x30));
         auto key=name(read<uint64_t>(field+0x20));if(!arguments.contains(key))throw HandlerError("missing_argument","Argument is missing: "+key);auto v=arguments.at(key);++input_count;
         if(type=="NameProperty") {
