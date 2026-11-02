@@ -225,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
         result = prepare_probe(arguments.workspace_root, phase=arguments.phase,
                                expected_sha256=arguments.expected_sha256)
     except (PackageError, WorkspaceError, OSError) as error:
-        print(json.dumps({"code": getattr(error, "code", "access_error"), "message": str(error)}, ensure_ascii=False), file=sys.stderr)
+        print(json.dumps({"code": getattr(error, "code", "access_error"), "message": (f"The file operation failed (errno={error.errno}, winerror={getattr(error, 'winerror', None)})" if isinstance(error, OSError) else str(error))}, ensure_ascii=False), file=sys.stderr)
         return 2
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0

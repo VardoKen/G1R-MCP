@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import logging
 from pathlib import Path
 import re
 import sys
@@ -85,6 +86,20 @@ DEVELOPMENT_TOOLS = (
 
 def _tool_failure(error: SourceError | PackageError | WorkspaceError | SnapshotError | PatchError | InspectionError | ExportError) -> ToolError:
     return ToolError(json.dumps({"code": error.code, "message": str(error)}, ensure_ascii=False))
+
+
+class _EnglishOperatingSystemLog(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.exc_info and isinstance(record.exc_info[1], OSError) and type(record.exc_info[1]).__module__ == "builtins":
+            error = record.exc_info[1]
+            message = f"Operating system error (winerror={getattr(error, 'winerror', None)})"
+            display_error = type(error)(error.errno, message)
+            display_error.__cause__ = error.__cause__
+            display_error.__context__ = error.__context__
+            display_error.__suppress_context__ = error.__suppress_context__
+            record.exc_info = (type(display_error), display_error, record.exc_info[2])
+            record.exc_text = None
+        return True
 
 
 def create_server(modkit_root: Path, workspace_root: Path, source_revision: str | None = None,
@@ -659,6 +674,8 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                   modkit_root=modkit_root, game_root=configured_game_root)
         except (ExportError, WorkspaceError, PackageError) as error:
             raise _tool_failure(error) from None
+        except OSError:
+            raise ToolError(json.dumps({"code": "export_io_error", "message": "Operating system access failed while exporting the package"})) from None
 
     @server.tool(annotations=read_only)
     def g1r_verify_package_export(relative_path: str) -> dict[str, Any]:
@@ -668,6 +685,8 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             return verify_export(target)
         except (ExportError, WorkspaceError, PackageError) as error:
             raise _tool_failure(error) from None
+        except OSError:
+            raise ToolError(json.dumps({"code": "export_io_error", "message": "Operating system access failed while verifying the package export"})) from None
 
     @server.tool(annotations=read_only)
     def g1r_build_script_patch(source_path: str, replacement_content: str,
@@ -1059,10 +1078,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         server = create_server(args.modkit_root, args.workspace_root, args.source_revision, args.native_port, args.game_root,
                                transport=args.transport)
-    except (ValueError, OSError, SourceError, NativeError) as error:
+    except OSError as error:
+        print(f"Could not create G1R MCP: operating system access error (errno={error.errno}, winerror={getattr(error, 'winerror', None)})", file=sys.stderr)
+        return 2
+    except (ValueError, SourceError, NativeError) as error:
         print(f"Could not create G1R MCP: {error}", file=sys.stderr)
         return 2
     if args.transport == "streamable-http":
+        logging.getLogger("asyncio").addFilter(_EnglishOperatingSystemLog())
         server.run(transport="streamable-http", host=args.host, port=args.port,
                    streamable_http_path="/mcp", stateless_http=False, json_response=True,
                    max_request_body_size=sys.maxsize,

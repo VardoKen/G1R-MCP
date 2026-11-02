@@ -137,8 +137,8 @@ def queue_key(expected_process: dict, virtual_key: int, *, expected_window: int 
         error = caught
     except ObservationError as caught:
         error = failure(caught.code, str(caught), win32_error=caught.win32_error)
-    except (OSError, AttributeError) as caught:
-        error = failure("window_input_unavailable", str(caught))
+    except (OSError, AttributeError):
+        error = failure("window_input_unavailable", "The Win32 window input API is unavailable")
     finally:
         if lease is not None:
             try:

@@ -216,7 +216,7 @@ wheels = [
 
 [[package]]
 name = "g1r-mcp"
-version = "1.0.0.dev87"
+version = "1.0.0.dev88"
 source = { editable = "." }
 dependencies = [
     { name = "mcp" },

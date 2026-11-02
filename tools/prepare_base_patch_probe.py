@@ -345,7 +345,7 @@ def main() -> int:
                                       probe_target=args.probe_target), ensure_ascii=False, indent=2))
         return 0
     except (PackageError, WorkspaceError, PatchError, OSError, UnicodeError) as error:
-        print(json.dumps({"code": getattr(error, "code", "preparation_failed"), "message": str(error)}, ensure_ascii=False), file=sys.stderr)
+        print(json.dumps({"code": getattr(error, "code", "preparation_failed"), "message": (f"The file operation failed (errno={error.errno}, winerror={getattr(error, 'winerror', None)})" if isinstance(error, OSError) else str(error))}, ensure_ascii=False), file=sys.stderr)
         return 2
 
 

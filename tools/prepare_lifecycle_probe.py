@@ -49,7 +49,7 @@ def main() -> int:
     try:
         result = prepare_probe(args.workspace_root)
     except (PackageError, WorkspaceError, OSError) as error:
-        print(json.dumps({"code": getattr(error, "code", "access_error"), "message": str(error),
+        print(json.dumps({"code": getattr(error, "code", "access_error"), "message": (f"The file operation failed (errno={error.errno}, winerror={getattr(error, 'winerror', None)})" if isinstance(error, OSError) else str(error)),
                           "notes": getattr(error, "__notes__", [])}, ensure_ascii=False), file=sys.stderr)
         return 2
     print(json.dumps(result, ensure_ascii=False, indent=2))

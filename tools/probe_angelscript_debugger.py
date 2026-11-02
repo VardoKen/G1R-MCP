@@ -158,7 +158,7 @@ def run_probe(options: ProbeOptions, connector=socket.create_connection) -> dict
     except ProtocolError as error:
         result["error"] = {"code": "protocol_error", "message": str(error)}
     except (OSError, OverflowError, ValueError) as error:
-        result["error"] = {"code": "connection_error", "message": str(error)}
+        result["error"] = {"code": "connection_error", "message": (f"The debugger connection failed (errno={error.errno}, winerror={getattr(error, 'winerror', None)})" if isinstance(error, OSError) else str(error))}
     finally:
         if connection is not None:
             try:
@@ -166,7 +166,7 @@ def run_probe(options: ProbeOptions, connector=socket.create_connection) -> dict
                 connection.sendall(encode_client_frame(MessageType.DISCONNECT))
                 result["sent_messages"].append(int(MessageType.DISCONNECT))
             except OSError as error:
-                result["disconnect_error"] = str(error)
+                result["disconnect_error"] = f"The debugger disconnect failed (errno={error.errno}, winerror={getattr(error, 'winerror', None)})"
             finally:
                 connection.close()
     return result

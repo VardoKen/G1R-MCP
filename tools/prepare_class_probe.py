@@ -92,7 +92,7 @@ def prepare_probe(workspace_root: Path, *, repository_root: Path = REPOSITORY_RO
                 try:
                     _cleanup(stage, workspace, created)
                 except (WorkspaceError, OSError) as error:
-                    message = "Unsafe cleanup was skipped; remaining files were preserved: " + str(error)
+                    message = "Unsafe cleanup was skipped; remaining files were preserved: " + (f"The cleanup file operation failed (errno={error.errno}, winerror={getattr(error, 'winerror', None)})" if isinstance(error, OSError) else str(error))
                     if failure is None:
                         raise WorkspaceError("unsafe_cleanup", message) from error
                     failure.add_note(message)
@@ -129,7 +129,7 @@ def main() -> int:
     try:
         result = prepare_probe(args.workspace_root)
     except (PackageError, WorkspaceError, OSError) as error:
-        print(json.dumps({"code": getattr(error, "code", "access_error"), "message": str(error),
+        print(json.dumps({"code": getattr(error, "code", "access_error"), "message": (f"The file operation failed (errno={error.errno}, winerror={getattr(error, 'winerror', None)})" if isinstance(error, OSError) else str(error)),
                           "notes": getattr(error, "__notes__", [])}, ensure_ascii=False), file=sys.stderr)
         return 2
     print(json.dumps(result, ensure_ascii=False, indent=2))

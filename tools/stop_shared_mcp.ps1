@@ -53,7 +53,18 @@ if ($MyInvocation.InvocationName -ne '.') {
         $result = Invoke-G1RSharedLocked { Invoke-G1RSharedStop $configuration }
         if ($Json) { $result | ConvertTo-Json -Depth 6 } else { $result }
     } catch {
-        [Console]::Error.WriteLine(($_.Exception.Message))
+        $systemFailure = $_.Exception.GetBaseException()
+        if ($_.Exception.Message -cmatch '^shared_[a-z_]+: ') {
+            [Console]::Error.WriteLine($_.Exception.Message)
+        } elseif ($systemFailure.GetType().FullName -ceq 'G1RMCP.ProcessControl.ProcessControlException') {
+            [Console]::Error.WriteLine($systemFailure.Message)
+        } else {
+            $message = 'The shared MCP server stop operation failed (hresult={0})' -f $systemFailure.HResult
+            if ($systemFailure -is [ComponentModel.Win32Exception]) {
+                $message += ', winerror={0}' -f $systemFailure.NativeErrorCode
+            }
+            [Console]::Error.WriteLine($message)
+        }
         exit 2
     }
 }

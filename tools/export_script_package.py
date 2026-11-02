@@ -39,7 +39,7 @@ def main() -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     except (ExportError, WorkspaceError, PackageError, OSError, UnicodeError) as error:
-        print(json.dumps({"code": getattr(error, "code", "export_failed"), "message": str(error)}, ensure_ascii=False), file=sys.stderr)
+        print(json.dumps({"code": getattr(error, "code", "export_failed"), "message": (f"The file operation failed (errno={error.errno}, winerror={getattr(error, 'winerror', None)})" if isinstance(error, OSError) else str(error))}, ensure_ascii=False), file=sys.stderr)
         return 2
 
 
