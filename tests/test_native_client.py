@@ -180,6 +180,10 @@ class NativeClientTests(unittest.TestCase):
         self.assertEqual(received[0]["protocol"], 1)
         self.assertEqual(received[0]["op"], operation)
         self.assertEqual(received[0]["params"], {"text": "Жизнь"})
+        self.assertGreater(received[0]["wait_timeout_ms"], 0)
+        self.assertLessEqual(received[0]["wait_timeout_ms"], 6_000)
+        self.assertGreater(received[1]["wait_timeout_ms"], 0)
+        self.assertLessEqual(received[1]["wait_timeout_ms"], 5_000)
 
     def test_request_and_echo_larger_than_one_mib_keep_connection_without_retry(self):
         received = []

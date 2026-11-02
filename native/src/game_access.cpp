@@ -52,6 +52,16 @@ uint64_t steady_ms() {
         std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 constexpr uint64_t kRequestWaitMs=2500;
+std::chrono::duration<double,std::milli> request_wait(const json& envelope) {
+    double milliseconds=kRequestWaitMs;
+    if(envelope.contains("wait_timeout_ms")) {
+        const auto& value=envelope.at("wait_timeout_ms");
+        if(!value.is_number() || !std::isfinite(milliseconds=value.get<double>()) || milliseconds<=0)
+            throw HandlerError("invalid_arguments","wait_timeout_ms must be a finite positive number",
+                {{"executed",false},{"may_have_executed",false},{"do_not_retry",false}});
+    }
+    return std::chrono::duration<double,std::milli>{milliseconds};
+}
 constexpr uint64_t kReferenceParm=vector_parameter_direction::reference_parm;
 constexpr uint64_t kConstParm=vector_parameter_direction::const_parm;
 bool supported_scalar_output_type(const std::string& type) {
@@ -513,6 +523,7 @@ json GameAccess::movieplayer_status(const std::string& session) const {
 json GameAccess::request_movieplayer_finish(const json& envelope) {
     if(!movieplayer_hooks_installed_)
         throw HandlerError("movieplayer_adapter_not_ready","MoviePlayer hooks are not installed");
+    const auto wait=request_wait(envelope);
     const auto& params=envelope.at("params");
     if(!params.contains("expected_wait_id") || !params.at("expected_wait_id").is_string()
        || params.at("expected_wait_id").get_ref<const std::string&>().empty())
@@ -524,7 +535,7 @@ json GameAccess::request_movieplayer_finish(const json& envelope) {
         result["session_id"]=envelope.at("session_id");result["process_id"]=GetCurrentProcessId();result["protocol"]=1;
         return result;
     };
-    if(future.wait_for(std::chrono::milliseconds(kRequestWaitMs))!=std::future_status::ready) {
+    if(future.wait_for(wait)!=std::future_status::ready) {
         if(movieplayer_jobs_.cancel_finish(job))
             throw HandlerError("movieplayer_not_servicing","MoviePlayer request was cancelled before its wait-thread service started",
                 {{"executed",false},{"may_have_executed",false},{"do_not_retry",false},{"request_started",false},
@@ -551,7 +562,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.73"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.74"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -635,12 +646,13 @@ json GameAccess::request(const json& envelope) {
     if(envelope.at("op")=="movieplayer_status")return movieplayer_status(envelope.at("session_id").get<std::string>());
     if(envelope.at("op")=="movieplayer_finish")return request_movieplayer_finish(envelope);
     if(!enabled_) throw HandlerError("native_not_ready","Game hooks are not installed: "+startup_error_);
+    const auto wait=request_wait(envelope);
     auto job=std::make_shared<Job>();job->request=envelope;auto future=job->result.get_future();
     {std::unique_lock lock(queue_mutex_,std::try_to_lock);
      if(!lock.owns_lock())throw HandlerError("game_thread_busy","The game thread is servicing the queue; the request was not queued",
         {{"executed",false},{"may_have_executed",false},{"do_not_retry",false},{"request_started",false},{"stage","not_queued"}});
      queue_.push_back(job);}
-    if(future.wait_for(std::chrono::milliseconds(kRequestWaitMs))!=std::future_status::ready) {
+    if(future.wait_for(wait)!=std::future_status::ready) {
         if(job->state.cancel()) {
             ++cancelled_jobs_;
             {std::unique_lock lock(queue_mutex_,std::try_to_lock);if(lock.owns_lock()){auto entry=std::find(queue_.begin(),queue_.end(),job);if(entry!=queue_.end())queue_.erase(entry);}}

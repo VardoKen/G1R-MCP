@@ -203,6 +203,17 @@ class NativeClient:
         try:
             self._remaining(deadline, request_id, False)
             stream = self._connect(deadline, request_id)
+            try:
+                wait_timeout = json.dumps(self._remaining(deadline, request_id, False) * 1000,
+                                          allow_nan=False).encode("utf-8")
+                payload = payload[:-1] + b',"wait_timeout_ms":' + wait_timeout + b"}"
+            except (ValueError, TypeError, UnicodeError, RecursionError):
+                raise NativeError("invalid_arguments", "Operation parameters cannot be represented as valid JSON",
+                                  False, request_id,
+                                  {"executed": False, "may_have_executed": False, "do_not_retry": False,
+                                   "request_started": False, "stage": "serialization_not_sent"}) from None
+            if len(payload) > MAX_FRAME_BYTES:
+                raise ValueError("The request length cannot be represented by a four-byte frame header")
             stream.settimeout(self._remaining(deadline, request_id, False))
             # Even a partial sendall cannot guarantee absence of execution.
             sent = True
