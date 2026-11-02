@@ -79,8 +79,8 @@ class MCPPODReadTests(unittest.IsolatedAsyncioTestCase):
                         "truncated": True, "partial": False,
                         "element_struct": {"struct_path": "/Script/CoreUObject.Vector2D", "struct_name": "Vector2D",
                                            "properties_size": 16, "min_alignment": 8,
-                                           "components": [{"name": "X", "type": "DoubleProperty", "element_size": 8, "offset": 0},
-                                                          {"name": "Y", "type": "DoubleProperty", "element_size": 8, "offset": 8}]},
+                                           "components": [{"name": "X", "type": "DoubleProperty", "element_size": 8, "offset": 0, "array_dim": 1},
+                                                          {"name": "Y", "type": "DoubleProperty", "element_size": 8, "offset": 8, "array_dim": 1}]},
                         "items": [{"index": 2, "supported": True, "value": {"X": 12345.0625, "Y": -9876.125}},
                                   {"index": 3, "supported": True, "value": {"X": -0.03125, "Y": 32768.25}}]}
         struct = {**common, "property_name": "StoredVector",

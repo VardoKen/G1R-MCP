@@ -36,6 +36,12 @@ json GameAccess::read_array(const json& params) {
     const auto limit=static_cast<std::size_t>(integer("limit",64,1,std::numeric_limits<std::size_t>::max()));
     auto object=resolve(handle);
     const auto initial=validate_object(object);
+    struct StructChild {
+        scalar_struct_values::ComponentMetadata field;
+        json auxiliary=json::object();
+        json error=nullptr;
+        bool operator==(const StructChild&) const=default;
+    };
     struct Metadata {
         uintptr_t field{},owner{},field_class{},inner{},inner_class{};
         uint64_t field_name{},inner_name{},flags{},inner_flags{};
@@ -44,6 +50,7 @@ json GameAccess::read_array(const json& params) {
         std::string element_type;
         std::vector<uint64_t> auxiliary;
         std::optional<scalar_struct_values::Snapshot> element_struct;
+        std::vector<StructChild> struct_children;
         Handle owner_identity;
     };
     auto capture=[&]() {
@@ -92,12 +99,60 @@ json GameAccess::read_array(const json& params) {
         if(!supported || result.inner_dim!=1)
             throw HandlerError("unsupported_array_element","The array element type or ArrayDim is unsupported");
         if(type=="StructProperty") {
-            result.element_struct=scalar_struct_values::capture(result.inner,result.stride,result.inner_dim,
-                []<class Value>(uintptr_t address){return read<Value>(address);},
-                [this](uint64_t value){return name(value);},
-                [this](uintptr_t value){return serial_identity(validate_object(reinterpret_cast<void*>(value)));},
-                [this](uintptr_t value){validate_class(reinterpret_cast<void*>(value));},
-                [this](uintptr_t value){return object_path(reinterpret_cast<void*>(value));});
+            auto& structure=result.element_struct.emplace();
+            structure.field=result.inner;structure.next=read<uintptr_t>(result.inner+0x18);structure.field_class=result.inner_class;
+            structure.owner=read<uint64_t>(result.inner+0x10);structure.name=result.inner_name;structure.type_name=read<uint64_t>(result.inner_class);
+            structure.flags=result.inner_flags;structure.offset=result.inner_offset;structure.element_size=result.stride;structure.array_dim=result.inner_dim;
+            structure.structure=read<uintptr_t>(result.inner+0x70);
+            structure.identity=serial_identity(validate_object(reinterpret_cast<void*>(structure.structure)));
+            validate_class(reinterpret_cast<void*>(structure.identity.object_class));
+            structure.path=object_path(reinterpret_cast<void*>(structure.structure));structure.struct_name=name(structure.identity.name);
+            structure.head=read<uintptr_t>(structure.structure+0x50);structure.super=read<uintptr_t>(structure.structure+0x40);
+            structure.layout={read<int32_t>(structure.structure+0x58),read<int32_t>(structure.structure+0x5c),structure.super!=0,{}};
+            if(result.stride<1 || structure.layout.properties_size!=result.stride || structure.super || structure.layout.min_alignment<1
+               || (structure.layout.min_alignment&(structure.layout.min_alignment-1)) || result.stride%structure.layout.min_alignment)
+                throw HandlerError("unsupported_array_layout","Struct elements require matching reflected size, alignment, and own fields");
+            auto identity=[&](uintptr_t pointer) {
+                const auto value=serial_identity(validate_object(reinterpret_cast<void*>(pointer)));
+                return json{{"pointer",pointer},{"class",value.object_class},{"index",value.index},{"name",value.name},
+                    {"serial",value.serial},{"class_index",value.class_index},{"class_name",value.class_name},{"class_serial",value.class_serial}};
+            };
+            std::set<uintptr_t> children;
+            for(auto field=structure.head;field;field=read<uintptr_t>(field+0x18)) {
+                if(!children.insert(field).second)throw HandlerError("array_scan_incomplete","Struct field chain contains a cycle");
+                StructChild child;auto& metadata=child.field;
+                metadata.pointer=field;metadata.next=read<uintptr_t>(field+0x18);metadata.field_class=read<uintptr_t>(field+8);
+                metadata.owner=read<uint64_t>(field+0x10);metadata.name=read<uint64_t>(field+0x20);
+                metadata.type_name=read<uint64_t>(metadata.field_class);metadata.flags=read<uint64_t>(field+0x38);
+                metadata.component={name(metadata.name),read<int32_t>(field+0x44),
+                    {name(metadata.type_name),read<int32_t>(field+0x34),read<int32_t>(field+0x30)}};
+                auto& layout=metadata.component.layout;
+                try {
+                    if(layout.type=="BoolProperty") {
+                        layout.field_size=read<uint8_t>(field+0x70);layout.byte_offset=read<uint8_t>(field+0x71);
+                        layout.byte_mask=read<uint8_t>(field+0x72);layout.field_mask=read<uint8_t>(field+0x73);
+                    } else if(layout.type=="ObjectProperty" || layout.type=="ClassProperty") {
+                        const auto declared=read<uintptr_t>(field+0x70);validate_class(reinterpret_cast<void*>(declared));
+                        child.auxiliary["declared"]=identity(declared);
+                        if(layout.type=="ClassProperty") {
+                            const auto meta=read<uintptr_t>(field+0x78);validate_class(reinterpret_cast<void*>(meta));
+                            child.auxiliary["meta"]=identity(meta);
+                        }
+                    } else if(layout.type=="EnumProperty" || layout.type=="ByteProperty") {
+                        const auto enumeration=enum_layout(layout.type,layout.element_size,field);
+                        child.auxiliary["underlying_type"]=enumeration.underlying_type;
+                        if(layout.type=="EnumProperty") {
+                            const auto underlying=read<uintptr_t>(field+0x70),klass=read<uintptr_t>(underlying+8);
+                            child.auxiliary["underlying"]={underlying,klass,read<uint64_t>(klass),read<uint64_t>(underlying+0x10),
+                                read<uintptr_t>(underlying+0x18),read<uint64_t>(underlying+0x20),read<int32_t>(underlying+0x30),
+                                read<int32_t>(underlying+0x34),read<uint64_t>(underlying+0x38),read<int32_t>(underlying+0x44)};
+                        }
+                        if(enumeration.object)child.auxiliary["enum"]=identity(reinterpret_cast<uintptr_t>(enumeration.object));
+                    }
+                } catch(const HandlerError& error) {child.error={{"code",error.code()},{"message",error.what()}};}
+                structure.layout.components.push_back(metadata.component);structure.components.push_back(metadata);
+                result.struct_children.push_back(std::move(child));
+            }
         } else if(type=="BoolProperty") {
             const auto byte_offset=read<uint8_t>(result.inner+0x71),mask=read<uint8_t>(result.inner+0x73);
             validate_bool_layout(result.stride,byte_offset,mask);
@@ -146,7 +201,7 @@ json GameAccess::read_array(const json& params) {
            || metadata.owner_size!=after.owner_size || metadata.stride!=after.stride
            || metadata.inner_dim!=after.inner_dim || metadata.inner_offset!=after.inner_offset
            || metadata.array_flags!=after.array_flags || metadata.element_type!=after.element_type
-           || metadata.auxiliary!=after.auxiliary || metadata.element_struct!=after.element_struct)
+           || metadata.auxiliary!=after.auxiliary || metadata.element_struct!=after.element_struct || metadata.struct_children!=after.struct_children)
             throw HandlerError("array_changed","The object, array header or layout changed during the read");
         resolve(handle);
     };
@@ -160,7 +215,30 @@ json GameAccess::read_array(const json& params) {
             if(metadata.element_struct) {
                 const auto element=std::span<const std::byte>(copied).subspan(
                     static_cast<size_t>(index)*metadata.stride,static_cast<size_t>(metadata.stride));
-                value=scalar_struct_values::decode(metadata.element_struct->layout,element);
+                value=json::object();json components=json::array();bool element_partial=false;
+                for(const auto& child:metadata.struct_children) {
+                    const auto& component=child.field.component;const auto& layout=component.layout;
+                    json field={{"name",component.name},{"type",layout.type},{"element_size",layout.element_size},
+                        {"offset",component.offset},{"array_dim",layout.array_dim},{"supported",false}};
+                    try {
+                        if(!child.error.is_null())throw HandlerError(child.error.at("code").get<std::string>(),child.error.at("message").get<std::string>());
+                        if(layout.array_dim!=1 || layout.element_size<1 || component.offset<0
+                           || layout.element_size>metadata.stride || component.offset>metadata.stride-layout.element_size)
+                            throw HandlerError("unsupported_struct_field_layout","The struct field layout is unsupported");
+                        const auto field_address=reinterpret_cast<uintptr_t>(element.data())+static_cast<uintptr_t>(component.offset);json field_value;
+                        if(layout.type=="EnumProperty" || layout.type=="ByteProperty") {
+                            const auto decoded=enum_property(field_address,layout.type,layout.element_size,child.field.pointer);
+                            field_value=decoded.at("value");if(decoded.contains("enum"))field["enum"]=decoded.at("enum");
+                        } else field_value=property_value(field_address,layout.type,layout.element_size,child.field.pointer);
+                        if(field_value.is_null() && layout.type!="ObjectProperty" && layout.type!="ClassProperty")
+                            throw HandlerError("unsupported_struct_field_type","The struct field type is unsupported");
+                        value[component.name]=field_value;field["value"]=std::move(field_value);field["supported"]=true;
+                    } catch(const HandlerError& error) {
+                        field["error"]={{"code",error.code()},{"message",error.what()}};element_partial=true;
+                    }
+                    components.push_back(std::move(field));
+                }
+                item["components"]=std::move(components);item["partial"]=element_partial;partial|=element_partial;
             } else if(metadata.element_type=="EnumProperty" || metadata.element_type=="ByteProperty") {
                 const auto result=enum_property(address,metadata.element_type,metadata.stride,metadata.inner);
                 value=result.at("value");if(result.contains("enum"))item["enum"]=result.at("enum");
@@ -185,7 +263,7 @@ json GameAccess::read_array(const json& params) {
         json components=json::array();
         for(const auto& component:structure.layout.components)
             components.push_back({{"name",component.name},{"type",component.layout.type},
-                {"element_size",component.layout.element_size},{"offset",component.offset}});
+                {"element_size",component.layout.element_size},{"offset",component.offset},{"array_dim",component.layout.array_dim}});
         result["element_struct"]={{"struct_path",structure.path},{"struct_name",structure.struct_name},
             {"properties_size",structure.layout.properties_size},{"min_alignment",structure.layout.min_alignment},
             {"components",std::move(components)}};

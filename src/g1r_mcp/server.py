@@ -60,7 +60,7 @@ NATIVE_TOOLS = (
     ("g1r_native_enable", "Enable the game Tick queue in an already loaded DLL"),
     ("g1r_find_objects", "Find objects in the current game process"),
     ("g1r_object_properties", "Read reflected scalar properties"),
-    ("g1r_read_array", "Copy an array page, including structures with owned scalar fields"),
+    ("g1r_read_array", "Copy an array page, including structures with owned reflected fields"),
     ("g1r_read_struct", "Copy a structure's owned reflected fields with per-field support and errors"),
     ("g1r_object_functions", "List an object's reflected functions"),
     ("g1r_invoke", "One explicit reflected-function call"),
@@ -253,15 +253,17 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                       "stack_result_field": "script_errors.stack_captured",
                                       "absence_of_logged_errors_proves_script_completion": False},
             "array_values": {"tool": "g1r_read_array", "source": "runtime_reflection",
-                             "result_field": "items", "item_fields": ["index", "supported", "value", "error"],
+                             "result_field": "items", "item_fields": ["index", "supported", "value", "error", "components", "partial"],
                              "struct_element_type": "StructProperty", "struct_value_shape": "object",
                              "struct_metadata_field": "element_struct",
                              "struct_metadata_fields": ["struct_path", "struct_name", "properties_size", "min_alignment", "components"],
-                             "struct_component_fields": ["name", "type", "element_size", "offset"],
+                             "struct_component_fields": ["name", "type", "element_size", "offset", "array_dim"],
+                             "struct_value_component_fields": ["name", "type", "element_size", "offset", "array_dim", "supported", "value", "enum", "error"],
                              "struct_field_types": ["BoolProperty", "IntProperty", "Int64Property", "UInt32Property",
-                                                    "UInt64Property", "FloatProperty", "DoubleProperty"],
+                                                    "UInt64Property", "FloatProperty", "DoubleProperty", "ByteProperty",
+                                                    "EnumProperty", "NameProperty", "StrProperty", "ObjectProperty", "ClassProperty"],
                              "own_fields_only": True, "nested_struct_fields_supported": False,
-                             "string_struct_fields_supported": False, "nested_arrays_supported": False,
+                             "string_struct_fields_supported": True, "nested_arrays_supported": False,
                              "consistency": "single_tick_sequential", "multiple_pages_atomic": False,
                              "availability": "requires_live_native_status_and_current_game_tick",
                              "current_checked": False},
@@ -875,7 +877,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     @server.tool(annotations=read_only)
     def g1r_read_array(handle: str, property_name: str, offset: int = 0, limit: int = 64,
                         timeout_seconds: float | None = None) -> dict[str, Any]:
-        """Copy an array page, including scalar DTO structures; pages do not share an atomic snapshot."""
+        """Copy an array page, including owned reflected struct fields with per-field support/errors; pages do not share an atomic snapshot."""
         return native_request("read_array", {"handle": handle, "property_name": property_name, "offset": offset, "limit": limit}, timeout_seconds)
 
     @server.tool(annotations=read_only)
