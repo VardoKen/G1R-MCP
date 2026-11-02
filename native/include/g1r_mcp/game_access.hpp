@@ -22,6 +22,7 @@
 #include "g1r_mcp/linear_color_layout.hpp"
 
 namespace g1r_mcp {
+namespace scalar_struct_values {struct Snapshot;}
 class GameAccess {
 public:
     bool start();
@@ -118,6 +119,7 @@ private:
     transform_layout::Snapshot capture_transform_parameter(std::uintptr_t field,int size,int dim) const;
     nlohmann::json capture_object_array_parameter(std::uintptr_t field,int size,int dim,std::uint64_t flags) const;
     linear_color_layout::Snapshot capture_linear_color_parameter(std::uintptr_t field,int size,int dim) const;
+    scalar_struct_values::Snapshot capture_gameplay_tag_parameter(std::uintptr_t field,int size,int dim) const;
     struct EnumLayout {std::string underlying_type;int size;void* object;};
     struct EnumTable {Handle identity;std::string path;std::vector<g1r::enum_values::Entry> entries;};
     EnumLayout enum_layout(const std::string& type, int size, uintptr_t field) const;

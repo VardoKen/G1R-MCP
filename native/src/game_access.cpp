@@ -562,7 +562,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.83"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.84"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -1113,6 +1113,38 @@ json GameAccess::snapshot(const json& targets) {
     }
     return result;
 }
+scalar_struct_values::Snapshot GameAccess::capture_gameplay_tag_parameter(uintptr_t field,int size,int dim) const {
+    scalar_struct_values::Snapshot result;
+    result.field=field;result.next=read<uintptr_t>(field+0x18);result.field_class=read<uintptr_t>(field+8);
+    result.owner=read<uint64_t>(field+0x10);result.name=read<uint64_t>(field+0x20);result.type_name=read<uint64_t>(result.field_class);
+    result.flags=read<uint64_t>(field+0x38);result.offset=read<int32_t>(field+0x44);
+    result.element_size=read<int32_t>(field+0x34);result.array_dim=read<int32_t>(field+0x30);
+    if(name(result.type_name)!="StructProperty" || result.element_size!=size || result.array_dim!=dim || dim!=1 || size<8)
+        throw HandlerError("unsupported_gameplay_tag_layout","GameplayTag requires one matching StructProperty");
+    result.structure=read<uintptr_t>(field+0x70);
+    result.identity=serial_identity(validate_object(reinterpret_cast<void*>(result.structure)));
+    validate_class(reinterpret_cast<void*>(result.identity.object_class));
+    result.path=object_path(reinterpret_cast<void*>(result.structure));result.struct_name=name(result.identity.name);
+    result.head=read<uintptr_t>(result.structure+0x50);result.super=read<uintptr_t>(result.structure+0x40);
+    result.layout={read<int32_t>(result.structure+0x58),read<int32_t>(result.structure+0x5c),result.super!=0,{}};
+    if(result.path!="/Script/GameplayTags.GameplayTag" || result.struct_name!="GameplayTag")
+        throw HandlerError("unsupported_gameplay_tag_type","The input requires exact GameplayTags.GameplayTag");
+    if(result.layout.properties_size!=size || result.super || !result.head || result.layout.min_alignment<1
+       || (result.layout.min_alignment&(result.layout.min_alignment-1)) || size%result.layout.min_alignment)
+        throw HandlerError("unsupported_gameplay_tag_layout","GameplayTag requires matching reflected size, alignment, and own fields");
+    scalar_struct_values::ComponentMetadata tag;const auto tag_field=result.head;
+    tag.pointer=tag_field;tag.next=read<uintptr_t>(tag_field+0x18);tag.field_class=read<uintptr_t>(tag_field+8);
+    tag.owner=read<uint64_t>(tag_field+0x10);tag.name=read<uint64_t>(tag_field+0x20);
+    tag.type_name=read<uint64_t>(tag.field_class);tag.flags=read<uint64_t>(tag_field+0x38);
+    tag.component={name(tag.name),read<int32_t>(tag_field+0x44),
+        {name(tag.type_name),read<int32_t>(tag_field+0x34),read<int32_t>(tag_field+0x30)}};
+    if(tag.next || tag.component.name!="TagName" || tag.component.layout.type!="NameProperty"
+       || tag.component.layout.element_size!=8 || tag.component.layout.array_dim!=1
+       || tag.component.offset<0 || tag.component.offset>size-8)
+        throw HandlerError("unsupported_gameplay_tag_layout","GameplayTag requires one own TagName NameProperty");
+    result.layout.components.push_back(tag.component);result.components.push_back(tag);
+    return result;
+}
 json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_t function,const std::string& target_handle) {
     auto capture_scalar_struct=[this](uintptr_t field,int size,int dim) {
         return scalar_struct_values::capture(field,size,dim,
@@ -1166,7 +1198,7 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         if(returned && supported_scalar_output_type(type) && (flags&(kReferenceParm|kConstParm)))
             throw HandlerError("unsupported_signature","Const or reference scalar returns are unsupported");
         bool supported=false;
-        json vector_public=nullptr,transform_public=nullptr,rotator_public=nullptr,array_public=nullptr,color_public=nullptr,scalar_struct_public=nullptr;std::string vector_direction;
+        json vector_public=nullptr,transform_public=nullptr,rotator_public=nullptr,array_public=nullptr,color_public=nullptr,scalar_struct_public=nullptr,gameplay_tag_public=nullptr;std::string vector_direction;
         if(type=="BoolProperty") {
             const auto byte_offset=read<uint8_t>(field+0x71),mask=read<uint8_t>(field+0x73);
             validate_bool_layout(size,byte_offset,mask);
@@ -1178,7 +1210,15 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         else if(type=="NameProperty")supported=size==8;
         else if(type=="StructProperty") {
             const auto structure_path=object_path(reinterpret_cast<void*>(read<uintptr_t>(field+0x70)));
-            if(structure_path=="/Script/CoreUObject.LinearColor") {
+            if(structure_path=="/Script/GameplayTags.GameplayTag") {
+                if(returned || vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
+                    throw HandlerError("unsupported_signature","GameplayTag requires input by value or const reference");
+                const auto tag=capture_gameplay_tag_parameter(field,size,array_dim);
+                if(offset%tag.layout.min_alignment)
+                    throw HandlerError("unsupported_gameplay_tag_layout","The GameplayTag offset does not match its reflected alignment");
+                captured["aux"]={{"gameplay_tag",scalar_struct_snapshot_json(tag)}};
+                gameplay_tag_public=scalar_struct_snapshot_json(tag,false);supported=true;
+            } else if(structure_path=="/Script/CoreUObject.LinearColor") {
                 if(flags&(kConstParm|kReferenceParm) || (!returned && (flags&0x100)))
                     throw HandlerError("unsupported_signature","FLinearColor is supported only by value without Const, Ref or Out");
                 const auto color=capture_linear_color_parameter(field,size,array_dim);
@@ -1287,6 +1327,10 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         if(const_name_input_reference) {
             public_parameter["direction"]="input";public_parameter["passing"]="const_reference";
         }
+        if(!gameplay_tag_public.is_null()) {
+            public_parameter["struct"]=gameplay_tag_public;public_parameter["direction"]="input";
+            public_parameter["passing"]=(flags&kConstParm)?"const_reference":"value";
+        }
         if(!vector_public.is_null()) {
             public_parameter["struct"]=vector_public;public_parameter["direction"]=vector_direction;
             if(vector_direction=="input")public_parameter["passing"]=(flags&kConstParm)?"const_reference":"value";
@@ -1352,6 +1396,12 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         if(!captured.contains("aux"))continue;
         const auto& auxiliary=captured.at("aux");const auto type=captured.at("type").get<std::string>();
         if(type=="StructProperty") {
+            if(auxiliary.contains("gameplay_tag")) {
+                const auto current=capture_gameplay_tag_parameter(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>());
+                if(scalar_struct_snapshot_json(current)!=auxiliary.at("gameplay_tag"))
+                    throw HandlerError("signature_changed","GameplayTag reflection changed while reading the signature");
+                continue;
+            }
             if(auxiliary.contains("rotator")) {
                 const auto current=capture_scalar_struct(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>());
                 rotator_arguments::validate(current);
@@ -1584,8 +1634,35 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         if(resolve(source.handle)!=object)throw HandlerError("stale_handle","The FName source handle changed");
         return result;
     };
-    struct NameInput {uintptr_t field{};int32_t offset{};NameSource source;};
+    struct NameInput {uintptr_t field{};int32_t field_offset{},destination_offset{};NameSource source;};
     std::vector<NameInput> name_inputs;
+    auto pack_name=[&](uintptr_t field,int32_t field_offset,int32_t destination_offset,const json& value) {
+        validate_name_argument_layout(read<int32_t>(field+0x34),read<int32_t>(field+0x30));
+        if(value.is_object() && value.contains("name")) {
+            if(value.size()!=1 || !value.at("name").is_string())
+                throw HandlerError("invalid_name_argument","Text FName requires only {name:string}");
+            const auto& text=value.at("name").get_ref<const std::string&>();
+            if(text.find('\0')!=std::string::npos)
+                throw HandlerError("invalid_name_argument","Text FName cannot contain an embedded NUL");
+            std::wstring encoded;
+            if(!text.empty()) {
+                const auto length=static_cast<int>(text.size());
+                const auto units=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text.data(),length,nullptr,0);
+                if(!units)throw HandlerError("invalid_name_argument","Text FName contains invalid UTF-8");
+                encoded.resize(static_cast<size_t>(units));
+                if(MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text.data(),length,encoded.data(),units)!=units)
+                    throw HandlerError("invalid_name_argument","Text FName could not be converted to UTF-16");
+            }
+            uint64_t packed{};
+            if(!construct_name(base_+kNameConstruct,&packed,reinterpret_cast<const char16_t*>(encoded.c_str())))
+                throw HandlerError("name_constructor_fault","The FName constructor raised a native exception");
+            std::memcpy(buffer+destination_offset,&packed,sizeof(packed));
+        } else {
+            const auto source=validated_name_argument(read<int32_t>(field+0x34),read<int32_t>(field+0x30),value,capture_name);
+            std::memcpy(buffer+destination_offset,&source.packed,sizeof(source.packed));
+            name_inputs.push_back({field,field_offset,destination_offset,source});
+        }
+    };
     struct VectorParameter {uintptr_t field{};int offset{},size{};uint64_t flags{};std::string key;vector_layout::Snapshot layout;bool output{},returned{};};
     std::vector<VectorParameter> vector_parameters;
     struct ColorParameter {uintptr_t field{};int offset{};uint64_t flags{};linear_color_layout::Snapshot layout;bool returned{};};
@@ -1874,6 +1951,21 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         }
         if(type=="StructProperty") {
             const auto structure_path=object_path(reinterpret_cast<void*>(read<uintptr_t>(field+0x70)));
+            if(structure_path=="/Script/GameplayTags.GameplayTag") {
+                if(vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
+                    throw HandlerError("unsupported_signature","GameplayTag requires input by value or const reference");
+                const auto tag=capture_gameplay_tag_parameter(field,size,read<int32_t>(field+0x30));
+                if(offset%tag.layout.min_alignment)
+                    throw HandlerError("unsupported_gameplay_tag_layout","The GameplayTag offset does not match its reflected alignment");
+                const auto key=name(read<uint64_t>(field+0x20));
+                if(!arguments.contains(key))throw HandlerError("missing_argument","GameplayTag argument is missing: "+key);
+                const auto& value=arguments.at(key);
+                if(!value.is_object() || value.size()!=1 || !value.contains("TagName"))
+                    throw HandlerError("invalid_argument","GameplayTag requires only {TagName:FName_argument}");
+                const auto& tag_name=tag.components.front();
+                pack_name(tag_name.pointer,tag_name.component.offset,offset+tag_name.component.offset,value.at("TagName"));
+                ++input_count;continue;
+            }
             if(structure_path=="/Script/CoreUObject.Rotator") {
                 if(!contains_rotator)throw HandlerError("signature_changed","The FRotator parameter appeared after reading the complete signature");
                 if(vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
@@ -1963,32 +2055,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             throw HandlerError("unsupported_signature","Out or reference arguments of this type are unsupported");
         if(type=="NameProperty")validate_name_argument_layout(size,read<int32_t>(field+0x30));
         auto key=name(read<uint64_t>(field+0x20));if(!arguments.contains(key))throw HandlerError("missing_argument","Argument is missing: "+key);auto v=arguments.at(key);++input_count;
-        if(type=="NameProperty") {
-            if(v.is_object() && v.contains("name")) {
-                if(v.size()!=1 || !v.at("name").is_string())
-                    throw HandlerError("invalid_name_argument","Text FName requires only {name:string}");
-                const auto& text=v.at("name").get_ref<const std::string&>();
-                if(text.find('\0')!=std::string::npos)
-                    throw HandlerError("invalid_name_argument","Text FName cannot contain an embedded NUL");
-                std::wstring encoded;
-                if(!text.empty()) {
-                    const auto length=static_cast<int>(text.size());
-                    const auto units=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text.data(),length,nullptr,0);
-                    if(!units)throw HandlerError("invalid_name_argument","Text FName contains invalid UTF-8");
-                    encoded.resize(static_cast<size_t>(units));
-                    if(MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text.data(),length,encoded.data(),units)!=units)
-                        throw HandlerError("invalid_name_argument","Text FName could not be converted to UTF-16");
-                }
-                uint64_t packed{};
-                if(!construct_name(base_+kNameConstruct,&packed,reinterpret_cast<const char16_t*>(encoded.c_str())))
-                    throw HandlerError("name_constructor_fault","The FName constructor raised a native exception");
-                std::memcpy(buffer+offset,&packed,sizeof(packed));
-            } else {
-                const auto source=validated_name_argument(size,read<int32_t>(field+0x30),v,capture_name);
-                std::memcpy(buffer+offset,&source.packed,sizeof(source.packed));
-                name_inputs.push_back({field,offset,source});
-            }
-        }
+        if(type=="NameProperty")pack_name(field,offset,offset,v);
         else if(type=="BoolProperty" && v.is_boolean()){auto bo=read<uint8_t>(field+0x71),mask=read<uint8_t>(field+0x73);validate_bool_layout(size,bo,mask);buffer[offset+bo]=v.get<bool>()?mask:0;}
         else if(type=="IntProperty" && size==4){*reinterpret_cast<int32_t*>(buffer+offset)=int32_argument(v);}
         else if(type=="Int64Property" && size==8){const auto integer=int64_argument(v);std::memcpy(buffer+offset,&integer,sizeof(integer));}
@@ -2065,7 +2132,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     }
     for(const auto& input:name_inputs) {
         if(field_type(input.field,[this](uint64_t value){return name(value);})!="NameProperty"
-           || read<int32_t>(input.field+0x44)!=input.offset)
+           || read<int32_t>(input.field+0x44)!=input.field_offset)
             throw HandlerError("unsupported_signature","FName argument metadata changed before the call");
         validate_name_argument_layout(read<int32_t>(input.field+0x34),read<int32_t>(input.field+0x30));
         if(!(capture_name(input.source.source)==input.source))
