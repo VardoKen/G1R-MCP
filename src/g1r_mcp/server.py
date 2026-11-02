@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import sys
 import threading
+import traceback
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -90,15 +91,22 @@ def _tool_failure(error: SourceError | PackageError | WorkspaceError | SnapshotE
 
 class _EnglishOperatingSystemLog(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        if record.exc_info and isinstance(record.exc_info[1], OSError) and type(record.exc_info[1]).__module__ == "builtins":
-            error = record.exc_info[1]
-            message = f"Operating system error (winerror={getattr(error, 'winerror', None)})"
-            display_error = type(error)(error.errno, message)
-            display_error.__cause__ = error.__cause__
-            display_error.__context__ = error.__context__
-            display_error.__suppress_context__ = error.__suppress_context__
-            record.exc_info = (type(display_error), display_error, record.exc_info[2])
-            record.exc_text = None
+        if record.exc_info:
+            display = traceback.TracebackException(*record.exc_info)
+
+            def normalize(shown: traceback.TracebackException, error: BaseException) -> None:
+                if isinstance(error, OSError) and type(error).__module__ == "builtins":
+                    shown._str = f"Operating system error (errno={error.errno}, winerror={getattr(error, 'winerror', None)})"
+                if shown.__cause__ is not None:
+                    normalize(shown.__cause__, error.__cause__)
+                elif shown.__context__ is not None and not shown.__suppress_context__:
+                    normalize(shown.__context__, error.__context__)
+                if shown.exceptions is not None:
+                    for child, original in zip(shown.exceptions, error.exceptions):
+                        normalize(child, original)
+
+            normalize(display, record.exc_info[1])
+            record.exc_text = "".join(display.format())
         return True
 
 
@@ -1084,6 +1092,7 @@ def main(argv: list[str] | None = None) -> int:
     except (ValueError, SourceError, NativeError) as error:
         print(f"Could not create G1R MCP: {error}", file=sys.stderr)
         return 2
+    logging.getLogger("mcp.server.mcpserver.server").addFilter(_EnglishOperatingSystemLog())
     if args.transport == "streamable-http":
         logging.getLogger("asyncio").addFilter(_EnglishOperatingSystemLog())
         server.run(transport="streamable-http", host=args.host, port=args.port,

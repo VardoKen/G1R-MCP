@@ -220,7 +220,7 @@ def main(argv: list[str] | None = None) -> int:
         cause = _single_error(error)
         if isinstance(cause, (KeyboardInterrupt, SystemExit)):
             raise cause
-        print(json.dumps({"code": getattr(cause, "code", "probe_failed"), "message": str(cause),
+        print(json.dumps({"code": getattr(cause, "code", "probe_failed"), "message": (f"The MCP client operation failed (errno={cause.errno}, winerror={getattr(cause, 'winerror', None)})" if isinstance(cause, OSError) else str(cause)),
                           "notes": getattr(cause, "__notes__", [])}, ensure_ascii=False), file=sys.stderr)
         return 2
     print(json.dumps(report, ensure_ascii=False, indent=2))

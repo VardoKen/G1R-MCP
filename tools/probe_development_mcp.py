@@ -313,7 +313,7 @@ def main() -> int:
     except Exception as error:
         while isinstance(error, BaseExceptionGroup) and len(error.exceptions) == 1:
             error = error.exceptions[0]
-        print(json.dumps({"error": getattr(error, "code", "probe_failed"), "message": str(error),
+        print(json.dumps({"error": getattr(error, "code", "probe_failed"), "message": (f"The MCP client operation failed (errno={error.errno}, winerror={getattr(error, 'winerror', None)})" if isinstance(error, OSError) else str(error)),
                           "error_type": type(error).__name__}, ensure_ascii=False), file=sys.stderr)
         return 1
 

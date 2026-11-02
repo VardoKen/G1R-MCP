@@ -192,7 +192,7 @@ def main() -> int:
         print(json.dumps(report, ensure_ascii=False))
         return 0 if not args.reload or report.get("reloaded_probe") else 3
     except Exception as error:
-        print(json.dumps({"code": getattr(error, "code", "probe_failed"), "message": str(error)}, ensure_ascii=False))
+        print(json.dumps({"code": getattr(error, "code", "probe_failed"), "message": (f"The MCP client operation failed (errno={error.errno}, winerror={getattr(error, 'winerror', None)})" if isinstance(error, OSError) else str(error))}, ensure_ascii=False))
         return 2
 
 

@@ -335,7 +335,7 @@ def main() -> int:
         return 0
     except BaseException as error:
         error = _single_error(error)
-        print(json.dumps({"code": getattr(error, "code", "probe_failed"), "message": str(error)}, ensure_ascii=False), file=sys.stderr)
+        print(json.dumps({"code": getattr(error, "code", "probe_failed"), "message": (f"The MCP client operation failed (errno={error.errno}, winerror={getattr(error, 'winerror', None)})" if isinstance(error, OSError) else str(error))}, ensure_ascii=False), file=sys.stderr)
         return 2
 
 

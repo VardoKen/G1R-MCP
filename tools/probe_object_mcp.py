@@ -338,7 +338,7 @@ def main() -> int:
         report = asyncio.run(_run_with_signals(args))
     except Exception as error:
         cause = _single_error(error)
-        print(json.dumps({"code": getattr(cause, "code", "probe_failed"), "message": str(cause),
+        print(json.dumps({"code": getattr(cause, "code", "probe_failed"), "message": (f"The MCP client operation failed (errno={cause.errno}, winerror={getattr(cause, 'winerror', None)})" if isinstance(cause, OSError) else str(cause)),
                           "error_type": type(cause).__name__, "notes": getattr(cause, "__notes__", [])}, ensure_ascii=False))
         return 2
     print(json.dumps(report, ensure_ascii=False, indent=2))

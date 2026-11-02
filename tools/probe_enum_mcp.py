@@ -255,7 +255,7 @@ def main(argv: list[str] | None = None) -> int:
         error = _single_error(error)
         if isinstance(error, (KeyboardInterrupt, SystemExit)):
             raise error
-        print(json.dumps({"code": getattr(error, "code", "probe_failed"), "message": str(error),
+        print(json.dumps({"code": getattr(error, "code", "probe_failed"), "message": (f"The MCP client operation failed (errno={error.errno}, winerror={getattr(error, 'winerror', None)})" if isinstance(error, OSError) else str(error)),
                           "notes": getattr(error, "__notes__", [])}, ensure_ascii=False), file=sys.stderr)
         return 2
     print(json.dumps(report, ensure_ascii=False, separators=(",", ":")))

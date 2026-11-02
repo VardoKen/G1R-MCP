@@ -222,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
         error = _single_error(error)
         if isinstance(error, (KeyboardInterrupt, SystemExit)):
             raise error
-        report = {"code": getattr(error, "code", "probe_failed"), "message": str(error),
+        report = {"code": getattr(error, "code", "probe_failed"), "message": (f"The MCP client operation failed (errno={error.errno}, winerror={getattr(error, 'winerror', None)})" if isinstance(error, OSError) else str(error)),
                   "error_type": type(error).__name__}
         if getattr(error, "context", None) is not None:
             report["context"] = error.context
