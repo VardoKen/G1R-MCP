@@ -76,13 +76,15 @@ void Observations::append(Watch& watch, Json event) {
 
 void Observations::finish(Watch& watch, const std::string& state,
                           const std::string& reason, std::uint64_t now_ms,
-                          std::uint64_t tick, const Json* snapshot) {
+                          std::uint64_t tick, const Json* snapshot,
+                          const Json* world_transition) {
     if (watch.state != "running") return;
     watch.state = state;
     watch.reason = reason;
     Json event{{"kind", "terminal"}, {"reason", reason}, {"state", state},
                {"elapsed_ms", now_ms - watch.started}, {"tick_count", tick}};
     if (snapshot) event["snapshot"] = *snapshot;
+    if (world_transition) event.update(*world_transition);
     append(watch, std::move(event));
     watch.latest = nullptr;
 }
@@ -209,6 +211,21 @@ void Observations::disconnect(const std::string& connection_session) {
     }
     order_.erase(std::remove_if(order_.begin(), order_.end(), [&](const auto& id) { return !watches_.contains(id); }), order_.end());
     cursor_ = 0;
+}
+
+void Observations::invalidate_world(const std::vector<std::string>& affected_handles,
+                                    std::uint64_t previous_generation, std::uint64_t generation,
+                                    std::uint64_t now_ms, std::uint64_t tick) {
+    const std::set<std::string> affected(affected_handles.begin(), affected_handles.end());
+    const Json transition{{"previous_world_generation", previous_generation}, {"world_generation", generation}};
+    for (auto& item : watches_) {
+        auto& watch = item.second;
+        if (watch.state != "running") continue;
+        const bool invalidated = std::any_of(watch.targets.begin(), watch.targets.end(), [&](const Json& target) {
+            return affected.contains(target.at("handle").get_ref<const std::string&>());
+        });
+        if (invalidated) finish(watch, "invalidated", "world_changed", now_ms, tick, nullptr, &transition);
+    }
 }
 
 void Observations::pump(std::uint64_t now_ms, std::uint64_t tick, const Reader& reader) {

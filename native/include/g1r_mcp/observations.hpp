@@ -30,6 +30,9 @@ public:
               std::uint64_t now_ms, std::uint64_t tick);
     Json forget(const std::string& owner, const Json& params);
     void disconnect(const std::string& connection_session);
+    void invalidate_world(const std::vector<std::string>& affected_handles,
+                          std::uint64_t previous_generation, std::uint64_t generation,
+                          std::uint64_t now_ms, std::uint64_t tick);
     void pump(std::uint64_t now_ms, std::uint64_t tick, const Reader& reader);
     std::size_t size() const noexcept { return watches_.size(); }
 
@@ -63,7 +66,8 @@ private:
     static void append(Watch& watch, Json event);
     static void finish(Watch& watch, const std::string& state,
                        const std::string& reason, std::uint64_t now_ms,
-                       std::uint64_t tick, const Json* snapshot = nullptr);
+                       std::uint64_t tick, const Json* snapshot = nullptr,
+                       const Json* world_transition = nullptr);
 };
 
 } // namespace g1r_mcp

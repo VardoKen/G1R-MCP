@@ -553,16 +553,17 @@ json GameAccess::status() const {
     const auto observed=last_tick_ms_.load(), now=steady_ms();
     const auto age=observed && now>=observed ? now-observed : 0;
     const bool recent=observed && age<=kRequestWaitMs;
-    json pending=nullptr, active=nullptr;bool queue_metadata_available{};
+    json pending=nullptr, active=nullptr, world=nullptr;bool queue_metadata_available{};
     {
         std::unique_lock lock(queue_mutex_,std::try_to_lock);
         queue_metadata_available=lock.owns_lock();
+        if(queue_metadata_available)world=world_metadata_;
         if(queue_metadata_available)pending=queue_.size();
         if(queue_metadata_available && active_job_)active={{"request_id",active_job_->request.value("id",json(nullptr))},
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.89"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.90"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -598,12 +599,12 @@ json GameAccess::status() const {
                              {"buffer_bytes",nullptr},{"read_events",nullptr},
                              {"due_watches_per_tick",nullptr}}},
             {"snapshot_consistency","single_tick_sequential"},
-            {"world_generation_supported",false},
+            {"world_generation_supported",true},{"world",world},{"script_reload_generation_supported",false},
             {"serial_guard",{{"policy","strict_observed_equality_including_zero"},
                               {"checks",{"object_serial","class_identity","class_serial"}},
                               {"coverage","conditional_on_observed_nonzero_object_and_class_serial"},
                               {"allocates_serial",false},{"zero_aba_protection",false}}},
-            {"limitations",{"Experimental binding to one executable","Zero serial values do not protect against ABA; an observed serial change invalidates the previous handle","One active connection; handles and observations belong to its session","World changes do not define a separate generation; objects are checked before each read","The DLL cannot be unloaded; close the game to terminate it"}}};
+            {"limitations",{"Experimental binding to one executable","Zero serial values do not protect against ABA; an observed serial change invalidates the previous handle","One active connection; handles and observations belong to its session","World generation follows GameEngine.GameViewport.World identity; script reload does not have a separate generation","The DLL cannot be unloaded; close the game to terminate it"}}};
 }
 json GameAccess::compile_diagnostics() {
     const auto image_base=ensure_image_base();
@@ -651,7 +652,7 @@ json GameAccess::request(const json& envelope) {
     {std::unique_lock lock(queue_mutex_,std::try_to_lock);
      if(!lock.owns_lock())throw HandlerError("game_thread_busy","The game thread is servicing the queue; the request was not queued",
         {{"executed",false},{"may_have_executed",false},{"do_not_retry",false},{"request_started",false},{"stage","not_queued"}});
-     queue_.push_back(job);}
+     job->world_generation=world_generation_.load();queue_.push_back(job);}
     if(future.wait_for(wait)!=std::future_status::ready) {
         if(job->state.cancel()) {
             ++cancelled_jobs_;
@@ -688,6 +689,12 @@ void GameAccess::pump() {
     if(game_thread_.load()!=GetCurrentThreadId()) return;
     ++ticks_;
     last_tick_ms_=steady_ms();
+    try {refresh_world();}
+    catch(const HandlerError& error) {
+        change_world({});
+        std::lock_guard lock(queue_mutex_);
+        world_metadata_["error"]={{"code",error.code()},{"message",error.what()}};
+    }
     std::shared_ptr<Job> job;
     {
         std::lock_guard lock(queue_mutex_);
@@ -704,6 +711,12 @@ void GameAccess::pump() {
             job->state.finish();++completed_jobs_;
             {std::lock_guard lock(queue_mutex_);active_job_.reset();}
         }
+    }
+    try {refresh_world();}
+    catch(const HandlerError& error) {
+        change_world({});
+        std::lock_guard lock(queue_mutex_);
+        world_metadata_["error"]={{"code",error.code()},{"message",error.what()}};
     }
     const auto now=static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
@@ -771,11 +784,116 @@ ObjectSerialIdentity GameAccess::serial_identity(const Handle& value) {
     return {reinterpret_cast<uintptr_t>(value.object),reinterpret_cast<uintptr_t>(value.object_class),
             value.index,value.name,value.serial,value.class_index,value.class_name,value.class_serial};
 }
+bool GameAccess::class_is(void* object,const std::string& class_path) const {
+    std::set<uintptr_t> seen;
+    for(auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);klass;klass=read<uintptr_t>(klass+0x40)) {
+        if(!seen.insert(klass).second)throw HandlerError("invalid_object_class","The class hierarchy contains a cycle");
+        if(object_path(reinterpret_cast<void*>(klass))==class_path)return true;
+    }
+    return false;
+}
+uintptr_t GameAccess::object_field(void* object,const std::string& property_name) const {
+    std::set<uintptr_t> classes,fields;
+    for(auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);klass;klass=read<uintptr_t>(klass+0x40)) {
+        if(!classes.insert(klass).second)throw HandlerError("property_scan_cycle","The class hierarchy contains a cycle");
+        for(auto field=read<uintptr_t>(klass+0x50);field;field=read<uintptr_t>(field+0x18)) {
+            if(!fields.insert(field).second)throw HandlerError("property_scan_cycle","The reflected property chain contains a cycle");
+            if(name(read<uint64_t>(field+0x20))!=property_name)continue;
+            const auto offset=read<int32_t>(field+0x44),size=read<int32_t>(field+0x34),class_size=read<int32_t>(klass+0x58);
+            if(field_type(field,[this](auto value){return name(value);})!="ObjectProperty"
+               || size!=sizeof(uintptr_t) || read<int32_t>(field+0x30)!=1 || offset<0 || offset>class_size-size)
+                throw HandlerError("unsupported_world_layout","The world source requires a reflected object pointer property");
+            return field;
+        }
+    }
+    throw HandlerError("world_source_unavailable","The reflected world source property was not found: "+property_name);
+}
+void* GameAccess::object_world(void* object) {
+    if(read<uint32_t>(reinterpret_cast<uintptr_t>(object)+8)&0x10)return nullptr;
+    std::set<uintptr_t> seen;
+    for(auto outer=reinterpret_cast<uintptr_t>(object);outer;outer=read<uintptr_t>(outer+0x20)) {
+        if(!seen.insert(outer).second)throw HandlerError("invalid_object_outer","The outer chain contains a cycle");
+        validate_object(reinterpret_cast<void*>(outer));
+        if(class_is(reinterpret_cast<void*>(outer),"/Script/Engine.World"))return reinterpret_cast<void*>(outer);
+    }
+    return nullptr;
+}
+void GameAccess::change_world(const Handle& world) {
+    const bool changed=world.object!=current_world_.object
+        || (world.object && !same_serial_identity(serial_identity(world),serial_identity(current_world_)));
+    std::lock_guard lock(queue_mutex_);
+    if(!changed){world_metadata_.erase("error");return;}
+    if(changed) {
+        const auto previous=world_generation_.load(),generation=previous+1;
+        std::vector<std::string> affected;
+        for(const auto& [id,handle]:handles_)
+            if(handle.bound_world && handle.world_generation==previous)affected.push_back(id);
+        current_world_=world;world_generation_=generation;
+        observations_.invalidate_world(affected,previous,generation,steady_ms(),ticks_.load());
+        for(auto entry=queue_.begin();entry!=queue_.end();) {
+            const auto& job=*entry;
+            const auto& params=job->request.at("params");
+            const auto affected_reference=[&](const auto& self,const json& value)->bool {
+                if(value.is_object() && value.contains("handle") && value.at("handle").is_string()
+                   && std::find(affected.begin(),affected.end(),value.at("handle").get<std::string>())!=affected.end())return true;
+                if(value.is_structured())for(const auto& child:value)if(self(self,child))return true;
+                return false;
+            };
+            const bool bound=affected_reference(affected_reference,params);
+            if(bound && job->world_generation && job->world_generation!=generation && job->state.cancel()) {
+                ++cancelled_jobs_;
+                job->result.set_exception(std::make_exception_ptr(HandlerError("world_changed","The selected world changed before the request executed",
+                    {{"executed",false},{"may_have_executed",false},{"request_started",false},{"stage","queued_cancelled"},
+                     {"previous_world_generation",job->world_generation},{"world_generation",generation}})));
+                entry=queue_.erase(entry);
+            } else ++entry;
+        }
+    }
+    world_metadata_={{"source","GameEngine.GameViewport.World"},{"state",world.object?"observed":"unavailable"},
+        {"generation",world_generation_.load()},{"current",world.object?json{{"index",world.index},{"serial",world.serial},{"path",object_path(world.object)}}:json(nullptr)}};
+}
+void GameAccess::refresh_world() {
+    if(game_engine_.object) {
+        try {
+            if(!same_serial_identity(serial_identity(game_engine_),serial_identity(validate_object(game_engine_.object))))game_engine_={};
+        } catch(const HandlerError&) {game_engine_={};}
+    }
+    if(!game_engine_.object) {
+        engine_viewport_field_=0;viewport_world_field_=0;game_viewport_={};
+        const auto count=read<int32_t>(base_+kObjects+0x14);
+        for(int index=0;index<count;++index) {
+            auto object=slot(index);if(!object)continue;
+            try {
+                if((read<uint32_t>(reinterpret_cast<uintptr_t>(object)+8)&0x10)
+                   || object_name(reinterpret_cast<void*>(read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10)))!="GameEngine"
+                   || !class_is(object,"/Script/Engine.GameEngine"))continue;
+                game_engine_=validate_object(object);break;
+            } catch(const HandlerError&) {}
+        }
+        if(!game_engine_.object){change_world({});return;}
+    }
+    if(!engine_viewport_field_)engine_viewport_field_=object_field(game_engine_.object,"GameViewport");
+    const auto viewport_pointer=read<uintptr_t>(reinterpret_cast<uintptr_t>(game_engine_.object)+read<int32_t>(engine_viewport_field_+0x44));
+    if(!viewport_pointer){game_viewport_={};viewport_world_field_=0;change_world({});return;}
+    const auto viewport=validate_object(reinterpret_cast<void*>(viewport_pointer));
+    if(!game_viewport_.object || !same_serial_identity(serial_identity(viewport),serial_identity(game_viewport_))) {
+        if(!class_is(viewport.object,"/Script/Engine.GameViewportClient"))throw HandlerError("unsupported_world_layout","GameViewport is not a GameViewportClient");
+        viewport_world_field_=object_field(viewport.object,"World");game_viewport_=viewport;
+    }
+    const auto world_pointer=read<uintptr_t>(viewport_pointer+read<int32_t>(viewport_world_field_+0x44));
+    if(!world_pointer){change_world({});return;}
+    auto world=validate_object(reinterpret_cast<void*>(world_pointer));
+    if(!class_is(world.object,"/Script/Engine.World"))throw HandlerError("unsupported_world_layout","GameViewport.World is not a World");
+    change_world(world);
+}
 std::string GameAccess::handle_for(void* object,int index) {
-    const auto identity=validate_object(object);
+    auto identity=validate_object(object);
     if(identity.index!=index)throw HandlerError("stale_handle","The object index changed");
+    identity.bound_world=object_world(object);
+    identity.world_generation=identity.bound_world?world_generation_.load():0;
     for(const auto& [id,existing]:handles_) {
-        if(same_serial_identity(serial_identity(existing),serial_identity(identity)))return id;
+        if(existing.world_generation==identity.world_generation && existing.bound_world==identity.bound_world
+           && same_serial_identity(serial_identity(existing),serial_identity(identity)))return id;
     }
     auto id="obj-"+std::to_string(++next_handle_);
     handles_[id]=identity;return id;
@@ -859,6 +977,8 @@ json GameAccess::object_descriptor(void* object,void* expected_class) {
     json result={{"handle",handle_for(object,identity.index)},{"index",identity.index},
         {"name",object_name(object)},{"path",path},{"class",object_name(identity.object_class)},
         {"session_id",handle_session_}};
+    const auto& reference=handles_.at(result.at("handle").get<std::string>());
+    result["world_generation"]=reference.world_generation?json(reference.world_generation):json(nullptr);
     const auto after=validate_object(object);
     if(!same_serial_identity(serial_identity(identity),serial_identity(after)))
         throw HandlerError("stale_handle","The object value changed while being copied");
@@ -1006,14 +1126,21 @@ json GameAccess::enum_property(uintptr_t address,const std::string& type,int siz
 void* GameAccess::resolve(const std::string& id) {
     auto found=handles_.find(id);if(found==handles_.end())throw HandlerError("stale_handle","The handle is unknown or expired");
     const auto& h=found->second;
+    if(h.bound_world && h.world_generation!=world_generation_.load())
+        throw HandlerError("world_changed","The handle belongs to a previous selected world; obtain a new handle",
+            {{"previous_world_generation",h.world_generation},{"world_generation",world_generation_.load()}});
     const auto current=validate_object(h.object);
     if(!same_serial_identity(serial_identity(h),serial_identity(current)))
         throw HandlerError("stale_handle","Observed object or class identity changed; obtain a new handle");
+    if(h.bound_world!=object_world(h.object))throw HandlerError("world_changed","The object belongs to a different world than when its handle was created");
     return h.object;
 }
 json GameAccess::object_info(void* object,int index) {
-    auto ptr=reinterpret_cast<uintptr_t>(object);return {{"handle",handle_for(object,index)},{"index",index},{"name",object_name(object)},
-        {"path",object_path(object)},{"class",object_name(reinterpret_cast<void*>(read<uintptr_t>(ptr+0x10)))},{"flags",read<uint32_t>(ptr+8)}};
+    const auto handle=handle_for(object,index);
+    const auto& reference=handles_.at(handle);
+    auto ptr=reinterpret_cast<uintptr_t>(object);return {{"handle",handle},{"index",index},{"name",object_name(object)},
+        {"path",object_path(object)},{"class",object_name(reinterpret_cast<void*>(read<uintptr_t>(ptr+0x10)))},{"flags",read<uint32_t>(ptr+8)},
+        {"world_generation",reference.world_generation?json(reference.world_generation):json(nullptr)}};
 }
 json GameAccess::properties(void* object,std::size_t limit) {
     json items=json::array();auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);bool truncated=false;
@@ -1099,7 +1226,7 @@ json GameAccess::selected_properties(void* object,const json& names) {
 json GameAccess::snapshot(const json& targets) {
     Observations::validate_targets(targets);
     json result={{"snapshot_id","snapshot-"+std::to_string(++next_snapshot_)},
-        {"source","live_native"},{"session_id",handle_session_},{"process_id",GetCurrentProcessId()},
+        {"source","live_native"},{"session_id",handle_session_},{"process_id",GetCurrentProcessId()},{"world_generation",world_generation_.load()},
         {"thread_id",GetCurrentThreadId()},{"tick_count",ticks_.load()},
         {"consistency","single_tick_sequential"},{"objects",json::array()},
         {"partial",false},{"truncated",false},
@@ -1388,6 +1515,7 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
     });
     if(count!=declared_count)throw HandlerError("unsupported_signature","NumParms does not match the complete CPF_Parm chain");
     json result={{"session",handle_session_},{"target_handle",target_handle},{"function_name",function_name},
+        {"world_generation",handles_.at(target_handle).world_generation},
         {"target",identity(object_identity)},{"owner",identity(owner_identity)},{"function",identity(function_identity)},
         {"function_outer",read<uintptr_t>(function+0x20)},{"function_flags",function_flags},
         {"header",{{"parameter_count",declared_count},{"parameter_size",parameter_bytes},{"return_offset",return_offset},

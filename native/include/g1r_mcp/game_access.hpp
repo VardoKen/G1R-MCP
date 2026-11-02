@@ -42,6 +42,7 @@ private:
         nlohmann::json request;
         std::promise<nlohmann::json> result;
         JobState state;
+        std::uint64_t world_generation{};
     };
     struct Handle {
         void* object{};
@@ -52,6 +53,8 @@ private:
         int32_t class_index{};
         uint64_t class_name{};
         int32_t class_serial{};
+        void* bound_world{};
+        std::uint64_t world_generation{};
     };
     struct SlotIdentity {void* object{};int32_t serial{};};
     static ObjectSerialIdentity serial_identity(const Handle& value);
@@ -95,6 +98,18 @@ private:
     uint64_t next_signature_token_{};
     uint64_t next_handle_{0};
     std::string handle_session_;
+    Handle game_engine_;
+    Handle game_viewport_;
+    Handle current_world_;
+    std::uintptr_t engine_viewport_field_{};
+    std::uintptr_t viewport_world_field_{};
+    std::atomic<std::uint64_t> world_generation_{0};
+    nlohmann::json world_metadata_{{"source","GameEngine.GameViewport.World"},{"state","unavailable"},{"generation",0},{"current",nullptr}};
+    void refresh_world();
+    void change_world(const Handle& world);
+    void* object_world(void* object);
+    std::uintptr_t object_field(void* object,const std::string& property_name) const;
+    bool class_is(void* object,const std::string& class_path) const;
     bool session_cleanup_pending_{};
     Observations observations_;
     uint64_t next_snapshot_{};
