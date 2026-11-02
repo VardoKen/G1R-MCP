@@ -10,6 +10,8 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <span>
+#include <vector>
 #include <unordered_map>
 #include <nlohmann/json.hpp>
 #include "g1r_mcp/observations.hpp"
@@ -23,6 +25,7 @@
 
 namespace g1r_mcp {
 namespace scalar_struct_values {struct Snapshot;}
+struct ArrayHeader;
 class GameAccess {
 public:
     bool start();
@@ -148,6 +151,9 @@ private:
     nlohmann::json capture_object_array_return(std::uintptr_t field,int size,int dim,bool output=false) const;
     nlohmann::json read_object_array_return(std::uintptr_t field,std::uintptr_t address,const nlohmann::json& metadata);
     nlohmann::json read_struct(void* object, const std::string& handle, const std::string& property_name);
+    nlohmann::json capture_read_value(std::uintptr_t field,int size,int dim) const;
+    nlohmann::json decode_read_value(const nlohmann::json& metadata,std::span<const std::byte> copied,
+                                    std::uintptr_t live_address,std::vector<std::pair<std::uintptr_t,ArrayHeader>>& copied_headers);
     vector_layout::Snapshot capture_vector_parameter(std::uintptr_t field,int size,int dim) const;
     transform_layout::Snapshot capture_transform_parameter(std::uintptr_t field,int size,int dim) const;
     nlohmann::json capture_object_array_parameter(std::uintptr_t field,int size,int dim,std::uint64_t flags) const;

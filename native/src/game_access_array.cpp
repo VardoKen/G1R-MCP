@@ -198,6 +198,8 @@ json GameAccess::read_array(const json& params) {
                                 read<int32_t>(underlying+0x34),read<uint64_t>(underlying+0x38),read<int32_t>(underlying+0x44)};
                         }
                         if(enumeration.object)child.auxiliary["enum"]=identity(reinterpret_cast<uintptr_t>(enumeration.object));
+                    } else if(layout.type=="StructProperty" || layout.type=="ArrayProperty") {
+                        child.auxiliary["read_value"]=capture_read_value(field,layout.element_size,layout.array_dim);
                     }
                 } catch(const HandlerError& error) {child.error={{"code",error.code()},{"message",error.what()}};}
                 structure.layout.components.push_back(metadata.component);structure.components.push_back(metadata);
@@ -257,6 +259,7 @@ json GameAccess::read_array(const json& params) {
     };
     revalidate();
     json items=json::array();bool partial=false;
+    std::vector<std::pair<uintptr_t,ArrayHeader>> copied_headers;
     for(int index=0;index<page.count;++index) {
         json item={{"index",page.offset+index},{"supported",false}};
         try {
@@ -276,7 +279,16 @@ json GameAccess::read_array(const json& params) {
                            || layout.element_size>metadata.stride || component.offset>metadata.stride-layout.element_size)
                             throw HandlerError("unsupported_struct_field_layout","The struct field layout is unsupported");
                         const auto field_address=reinterpret_cast<uintptr_t>(element.data())+static_cast<uintptr_t>(component.offset);json field_value;
-                        if(layout.type=="EnumProperty" || layout.type=="ByteProperty") {
+                        if(child.auxiliary.contains("read_value")) {
+                            const auto decoded=decode_read_value(child.auxiliary.at("read_value"),
+                                element.subspan(static_cast<size_t>(component.offset),static_cast<size_t>(layout.element_size)),
+                                page.begin+static_cast<uintptr_t>(index)*metadata.stride+static_cast<uintptr_t>(component.offset),copied_headers);
+                            field_value=decoded.at("value");
+                            if(decoded.contains("components"))field["components"]=decoded.at("components");
+                            if(decoded.contains("items"))field["items"]=decoded.at("items");
+                            if(decoded.contains("total_count"))field["total_count"]=decoded.at("total_count");
+                            if(decoded.contains("partial")) {field["partial"]=decoded.at("partial");element_partial|=decoded.at("partial").get<bool>();}
+                        } else if(layout.type=="EnumProperty" || layout.type=="ByteProperty") {
                             const auto decoded=enum_property(field_address,layout.type,layout.element_size,child.field.pointer);
                             field_value=decoded.at("value");if(decoded.contains("enum"))field["enum"]=decoded.at("enum");
                         } else field_value=property_value(field_address,layout.type,layout.element_size,child.field.pointer);
@@ -302,6 +314,9 @@ json GameAccess::read_array(const json& params) {
         items.push_back(std::move(item));
     }
     revalidate();
+    for(const auto& [address,copied_header]:copied_headers)
+        if(!same_array_header(copied_header,read<ArrayHeader>(address)))
+            throw HandlerError("array_changed","A nested array header changed during the read");
     json result={{"source","live_native"},{"session_id",handle_session_},{"process_id",GetCurrentProcessId()},
         {"thread_id",GetCurrentThreadId()},{"tick_count",ticks_.load()},{"handle",handle},
         {"property_name",property_name},{"element_type",metadata.element_type},{"element_size",metadata.stride},

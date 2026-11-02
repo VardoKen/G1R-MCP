@@ -6,6 +6,7 @@
 #include "g1r_mcp/transform_arguments.hpp"
 #include "g1r_mcp/rotator_arguments.hpp"
 #include "g1r_mcp/linear_color_arguments.hpp"
+#include <functional>
 #include <optional>
 #include <set>
 #include <span>
@@ -13,6 +14,167 @@
 namespace g1r_mcp {
 using json=nlohmann::json;
 using game_memory::read;
+json GameAccess::capture_read_value(uintptr_t field,int size,int dim) const {
+    std::set<uintptr_t> active_structs,active_arrays;
+    auto identity=[&](uintptr_t pointer) {
+        const auto value=serial_identity(validate_object(reinterpret_cast<void*>(pointer)));
+        return json{{"pointer",pointer},{"class",value.object_class},{"index",value.index},{"name",value.name},
+            {"serial",value.serial},{"class_index",value.class_index},{"class_name",value.class_name},{"class_serial",value.class_serial}};
+    };
+    std::function<json(uintptr_t,int,int)> capture;
+    capture=[&](uintptr_t current,int element_size,int array_dim) -> json {
+        const auto field_class=read<uintptr_t>(current+8),raw_name=read<uint64_t>(current+0x20),type_name=read<uint64_t>(field_class);
+        const auto type=name(type_name);
+        json result={{"pointer",current},{"next",read<uintptr_t>(current+0x18)},{"field_class",field_class},
+            {"owner",read<uint64_t>(current+0x10)},{"raw_name",raw_name},{"name",name(raw_name)},{"type_name",type_name},{"type",type},
+            {"flags",read<uint64_t>(current+0x38)},{"field_flags",read<uint32_t>(current+0x28)},
+            {"offset",read<int32_t>(current+0x44)},{"element_size",read<int32_t>(current+0x34)},{"array_dim",read<int32_t>(current+0x30)}};
+        try {
+        if(element_size<1 || array_dim!=1 || result.at("element_size")!=element_size || result.at("array_dim")!=array_dim)
+            throw HandlerError("unsupported_struct_field_layout","The reflected value requires a matching size and ArrayDim=1");
+        if(type=="BoolProperty") {
+            result["boolean"]={{"field_size",read<uint8_t>(current+0x70)},{"byte_offset",read<uint8_t>(current+0x71)},
+                {"byte_mask",read<uint8_t>(current+0x72)},{"field_mask",read<uint8_t>(current+0x73)}};
+        } else if(type=="ObjectProperty" || type=="ClassProperty" || type=="WeakObjectProperty") {
+            const auto declared=read<uintptr_t>(current+0x70);validate_class(reinterpret_cast<void*>(declared));
+            result["declared"]=identity(declared);
+            if(type=="ClassProperty") {
+                const auto meta=read<uintptr_t>(current+0x78);validate_class(reinterpret_cast<void*>(meta));result["meta"]=identity(meta);
+            }
+        } else if(type=="EnumProperty" || type=="ByteProperty") {
+            const auto enumeration=enum_layout(type,element_size,current);result["underlying_type"]=enumeration.underlying_type;
+            if(type=="EnumProperty") {
+                const auto underlying=read<uintptr_t>(current+0x70),klass=read<uintptr_t>(underlying+8);
+                result["underlying"]={underlying,klass,read<uint64_t>(klass),read<uint64_t>(underlying+0x10),
+                    read<uintptr_t>(underlying+0x18),read<uint64_t>(underlying+0x20),read<int32_t>(underlying+0x30),
+                    read<int32_t>(underlying+0x34),read<uint64_t>(underlying+0x38),read<int32_t>(underlying+0x44)};
+            }
+            if(enumeration.object)result["enum"]=identity(reinterpret_cast<uintptr_t>(enumeration.object));
+        } else if(type=="ArrayProperty") {
+            if(element_size!=sizeof(ArrayHeader))throw HandlerError("unsupported_struct_field_layout","An array value requires a 16-byte header");
+            result["array_flags"]=read<uint8_t>(current+0x70);
+            const auto inner=read<uintptr_t>(current+0x78);
+            if(!active_arrays.insert(current).second)throw HandlerError("struct_scan_incomplete","The nested array type path is cyclic");
+            try {result["inner"]=capture(inner,read<int32_t>(inner+0x34),read<int32_t>(inner+0x30));}
+            catch(...) {active_arrays.erase(current);throw;}
+            active_arrays.erase(current);
+        } else if(type=="StructProperty") {
+            const auto structure=read<uintptr_t>(current+0x70),head=read<uintptr_t>(structure+0x50),super=read<uintptr_t>(structure+0x40);
+            const auto structure_identity=identity(structure);validate_class(reinterpret_cast<void*>(structure_identity.at("class").get<uintptr_t>()));
+            const auto properties_size=read<int32_t>(structure+0x58),alignment=read<int32_t>(structure+0x5c);
+            result["structure"]={{"identity",structure_identity},{"path",object_path(reinterpret_cast<void*>(structure))},
+                {"head",head},{"super",super},{"properties_size",properties_size},{"min_alignment",alignment}};
+            if(properties_size!=element_size || super || alignment<1 || (alignment&(alignment-1)) || element_size%alignment)
+                throw HandlerError("unsupported_struct_field_layout","A nested struct requires matching reflected size, alignment, and own fields");
+            if(!active_structs.insert(structure).second)
+                throw HandlerError("struct_scan_incomplete","The nested struct type path is cyclic");
+            try {
+                json children=json::array();std::set<uintptr_t> fields;
+                for(auto child=head;child;child=read<uintptr_t>(child+0x18)) {
+                    if(!fields.insert(child).second)throw HandlerError("struct_scan_incomplete","The nested struct field chain is cyclic");
+                    children.push_back(capture(child,read<int32_t>(child+0x34),read<int32_t>(child+0x30)));
+                }
+                result["children"]=std::move(children);
+            } catch(...) {active_structs.erase(structure);throw;}
+            active_structs.erase(structure);
+        }
+        } catch(const HandlerError& error) {result["error"]={{"code",error.code()},{"message",error.what()}};}
+        return result;
+    };
+    return capture(field,size,dim);
+}
+
+json GameAccess::decode_read_value(const json& metadata,std::span<const std::byte> copied,uintptr_t live_address,
+                                 std::vector<std::pair<uintptr_t,ArrayHeader>>& copied_headers) {
+    if(metadata.contains("error"))throw HandlerError(metadata.at("error").at("code").get<std::string>(),metadata.at("error").at("message").get<std::string>());
+    const auto field=metadata.at("pointer").get<uintptr_t>();const auto type=metadata.at("type").get<std::string>();
+    const auto size=metadata.at("element_size").get<int>(),dim=metadata.at("array_dim").get<int>();
+    if(size<1 || dim!=1 || copied.size()!=static_cast<size_t>(size))
+        throw HandlerError("unsupported_struct_field_layout","The copied value does not match its reflected size and ArrayDim");
+    if(type=="StructProperty") {
+        const auto path=metadata.at("structure").at("path").get<std::string>();
+        json value;
+        if(path=="/Script/CoreUObject.Vector")value=vector_arguments::decode(capture_vector_parameter(field,size,dim).layout,copied);
+        else if(path=="/Script/CoreUObject.Transform")value=transform_arguments::decode(capture_transform_parameter(field,size,dim).layout,copied);
+        else if(path=="/Script/CoreUObject.LinearColor")value=linear_color_arguments::decode(capture_linear_color_parameter(field,size,dim).layout,copied);
+        else if(path=="/Script/CoreUObject.Rotator" || path=="/Script/CoreUObject.Quat") {
+            const auto snapshot=scalar_struct_values::capture(field,size,dim,
+                []<class Value>(uintptr_t address){return read<Value>(address);},[this](uint64_t raw){return name(raw);},
+                [this](uintptr_t pointer){return serial_identity(validate_object(reinterpret_cast<void*>(pointer)));},
+                [this](uintptr_t pointer){validate_class(reinterpret_cast<void*>(pointer));},
+                [this](uintptr_t pointer){return object_path(reinterpret_cast<void*>(pointer));});
+            if(path=="/Script/CoreUObject.Rotator") {
+                rotator_arguments::validate(snapshot);value=rotator_arguments::decode(snapshot.layout,copied);
+            }
+            else {
+                if(snapshot.path!="/Script/CoreUObject.Quat" || snapshot.struct_name!="Quat")
+                    throw HandlerError("unsupported_transform_type","Rotation requires exact CoreUObject.Quat");
+                transform_layout::QuatLayout quaternion{snapshot.layout.properties_size,snapshot.layout.min_alignment,snapshot.layout.has_super,{}};
+                for(const auto& component:snapshot.layout.components)
+                    quaternion.components.push_back({component.name,component.layout.type,component.layout.element_size,component.offset,component.layout.array_dim});
+                transform_layout::validate_quat_layout(quaternion);value=scalar_struct_values::decode(snapshot.layout,copied);
+            }
+        } else {
+            value=json::object();json components=json::array();bool partial=false;
+            for(const auto& child:metadata.at("children")) {
+                const auto child_size=child.at("element_size").get<int>(),offset=child.at("offset").get<int>();
+                const auto child_type=child.at("type").get<std::string>(),child_name=child.at("name").get<std::string>();
+                json item={{"name",child_name},{"type",child_type},{"element_size",child_size},{"offset",offset},
+                    {"array_dim",child.at("array_dim")},{"supported",false}};
+                if(child.contains("structure"))item["struct_path"]=child.at("structure").at("path");
+                try {
+                    if(offset<0 || child_size<1 || child_size>size || offset>size-child_size)
+                        throw HandlerError("unsupported_struct_field_layout","The nested struct field exceeds its copied struct");
+                    auto decoded=decode_read_value(child,copied.subspan(static_cast<size_t>(offset),static_cast<size_t>(child_size)),
+                        live_address+static_cast<uintptr_t>(offset),copied_headers);
+                    value[child_name]=decoded.at("value");item["value"]=decoded.at("value");item["supported"]=true;
+                    for(const auto* key:{"components","items","enum","total_count","partial"})if(decoded.contains(key))item[key]=decoded.at(key);
+                    partial=partial || decoded.value("partial",false);
+                } catch(const HandlerError& error) {item["error"]={{"code",error.code()},{"message",error.what()}};partial=true;}
+                components.push_back(std::move(item));
+            }
+            return {{"value",std::move(value)},{"components",std::move(components)},{"partial",partial}};
+        }
+        return {{"value",std::move(value)},{"partial",false}};
+    }
+    if(type=="ArrayProperty") {
+        const auto& inner=metadata.at("inner");const auto stride=inner.at("element_size").get<int>();
+        const auto header=read<ArrayHeader>(reinterpret_cast<uintptr_t>(copied.data()));
+        copied_headers.emplace_back(live_address,header);
+        if(inner.contains("error"))
+            throw HandlerError(inner.at("error").at("code").get<std::string>(),inner.at("error").at("message").get<std::string>());
+        const auto page=array_page(header,stride,inner.at("array_dim").get<int>(),0,header.count>0?static_cast<size_t>(header.count):size_t{1});
+        std::vector<std::byte> payload(page.bytes);
+        if(page.bytes && !game_memory::copy(payload.data(),reinterpret_cast<void*>(page.begin),page.bytes))
+            throw HandlerError("invalid_memory","The nested array bytes are unavailable");
+        json values=json::array(),items=json::array();bool partial=false;
+        for(int32_t index=0;index<page.count;++index) {
+            json item={{"index",index},{"supported",false}};
+            try {
+                const auto offset=static_cast<size_t>(index)*static_cast<size_t>(stride);
+                auto decoded=decode_read_value(inner,std::span<const std::byte>(payload).subspan(offset,static_cast<size_t>(stride)),
+                    page.begin+offset,copied_headers);
+                values.push_back(decoded.at("value"));item["value"]=decoded.at("value");item["supported"]=true;
+                for(const auto* key:{"components","items","enum","total_count","partial"})if(decoded.contains(key))item[key]=decoded.at(key);
+                partial=partial || decoded.value("partial",false);
+            } catch(const HandlerError& error) {values.push_back(nullptr);item["error"]={{"code",error.code()},{"message",error.what()}};partial=true;}
+            items.push_back(std::move(item));
+        }
+        if(!same_array_header(header,read<ArrayHeader>(live_address)))throw HandlerError("array_changed","The nested array header changed while being copied");
+        return {{"value",std::move(values)},{"items",std::move(items)},{"total_count",header.count},{"partial",partial}};
+    }
+    const auto address=reinterpret_cast<uintptr_t>(copied.data());json result;
+    if(type=="EnumProperty" || type=="ByteProperty") {
+        const auto decoded=enum_property(address,type,size,field);result={{"value",decoded.at("value")},{"partial",false}};
+        if(decoded.contains("enum"))result["enum"]=decoded.at("enum");
+        return result;
+    }
+    auto value=property_value(address,type,size,field);
+    if(value.is_null() && type!="ObjectProperty" && type!="ClassProperty" && type!="WeakObjectProperty")
+        throw HandlerError("unsupported_struct_field_type","The nested value type is unsupported");
+    return {{"value",std::move(value)},{"partial",false}};
+}
+
 json GameAccess::read_struct(void* object,const std::string& handle,const std::string& property_name) {
     if(property_name.empty() || property_name.find('\0')!=std::string::npos)
         throw HandlerError("invalid_struct_params","property_name must be nonempty and contain no NUL");
@@ -106,6 +268,11 @@ json GameAccess::read_struct(void* object,const std::string& handle,const std::s
                     }
                     if(enumeration.object)child.auxiliary["enum"]=identity(reinterpret_cast<uintptr_t>(enumeration.object));
                 } else if(type=="ArrayProperty") {
+                    const auto inner=read<uintptr_t>(field+0x78);
+                    if(game_memory::field_type(inner,[this](uint64_t value){return name(value);})!="StructProperty"
+                       || object_path(reinterpret_cast<void*>(read<uintptr_t>(inner+0x70)))!="/Script/GameplayTags.GameplayTag") {
+                        child.auxiliary["nested"]=capture_read_value(field,layout.element_size,layout.array_dim);
+                    } else {
                     auto& snapshot=child.gameplay_tag_array.emplace();
                     snapshot.field=read<uintptr_t>(field+0x78);
                     snapshot.next=read<uintptr_t>(snapshot.field+0x18);snapshot.field_class=read<uintptr_t>(snapshot.field+8);
@@ -145,6 +312,7 @@ json GameAccess::read_struct(void* object,const std::string& handle,const std::s
                     }
                     if(!has_tag_name)
                         throw HandlerError("unsupported_struct_field_layout","GameplayTag requires an own TagName NameProperty");
+                    }
                 } else if(type=="StructProperty") {
                     const auto pointer=read<uintptr_t>(field+0x70);child.auxiliary["structure"]=identity(pointer);
                     const auto path=object_path(reinterpret_cast<void*>(pointer));child.auxiliary["struct_path"]=path;
@@ -168,7 +336,7 @@ json GameAccess::read_struct(void* object,const std::string& handle,const std::s
                                 quaternion.components.push_back({component.name,component.layout.type,component.layout.element_size,component.offset,component.layout.array_dim});
                             transform_layout::validate_quat_layout(quaternion);child.quat=std::move(snapshot);
                         }
-                    }
+                    } else child.auxiliary["nested"]=capture_read_value(field,layout.element_size,layout.array_dim);
                 }
             } catch(const HandlerError& error) {child.error={{"code",error.code()},{"message",error.what()}};}
             structure.layout.components.push_back(metadata.component);structure.components.push_back(metadata);
@@ -205,6 +373,13 @@ json GameAccess::read_struct(void* object,const std::string& handle,const std::s
             else if(child.rotator)value=rotator_arguments::decode(child.rotator->layout,copied);
             else if(child.quat)value=scalar_struct_values::decode(child.quat->layout,copied);
             else if(child.color)value=linear_color_arguments::decode(child.color->layout,copied);
+            else if(child.auxiliary.contains("nested")) {
+                const auto live_address=reinterpret_cast<uintptr_t>(object)+static_cast<uintptr_t>(before.structure.offset)+static_cast<uintptr_t>(component.offset);
+                const auto decoded=decode_read_value(child.auxiliary.at("nested"),copied,live_address,copied_arrays);
+                value=decoded.at("value");
+                for(const auto* key:{"components","items","enum","total_count","partial"})if(decoded.contains(key))item[key]=decoded.at(key);
+                partial=partial || decoded.value("partial",false);
+            }
             else if(child.gameplay_tag_array) {
                 if(layout.element_size!=sizeof(ArrayHeader))
                     throw HandlerError("unsupported_struct_field_layout","An array field requires a 16-byte header");
