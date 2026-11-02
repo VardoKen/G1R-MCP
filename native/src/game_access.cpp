@@ -590,7 +590,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.91"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.92"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -1211,10 +1211,12 @@ void* GameAccess::resolve(const std::string& id) {
     const auto& h=found->second;
     if(h.script_bound && h.script_generation!=successful_script_reloads_.load())
         throw HandlerError("script_reloaded","The handle belongs to a previous script context; obtain a new handle",
-            {{"previous_script_generation",h.script_generation},{"script_generation",successful_script_reloads_.load()}});
+            {{"executed",false},{"may_have_executed",false},{"do_not_retry",false},
+             {"previous_script_generation",h.script_generation},{"script_generation",successful_script_reloads_.load()}});
     if(h.bound_world && h.world_generation!=world_generation_.load())
         throw HandlerError("world_changed","The handle belongs to a previous selected world; obtain a new handle",
-            {{"previous_world_generation",h.world_generation},{"world_generation",world_generation_.load()}});
+            {{"executed",false},{"may_have_executed",false},{"do_not_retry",false},
+             {"previous_world_generation",h.world_generation},{"world_generation",world_generation_.load()}});
     const auto current=validate_object(h.object);
     if(!same_serial_identity(serial_identity(h),serial_identity(current)))
         throw HandlerError("stale_handle","Observed object or class identity changed; obtain a new handle");
