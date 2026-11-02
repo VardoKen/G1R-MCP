@@ -275,7 +275,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                               "own_fields_only": True, "layout": "reflected_fields",
                               "properties_size": "reflected", "component_count": "reflected",
                               "known_nested_struct_types": ["/Script/CoreUObject.Vector", "/Script/CoreUObject.Rotator",
-                                                            "/Script/CoreUObject.Transform", "/Script/CoreUObject.LinearColor"],
+                                                            "/Script/CoreUObject.Transform", "/Script/CoreUObject.LinearColor", "/Script/CoreUObject.Quat"],
                               "unknown_nested_structs_supported": False, "string_fields_supported": True,
                               "consistency": "copied_bytes_then_metadata_revalidated",
                               "availability": "requires_live_native_status_and_current_game_tick",
@@ -879,7 +879,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_read_struct(handle: str, property_name: str, timeout_seconds: float | None = None) -> dict[str, Any]:
-        """Copy owned reflected fields with per-field support/errors and known nested Vector, Rotator, Transform, and LinearColor layouts."""
+        """Copy owned reflected fields with per-field support/errors and known nested Vector, Rotator, Transform, LinearColor, and Quat layouts."""
         return native_request("read_struct", {"handle": handle, "property_name": property_name}, timeout_seconds)
 
     @server.tool(annotations=read_only)

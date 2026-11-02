@@ -22,6 +22,7 @@ json GameAccess::read_struct(void* object,const std::string& handle,const std::s
         std::optional<vector_layout::Snapshot> vector;
         std::optional<transform_layout::Snapshot> transform;
         std::optional<rotator_arguments::Snapshot> rotator;
+        std::optional<scalar_struct_values::Snapshot> quat;
         std::optional<linear_color_layout::Snapshot> color;
         json error=nullptr;
         bool operator==(const Child&) const=default;
@@ -108,14 +109,23 @@ json GameAccess::read_struct(void* object,const std::string& handle,const std::s
                     if(path=="/Script/CoreUObject.Vector")child.vector=capture_vector_parameter(field,layout.element_size,layout.array_dim);
                     else if(path=="/Script/CoreUObject.Transform")child.transform=capture_transform_parameter(field,layout.element_size,layout.array_dim);
                     else if(path=="/Script/CoreUObject.LinearColor")child.color=capture_linear_color_parameter(field,layout.element_size,layout.array_dim);
-                    else if(path=="/Script/CoreUObject.Rotator") {
-                        child.rotator=scalar_struct_values::capture(field,layout.element_size,layout.array_dim,
+                    else if(path=="/Script/CoreUObject.Rotator" || path=="/Script/CoreUObject.Quat") {
+                        auto snapshot=scalar_struct_values::capture(field,layout.element_size,layout.array_dim,
                             []<class Value>(uintptr_t address){return read<Value>(address);},
                             [this](uint64_t value){return name(value);},
                             [this](uintptr_t value){return serial_identity(validate_object(reinterpret_cast<void*>(value)));},
                             [this](uintptr_t value){validate_class(reinterpret_cast<void*>(value));},
                             [this](uintptr_t value){return object_path(reinterpret_cast<void*>(value));});
-                        rotator_arguments::validate(*child.rotator);
+                        if(path=="/Script/CoreUObject.Rotator") {
+                            rotator_arguments::validate(snapshot);child.rotator=std::move(snapshot);
+                        } else {
+                            if(snapshot.path!="/Script/CoreUObject.Quat" || snapshot.struct_name!="Quat")
+                                throw HandlerError("unsupported_transform_type","Rotation requires exact CoreUObject.Quat");
+                            transform_layout::QuatLayout quaternion{snapshot.layout.properties_size,snapshot.layout.min_alignment,snapshot.layout.has_super,{}};
+                            for(const auto& component:snapshot.layout.components)
+                                quaternion.components.push_back({component.name,component.layout.type,component.layout.element_size,component.offset,component.layout.array_dim});
+                            transform_layout::validate_quat_layout(quaternion);child.quat=std::move(snapshot);
+                        }
                     }
                 }
             } catch(const HandlerError& error) {child.error={{"code",error.code()},{"message",error.what()}};}
@@ -148,6 +158,7 @@ json GameAccess::read_struct(void* object,const std::string& handle,const std::s
             if(child.vector)value=vector_arguments::decode(child.vector->layout,copied);
             else if(child.transform)value=transform_arguments::decode(child.transform->layout,copied);
             else if(child.rotator)value=rotator_arguments::decode(child.rotator->layout,copied);
+            else if(child.quat)value=scalar_struct_values::decode(child.quat->layout,copied);
             else if(child.color)value=linear_color_arguments::decode(child.color->layout,copied);
             else if(layout.type=="EnumProperty" || layout.type=="ByteProperty") {
                 const auto result=enum_property(address,layout.type,layout.element_size,child.field.pointer);
