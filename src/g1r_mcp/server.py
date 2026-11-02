@@ -677,14 +677,16 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             else:
                 result = getattr(development_service(), operation)(**params)
             stopped = result.get("tool_result")
-            if (operation == "stop" and result.get("state") == "stop_result"
+            if ((operation == "start" and result.get("state") == "launch_requested"
+                 and result.get("outcome_unknown") is False)
+                    or (operation == "stop" and result.get("state") == "stop_result"
                     and result.get("outcome_unknown") is False and isinstance(stopped, dict)
                     and stopped.get("state") == "stopped"
                     and isinstance(result.get("process"), dict)
                     and stopped.get("process") == result["process"]
                     and isinstance(params.get("expected_process"), dict)
                     and result["process"] == {key: params["expected_process"].get(key)
-                                              for key in ("pid", "creation_time", "executable")}):
+                                              for key in ("pid", "creation_time", "executable")})):
                 with native_lock:
                     previous_native = native
                     native = NativeClient(port=native_port)

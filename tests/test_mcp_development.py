@@ -64,7 +64,9 @@ class MCPDevelopmentTests(unittest.IsolatedAsyncioTestCase):
         if script in self.responses:
             return self.responses[script]
         if script == "start_g1r_development.ps1":
-            value = {"state": "launch_requested", "package_name": "Probe"}
+            value = {"state": "launch_requested", "package_name": "Probe",
+                     "mods_directory": arguments[arguments.index("-ModsDirectory") + 1],
+                     "mods": arguments[arguments.index("-ModsCsv") + 1].split(",")}
         elif script == "stop_g1r_development.ps1":
             value = {"state": "stopped", "process": self.identity}
         else:
