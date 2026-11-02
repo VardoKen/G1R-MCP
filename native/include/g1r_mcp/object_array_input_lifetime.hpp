@@ -13,10 +13,10 @@ inline constexpr std::size_t element_size = 8;
 
 class InputBudget {
 public:
-    void add(std::size_t count) {
+    void add(std::size_t count, std::size_t stride = element_size) {
         if (count > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
             throw HandlerError("invalid_array_count", "The object array length is not representable by int32 TArray");
-        const auto bytes = count * element_size;
+        const auto bytes = count * stride;
         ++count_;
         bytes_ += bytes;
     }
@@ -33,7 +33,7 @@ struct Cleanup {
     std::size_t released_count{};
 };
 
-// Ledger owns only pointer buffers allocated by the engine Realloc function.
+// Ledger owns only array buffers allocated by the engine Realloc function.
 // It never owns UObject instances and never passes them to Free.
 // The caller validates element bytes and serial identity.
 class Ledger {
@@ -50,12 +50,13 @@ public:
         allocations_.reserve(count);
     }
 
-    void add_input(const ArrayHeader& header, std::size_t expected_count) {
+    void add_input(const ArrayHeader& header, std::size_t expected_count,
+                   std::size_t stride = element_size) {
         if (uncertain_) throw_unknown();
         if (release_started_)
             fail("array_lifetime_unknown", "An array cannot be registered after cleanup starts");
-        validate_header(header, expected_count);
-        if (header.data) add_allocation(header);
+        validate_header(header, expected_count, stride);
+        if (header.data) add_allocation(header, stride);
         inputs_.push_back(header);
     }
 
@@ -90,7 +91,7 @@ public:
             }
             allocations_[i].released = true;
             ++released_count_;
-            released_bytes_ += allocation_size(allocations_[i].header);
+            released_bytes_ += allocations_[i].bytes;
             result.released_count = released_count_;
         }
         result.confirmed = true;
@@ -98,7 +99,7 @@ public:
     }
 
 private:
-    struct Allocation {ArrayHeader header{}; bool released{};};
+    struct Allocation {ArrayHeader header{}; std::size_t bytes{}; bool released{};};
     std::vector<ArrayHeader> inputs_;
     std::vector<Allocation> allocations_;
     std::size_t allocation_bytes_{};
@@ -114,33 +115,33 @@ private:
         throw HandlerError(code, message);
     }
 
-    static std::size_t allocation_size(const ArrayHeader& header) noexcept {
-        return static_cast<std::size_t>(header.capacity) * element_size;
+    static std::size_t allocation_size(const ArrayHeader& header, std::size_t stride) noexcept {
+        return static_cast<std::size_t>(header.capacity) * stride;
     }
 
-    void validate_header(const ArrayHeader& header, std::size_t expected_count) {
+    void validate_header(const ArrayHeader& header, std::size_t expected_count, std::size_t stride) {
         if (expected_count > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
             fail("invalid_array_header", "The object array length is not representable by int32 TArray");
         const auto count = static_cast<std::int32_t>(expected_count);
         if (header.count != count || header.capacity != count
             || (!count && header.data) || (count && !header.data)
-            || (header.data && header.data % element_size))
+            || (header.data && header.data % stride))
             fail("invalid_array_header", "An object array requires exact count/capacity and an aligned engine buffer");
-        const auto bytes = expected_count * element_size;
+        const auto bytes = expected_count * stride;
         if (header.data > std::numeric_limits<std::uintptr_t>::max() - bytes)
             fail("invalid_array_header", "The object array address range overflows");
     }
 
-    void add_allocation(const ArrayHeader& header) {
-        const auto bytes = allocation_size(header);
+    void add_allocation(const ArrayHeader& header, std::size_t stride) {
+        const auto bytes = allocation_size(header, stride);
         const auto end = header.data + bytes;
         for (std::size_t i = 0; i < allocations_.size(); ++i) {
-            const auto& original = allocations_[i].header;
-            const auto original_end = original.data + allocation_size(original);
-            if (header.data >= original_end || original.data >= end) continue;
+            const auto& original = allocations_[i];
+            const auto original_end = original.header.data + original.bytes;
+            if (header.data >= original_end || original.header.data >= end) continue;
             fail("array_lifetime_unknown", "Object arrays have an unconfirmed buffer alias");
         }
-        allocations_.push_back({header,false});
+        allocations_.push_back({header,bytes,false});
         allocation_bytes_ += bytes;
     }
 };

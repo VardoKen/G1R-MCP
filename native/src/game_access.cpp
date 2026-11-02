@@ -590,7 +590,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.93"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.94"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -1515,10 +1515,13 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                 const auto array=capture_object_array_return(field,size,array_dim);
                 captured["aux"]={{"object_array_return",array}};array_public=array.at("public");supported=true;
             } else {
-                if(!(flags&kConstParm) || vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
-                    throw HandlerError("unsupported_signature","Object arrays are supported only as const reference inputs");
-                const auto array=capture_object_array_parameter(field,size,array_dim,flags);
-                captured["aux"]={{"object_array",array}};array_public=array.at("public");supported=true;
+                if(field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);})=="ObjectProperty") {
+                    const auto array=capture_object_array_parameter(field,size,array_dim,flags);
+                    captured["aux"]={{"object_array",array}};array_public=array.at("public");supported=true;
+                } else {
+                    const auto array=capture_enum_array_parameter(field,size,array_dim,flags);
+                    captured["aux"]={{"enum_array",array}};array_public=array.at("public");supported=true;
+                }
             }
         }
         else if(type=="Int64Property" || type=="UInt64Property")supported=size==8;
@@ -1597,7 +1600,12 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         }
         if(!array_public.is_null()) {
             public_parameter["array"]=array_public;public_parameter["direction"]=returned?"return":"input";public_parameter["passing"]=returned?"value":"const_reference";
-            if(!returned)public_parameter["argument_constraints"]={{"max_elements",std::numeric_limits<int32_t>::max()},{"element_form","null_or_handle"},{"ownership","engine_owned_pointer_copy"}};
+            if(!returned) {
+                const bool enum_array=captured["aux"].contains("enum_array");
+                if(enum_array)public_parameter["passing"]="value";
+                public_parameter["argument_constraints"]={{"max_elements",std::numeric_limits<int32_t>::max()},
+                    {"element_form",enum_array?"integer":"null_or_handle"},{"ownership",enum_array?"engine_owned_copy":"engine_owned_pointer_copy"}};
+            }
         }
         if(!color_public.is_null()) {
             public_parameter["struct"]=color_public;public_parameter["direction"]=returned?"return":"input";public_parameter["passing"]="value";
@@ -1679,8 +1687,13 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                 if(capture_object_array_return(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>())!=auxiliary.at("object_array_return"))
                     throw HandlerError("signature_changed","The returned object array metadata changed while reading the signature");
             } else {
+                if(auxiliary.contains("enum_array")) {
+                    if(capture_enum_array_parameter(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>(),captured.at("flags").get<uint64_t>())!=auxiliary.at("enum_array"))
+                        throw HandlerError("signature_changed","The enum array metadata changed while reading the signature");
+                } else {
                 const auto current=capture_object_array_parameter(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>(),captured.at("flags").get<uint64_t>());
                 if(current!=auxiliary.at("object_array"))throw HandlerError("signature_changed","Object array metadata changed while reading the signature");
+                }
             }
         } else if(type=="BoolProperty") {
             if(read<uint8_t>(field+0x70)!=auxiliary.at("field_size").get<uint8_t>()
@@ -1978,7 +1991,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         }
     }
     struct ArrayElement {std::string handle;ObjectSerialIdentity identity{};uintptr_t pointer{};};
-    struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::string key;json metadata;std::vector<ArrayElement> elements;ArrayHeader header{};std::vector<uintptr_t> pointers;};
+struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::string key;json metadata;std::vector<ArrayElement> elements;ArrayHeader header{};std::vector<uintptr_t> pointers;std::vector<std::byte> enum_bytes;size_t stride{8};};
     std::vector<ObjectArrayInput> array_inputs;
     object_array_input_lifetime::Ledger array_ledger;
     bool array_cleanup_done=false;
@@ -2012,14 +2025,24 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         for(const auto field:parameter_fields) {
             const auto flags=read<uint64_t>(field+0x38);
             if((flags&0x400) || field_type(field,[this](auto value){return name(value);})!="ArrayProperty")continue;
-            const auto metadata=capture_object_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags);
+            const auto metadata=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);})=="ObjectProperty"?capture_object_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags)
+                :capture_enum_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags);
             const auto key=name(read<uint64_t>(field+0x20));
             if(!arguments.contains(key))throw HandlerError("missing_argument","Object array argument is missing: "+key);
             const auto& values=arguments.at(key);
             if(!values.is_array())
                 throw HandlerError("invalid_argument","Object array requires a JSON array");
-            budget.add(values.size());
+            const bool enum_array=metadata.contains("enum");
+            budget.add(values.size(),enum_array?1:8);
             ObjectArrayInput input{field,read<int32_t>(field+0x44),flags,key,metadata,{},{},{}};
+            if(enum_array) {
+                input.stride=1;input.enum_bytes.reserve(values.size());
+                for(const auto& value:values) {
+                    const auto encoded=enum_arguments::encode_integer("ByteProperty",1,value);
+                    input.enum_bytes.push_back(encoded.bytes[0]);
+                }
+                array_inputs.push_back(std::move(input));continue;
+            }
             input.elements.reserve(values.size());
             input.pointers.resize(values.size());
             const auto declared=reinterpret_cast<void*>(metadata.at("property_class").get<uintptr_t>());
@@ -2040,6 +2063,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     }
     auto validate_array_elements=[&] {
         for(const auto& input:array_inputs) {
+            if(input.stride==1)continue;
             const auto declared=reinterpret_cast<void*>(input.metadata.at("property_class").get<uintptr_t>());
             for(const auto& element:input.elements)if(!element.handle.empty()) {
                 auto current=resolve(element.handle);
@@ -2059,6 +2083,14 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                 throw HandlerError("array_lifetime_unknown","The Object array header is unavailable");
             }
             array_ledger.validate_unchanged_input(index,current);
+            if(input.stride==1) {
+                std::vector<std::byte> copied(input.enum_bytes.size());
+                if((current.count && !copy_memory(copied.data(),reinterpret_cast<void*>(current.data),copied.size())) || copied!=input.enum_bytes) {
+                    array_ledger.mark_uncertain();array_quarantine_cause=3;
+                    throw HandlerError("array_lifetime_unknown","The enum array values changed during the call");
+                }
+                continue;
+            }
             if(current.count && !copy_memory(input.pointers.data(),reinterpret_cast<void*>(current.data),input.elements.size()*sizeof(uintptr_t))) {
                 array_ledger.mark_uncertain();array_quarantine_cause=3;
                 throw HandlerError("array_lifetime_unknown","Object array bytes are unavailable");
@@ -2472,9 +2504,10 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         const auto allocator_contract=capture_function_contract(object,function_owner,function,target_handle);
         require_same_function_contract(pod_function_contract,allocator_contract);
         if(expected_token)require_same_function_contract(expected_contract,allocator_contract);
-        const auto count=static_cast<int32_t>(input.elements.size());ArrayHeader header{};
+    const auto input_count=input.stride==1?input.enum_bytes.size():input.elements.size();
+    const auto count=static_cast<int32_t>(input_count);ArrayHeader header{};
         if(count) {
-            void* memory{};const auto allocation_bytes=static_cast<size_t>(count)*sizeof(uintptr_t);
+        void* memory{};const auto allocation_bytes=static_cast<size_t>(count)*input.stride;
             if(!allocate_object_array(base_+kObjectArrayRealloc,allocation_bytes,&memory)) {
                 array_ledger.mark_uncertain();array_quarantine_cause=1;
                 extra_array_count=1;extra_array_bytes=allocation_bytes;
@@ -2483,12 +2516,17 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             header={reinterpret_cast<uintptr_t>(memory),count,count};
             extra_array_count=memory?1:0;extra_array_bytes=allocation_bytes;
         }
-        array_quarantine_cause=4;array_ledger.add_input(header,input.elements.size());
+    array_quarantine_cause=4;array_ledger.add_input(header,input_count,input.stride);
         extra_array_count=extra_array_bytes=0;array_quarantine_cause=0;input.header=header;
         if(count) {
+        if(input.stride==1) {
+            if(!copy_memory(reinterpret_cast<void*>(header.data),input.enum_bytes.data(),input.enum_bytes.size()))
+                throw HandlerError("invalid_memory","The engine enum array buffer is unavailable for writing");
+        } else {
             for(size_t index=0;index<input.elements.size();++index)input.pointers[index]=input.elements[index].pointer;
             if(!copy_memory(reinterpret_cast<void*>(header.data),input.pointers.data(),static_cast<size_t>(count)*sizeof(uintptr_t)))
                 throw HandlerError("invalid_memory","The engine Object array buffer is unavailable for writing");
+        }
         }
         std::memcpy(buffer+input.offset,&header,sizeof(header));
     }
