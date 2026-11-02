@@ -145,7 +145,7 @@ private:
     nlohmann::json read_container(const nlohmann::json& params,bool map);
     nlohmann::json capture_object_set_return(std::uintptr_t field,int size,int dim) const;
     nlohmann::json read_object_set_return(std::uintptr_t field,std::uintptr_t address,const nlohmann::json& metadata);
-    nlohmann::json capture_object_array_return(std::uintptr_t field,int size,int dim) const;
+    nlohmann::json capture_object_array_return(std::uintptr_t field,int size,int dim,bool output=false) const;
     nlohmann::json read_object_array_return(std::uintptr_t field,std::uintptr_t address,const nlohmann::json& metadata);
     nlohmann::json read_struct(void* object, const std::string& handle, const std::string& property_name);
     vector_layout::Snapshot capture_vector_parameter(std::uintptr_t field,int size,int dim) const;

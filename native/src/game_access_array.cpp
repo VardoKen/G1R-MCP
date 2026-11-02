@@ -13,16 +13,17 @@ namespace g1r_mcp {
 using json=nlohmann::json;
 using game_memory::read;
 
-json GameAccess::capture_object_array_return(uintptr_t field,int size,int dim) const {
+json GameAccess::capture_object_array_return(uintptr_t field,int size,int dim,bool output) const {
     const auto flags=read<uint64_t>(field+0x38);
     if(game_memory::field_type(field,[this](uint64_t value){return name(value);})!="ArrayProperty" || size!=16 || dim!=1
-       || read<int32_t>(field+0x34)!=size || read<int32_t>(field+0x30)!=dim || !(flags&0x80) || !(flags&0x400)
+       || read<int32_t>(field+0x34)!=size || read<int32_t>(field+0x30)!=dim || !(flags&0x80)
+       || (output ? (!(flags&0x100) || (flags&0x400)) : !(flags&0x400))
        || (flags&(uint64_t{0x2}|uint64_t{0x08000000})))
-        throw HandlerError("unsupported_signature","Object arrays require a 16-byte return by value");
+        throw HandlerError("unsupported_signature",output ? "Object arrays require a 16-byte pure output parameter" : "Object arrays require a 16-byte return by value");
     const auto inner=read<uintptr_t>(field+0x78),klass=read<uintptr_t>(inner+8);
     const auto inner_name=read<uint64_t>(inner+0x20),type_name=read<uint64_t>(klass);
     if(name(type_name)!="ObjectProperty" || read<int32_t>(inner+0x34)!=8 || read<int32_t>(inner+0x30)!=1 || read<int32_t>(inner+0x44)!=0)
-        throw HandlerError("unsupported_signature","The returned array requires exact ObjectProperty elements");
+        throw HandlerError("unsupported_signature",output ? "The output array requires exact ObjectProperty elements" : "The returned array requires exact ObjectProperty elements");
     const auto declared=read<uintptr_t>(inner+0x70);validate_class(reinterpret_cast<void*>(declared));
     const auto identity=serial_identity(validate_object(reinterpret_cast<void*>(declared)));
     const auto field_class=read<uintptr_t>(field+8);
@@ -40,12 +41,13 @@ json GameAccess::capture_object_array_return(uintptr_t field,int size,int dim) c
 }
 
 json GameAccess::read_object_array_return(uintptr_t field,uintptr_t address,const json& metadata) {
-    if(capture_object_array_return(field,16,1)!=metadata)throw HandlerError("signature_changed","The returned array metadata changed after the call");
+    const bool output=!(metadata.at("outer").at("flags").get<uint64_t>()&0x400);
+    if(capture_object_array_return(field,16,1,output)!=metadata)throw HandlerError("signature_changed",output ? "The output array metadata changed after the call" : "The returned array metadata changed after the call");
     const auto header=read<ArrayHeader>(address);
     const auto page=array_page(header,8,1,0,std::numeric_limits<size_t>::max());
     std::vector<std::byte> copied(page.bytes);
     if(page.bytes && !game_memory::copy(copied.data(),reinterpret_cast<void*>(page.begin),page.bytes))
-        throw HandlerError("invalid_memory","The returned array elements are unavailable");
+        throw HandlerError("invalid_memory",output ? "The output array elements are unavailable" : "The returned array elements are unavailable");
     json items=json::array();bool partial=false;const auto inner=metadata.at("inner").at("pointer").get<uintptr_t>();
     for(int32_t index=0;index<page.count;++index) {
         json item={{"index",index},{"supported",false}};
@@ -55,8 +57,8 @@ json GameAccess::read_object_array_return(uintptr_t field,uintptr_t address,cons
         } catch(const HandlerError& error) {item["error"]={{"code",error.code()},{"message",error.what()}};partial=true;}
         items.push_back(std::move(item));
     }
-    if(capture_object_array_return(field,16,1)!=metadata || !same_array_header(header,read<ArrayHeader>(address)))
-        throw HandlerError("array_changed","The returned array metadata or header changed during the read");
+    if(capture_object_array_return(field,16,1,output)!=metadata || !same_array_header(header,read<ArrayHeader>(address)))
+        throw HandlerError("array_changed",output ? "The output array metadata or header changed during the read" : "The returned array metadata or header changed during the read");
     return {{"items",std::move(items)},{"total_count",header.count},{"partial",partial}};
 }
 

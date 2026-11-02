@@ -590,7 +590,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.94"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.95"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -1515,7 +1515,10 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                 const auto array=capture_object_array_return(field,size,array_dim);
                 captured["aux"]={{"object_array_return",array}};array_public=array.at("public");supported=true;
             } else {
-                if(field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);})=="ObjectProperty") {
+                if((flags&0x100) && !(flags&kConstParm)) {
+                    const auto array=capture_object_array_return(field,size,array_dim,true);
+                    captured["aux"]={{"object_array_output",array}};array_public=array.at("public");supported=true;
+                } else if(field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);})=="ObjectProperty") {
                     const auto array=capture_object_array_parameter(field,size,array_dim,flags);
                     captured["aux"]={{"object_array",array}};array_public=array.at("public");supported=true;
                 } else {
@@ -1602,9 +1605,14 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
             public_parameter["array"]=array_public;public_parameter["direction"]=returned?"return":"input";public_parameter["passing"]=returned?"value":"const_reference";
             if(!returned) {
                 const bool enum_array=captured["aux"].contains("enum_array");
-                if(enum_array)public_parameter["passing"]="value";
-                public_parameter["argument_constraints"]={{"max_elements",std::numeric_limits<int32_t>::max()},
-                    {"element_form",enum_array?"integer":"null_or_handle"},{"ownership",enum_array?"engine_owned_copy":"engine_owned_pointer_copy"}};
+                if(captured["aux"].contains("object_array_output")) {
+                    public_parameter["direction"]="output";public_parameter.erase("passing");
+                    public_parameter["argument_marker"]={{"out",true}};
+                } else {
+                    if(enum_array)public_parameter["passing"]="value";
+                    public_parameter["argument_constraints"]={{"max_elements",std::numeric_limits<int32_t>::max()},
+                        {"element_form",enum_array?"integer":"null_or_handle"},{"ownership",enum_array?"engine_owned_copy":"engine_owned_pointer_copy"}};
+                }
             }
         }
         if(!color_public.is_null()) {
@@ -1687,7 +1695,10 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                 if(capture_object_array_return(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>())!=auxiliary.at("object_array_return"))
                     throw HandlerError("signature_changed","The returned object array metadata changed while reading the signature");
             } else {
-                if(auxiliary.contains("enum_array")) {
+                if(auxiliary.contains("object_array_output")) {
+                    if(capture_object_array_return(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>(),true)!=auxiliary.at("object_array_output"))
+                        throw HandlerError("signature_changed","The object array output metadata changed while reading the signature");
+                } else if(auxiliary.contains("enum_array")) {
                     if(capture_enum_array_parameter(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>(),captured.at("flags").get<uint64_t>())!=auxiliary.at("enum_array"))
                         throw HandlerError("signature_changed","The enum array metadata changed while reading the signature");
                 } else {
@@ -1958,7 +1969,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     json array_return_metadata=nullptr;
     json pod_function_contract=nullptr;
     bool contains_vector=false,contains_transform=false,contains_color=false,contains_rotator=false,contains_scalar_struct=false,contains_scalar_output=false,contains_string_input=false,contains_object_array=false,contains_set_return=false;
-    bool has_string_return=false,contains_array_return=false;
+    bool has_string_return=false,contains_array_return=false,contains_array_output=false;
     for(const auto field:parameter_fields) {
         const auto type=field_type(field,[this](auto f){return name(f);});const auto flags=read<uint64_t>(field+0x38);
         if(type=="StructProperty") {
@@ -1972,12 +1983,16 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         if(supported_scalar_output_type(type) && (flags&0x100) && !(flags&0x400))contains_scalar_output=true;
         if(type=="StrProperty" && !(flags&0x400))contains_string_input=true;
         if(type=="StrProperty" && (flags&0x400))has_string_return=true;
-        if(type=="ArrayProperty" && !(flags&0x400))contains_object_array=true;
+        if(type=="ArrayProperty" && !(flags&0x400)) {
+            if((flags&0x100) && !(flags&0x2))contains_array_output=true;
+            else contains_object_array=true;
+        }
         if(type=="ArrayProperty" && (flags&0x400))contains_array_return=true;
         if(type=="SetProperty" && (flags&0x400))contains_set_return=true;
     }
     const bool contains_container_return=contains_set_return || contains_array_return;
-    const bool strict_pod_contract=contains_vector || contains_transform || contains_color || contains_rotator || contains_scalar_struct || contains_scalar_output || contains_string_input || contains_object_array || contains_set_return || contains_array_return;
+    const bool contains_owned_containers=contains_container_return || contains_array_output;
+    const bool strict_pod_contract=contains_vector || contains_transform || contains_color || contains_rotator || contains_scalar_struct || contains_scalar_output || contains_string_input || contains_object_array || contains_owned_containers;
     if(strict_pod_contract) {
         pod_function_contract=capture_function_contract(object,function_owner,function,target_handle);
         std::vector<std::pair<int,int>> intervals;
@@ -1993,6 +2008,8 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     struct ArrayElement {std::string handle;ObjectSerialIdentity identity{};uintptr_t pointer{};};
 struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::string key;json metadata;std::vector<ArrayElement> elements;ArrayHeader header{};std::vector<uintptr_t> pointers;std::vector<std::byte> enum_bytes;size_t stride{8};};
     std::vector<ObjectArrayInput> array_inputs;
+    struct ObjectArrayOutput {uintptr_t field{};int offset{};json metadata;std::string key;};
+    std::vector<ObjectArrayOutput> array_outputs;
     object_array_input_lifetime::Ledger array_ledger;
     bool array_cleanup_done=false;
     CleanupOnce<object_array_input_lifetime::Cleanup> array_cleanup_once;
@@ -2024,7 +2041,7 @@ struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::st
         array_inputs.reserve(parameter_fields.size());
         for(const auto field:parameter_fields) {
             const auto flags=read<uint64_t>(field+0x38);
-            if((flags&0x400) || field_type(field,[this](auto value){return name(value);})!="ArrayProperty")continue;
+            if((flags&0x400) || ((flags&0x100) && !(flags&0x2)) || field_type(field,[this](auto value){return name(value);})!="ArrayProperty")continue;
             const auto metadata=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);})=="ObjectProperty"?capture_object_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags)
                 :capture_enum_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags);
             const auto key=name(read<uint64_t>(field+0x20));
@@ -2108,28 +2125,35 @@ struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::st
     as_exception_capture::State script_errors;
     bool string_event_started=false,string_event_completed=false,string_return_registered=false,string_cleanup_done=false;
     bool container_return_cleanup_done=false,container_return_cleanup_confirmed=false;
-    auto release_container_return=[&]() {
-        if(!contains_container_return)return true;
+    auto release_containers=[&]() {
+        if(!contains_owned_containers)return true;
         if(container_return_cleanup_done)return container_return_cleanup_confirmed;
         container_return_cleanup_done=true;
-        std::array<std::byte,80> header{};
-        const auto header_size=contains_array_return?size_t{16}:header.size();
-        if(!copy_memory(header.data(),buffer+return_offset,header_size))return false;
         std::set<uintptr_t> allocations;
-        for(const auto pointer_offset:{size_t{0},size_t{32},size_t{64}}) {
-            uintptr_t pointer{};std::memcpy(&pointer,header.data()+pointer_offset,sizeof(pointer));
-            if(pointer)allocations.insert(pointer);
-        }
         bool confirmed=true;
+        auto collect=[&](int offset,bool set_return) {
+            std::array<std::byte,80> header{};
+            const auto header_size=set_return?header.size():size_t{16};
+            if(!copy_memory(header.data(),buffer+offset,header_size)){confirmed=false;return;}
+            for(const auto pointer_offset:{size_t{0},size_t{32},size_t{64}}) {
+                uintptr_t pointer{};std::memcpy(&pointer,header.data()+pointer_offset,sizeof(pointer));
+                if(pointer)allocations.insert(pointer);
+            }
+        };
+        if(contains_container_return)collect(return_offset,contains_set_return);
+        for(const auto& output:array_outputs)collect(output.offset,false);
         for(const auto allocation:allocations)
             if(!free_string(base_+kFree,reinterpret_cast<void*>(allocation)))confirmed=false;
-        std::memset(buffer+return_offset,0,header_size);container_return_cleanup_done=true;container_return_cleanup_confirmed=confirmed;
+        if(contains_container_return)std::memset(buffer+return_offset,0,contains_set_return?size_t{80}:size_t{16});
+        for(const auto& output:array_outputs)std::memset(buffer+output.offset,0,16);
+        container_return_cleanup_confirmed=confirmed;
         return container_return_cleanup_confirmed;
     };
     auto record_container_cleanup=[&](json& details) {
-        if(!contains_container_return)return;
+        if(!contains_owned_containers)return;
         const bool confirmed=!string_event_started || (string_event_completed && !script_errors.exception_count && container_return_cleanup_confirmed);
-        details["return_cleanup_confirmed"]=confirmed;
+        if(contains_container_return)details["return_cleanup_confirmed"]=confirmed;
+        if(contains_array_output)details["array_output_cleanup_confirmed"]=confirmed;
         details["cleanup_confirmed"]=details.value("cleanup_confirmed",true) && confirmed;
         details["cleanup_state"]=details["cleanup_confirmed"].get<bool>()?"released":"unknown";
     };
@@ -2372,6 +2396,17 @@ struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::st
             ++input_count;continue;
         }
         if(type=="ArrayProperty") {
+            if((flags&0x100) && !(flags&0x2)) {
+                if(!contains_array_output)throw HandlerError("signature_changed","The Object array output appeared after reading the complete signature");
+                const auto metadata=capture_object_array_return(field,size,read<int32_t>(field+0x30),true);
+                const auto key=name(read<uint64_t>(field+0x20));
+                if(!arguments.contains(key))throw HandlerError("missing_argument","Object array output argument is missing: "+key);
+                parameter_direction::validate_output_marker(arguments.at(key));
+                if(offset%8)throw HandlerError("unsupported_signature","The Object array output offset is not aligned");
+                std::memset(buffer+offset,0,16);
+                array_outputs.push_back({field,offset,metadata,key});
+                ++input_count;continue;
+            }
             if(!contains_object_array)throw HandlerError("signature_changed","Object array appeared after reading the complete signature");
             auto input=std::find_if(array_inputs.begin(),array_inputs.end(),[field](const auto& value){return value.field==field;});
             if(input==array_inputs.end() || input->offset!=offset || input->flags!=flags || size!=16 || offset%8)
@@ -2574,8 +2609,10 @@ struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::st
             details["cleanup_attempted"]=false;details["cleanup_confirmed"]=false;
             details["cleanup_state"]="unknown";
         }
-        if(contains_container_return) {
-            details["return_cleanup_confirmed"]=false;details["cleanup_confirmed"]=false;
+        if(contains_owned_containers) {
+            if(contains_container_return)details["return_cleanup_confirmed"]=false;
+            if(contains_array_output)details["array_output_cleanup_confirmed"]=false;
+            details["cleanup_confirmed"]=false;
             details["cleanup_state"]="unknown";
         }
         throw HandlerError("game_call_fault","The game call raised a native exception; its effect is unknown",std::move(details));
@@ -2585,8 +2622,10 @@ struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::st
         json details={{"executed",true},{"may_have_executed",true},{"do_not_retry",true},
             {"process_event_returned",true},{"script_completion_confirmed",false},
             {"script_errors",as_exception_capture::describe(script_errors)}};
-        if(return_type=="StrProperty" || contains_container_return) {
-            details["return_cleanup_confirmed"]=false;details["cleanup_confirmed"]=false;
+        if(return_type=="StrProperty" || contains_owned_containers) {
+            if(return_type=="StrProperty" || contains_container_return)details["return_cleanup_confirmed"]=false;
+            if(contains_array_output)details["array_output_cleanup_confirmed"]=false;
+            details["cleanup_confirmed"]=false;
         }
         if(contains_string_input) {
             try {validate_string_inputs();}
@@ -2707,16 +2746,24 @@ struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::st
     };
     auto decode_pod_outputs=[&] {
         auto require_transform_result_contract=[&] {
-            if(!contains_transform && !contains_color && !contains_rotator && !contains_scalar_struct && !contains_string_input && !contains_object_array && !contains_container_return)return;
+            if(!contains_transform && !contains_color && !contains_rotator && !contains_scalar_struct && !contains_string_input && !contains_object_array && !contains_owned_containers)return;
             if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(validate_object(object))))
                 throw HandlerError("stale_handle","The target changed while processing the POD call result");
             require_same_function_contract(pod_function_contract,capture_function_contract(object,function_owner,function,target_handle));
         };
         require_transform_result_contract();
         decode_vector_outputs();decode_color_outputs();decode_transform_return();decode_scalar_outputs();decode_scalar_struct_return();
+        for(const auto& output:array_outputs) {
+            out_parameters[output.key]=read_object_array_return(output.field,reinterpret_cast<uintptr_t>(buffer+output.offset),output.metadata);
+            out_parameter_metadata[output.key]=output.metadata.at("public");
+        }
         require_transform_result_contract();
     };
     auto append_pod_results=[&](json response) {
+        if(contains_owned_containers) {
+            if(!release_containers())throw HandlerError("game_result_error","Object container release is unconfirmed; do not repeat the request");
+            record_container_cleanup(response);
+        }
         if(!result_metadata.is_null())response["result_metadata"]=result_metadata;
         if(!out_parameters.empty()) {
             response["out_parameters"]=out_parameters;response["out_parameter_metadata"]=out_parameter_metadata;
@@ -2775,20 +2822,20 @@ struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::st
             result=returned.at("value");if(returned.contains("enum"))return_enum=returned.at("enum");
         } else result=return_field?property_value(reinterpret_cast<uintptr_t>(buffer+return_offset),return_type,return_size,return_field):json(nullptr);
         decode_pod_outputs();
-        if(contains_container_return && !release_container_return())
-            throw HandlerError("game_result_error","Returned object container release is unconfirmed; do not repeat the request");
+        if(contains_owned_containers && !release_containers())
+            throw HandlerError("game_result_error","Object container release is unconfirmed; do not repeat the request");
     }
     catch(const HandlerError& error) {
         json details={{"executed",true},{"may_have_executed",true},{"do_not_retry",true},{"cause_code",error.code()}};
-        if(contains_container_return)details["return_cleanup_confirmed"]=details["cleanup_confirmed"]=release_container_return();
+        if(contains_owned_containers){release_containers();record_container_cleanup(details);}
         throw HandlerError("game_result_error","The call executed but its result was not obtained; do not repeat the request",std::move(details));
     } catch(...) {
         json details={{"executed",true},{"may_have_executed",true},{"do_not_retry",true},{"cause_code","result_processing_failed"}};
-        if(contains_container_return)details["return_cleanup_confirmed"]=details["cleanup_confirmed"]=release_container_return();
+        if(contains_owned_containers){release_containers();record_container_cleanup(details);}
         throw HandlerError("game_result_error","The call executed but its result was not obtained; do not repeat the request",std::move(details));
     }
     json response={{"function",function_name},{"return_type",return_type},{"result",result},{"executed",true},{"thread_id",GetCurrentThreadId()}};
-    if(contains_container_return)response["return_cleanup_confirmed"]=response["cleanup_confirmed"]=container_return_cleanup_confirmed;
+    record_container_cleanup(response);
     if(!return_enum.is_null())response["return_enum"]=return_enum;
     if(contains_string_input) {
         validate_string_inputs();const auto cleanup=release_strings();
@@ -2802,7 +2849,7 @@ struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::st
     }
     return append_pod_results(std::move(response));
     } catch(const HandlerError& error) {
-        if(contains_container_return && string_event_completed && !script_errors.exception_count)release_container_return();
+        if(contains_owned_containers && string_event_completed && !script_errors.exception_count)release_containers();
         if(error.code()=="angelscript_exception")throw;
         if(contains_object_array) {
             if(string_event_completed && !array_cleanup_done && !array_ledger.uncertain()) {
@@ -2827,7 +2874,7 @@ struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::st
             throw HandlerError(error.code(),error.what(),std::move(details));
         }
         if(!contains_string_input) {
-            if(contains_container_return) {
+            if(contains_owned_containers) {
                 auto details=error.details();record_container_cleanup(details);
                 throw HandlerError(error.code(),error.what(),std::move(details));
             }
@@ -2860,7 +2907,7 @@ struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::st
                 string_event_started?"The call effect is unknown; FString ownership is unconfirmed":"The call did not execute; FString ownership is unconfirmed",std::move(details));
         throw HandlerError(error.code(),error.what(),std::move(details));
     } catch(...) {
-        if(contains_container_return && string_event_completed && !script_errors.exception_count)release_container_return();
+        if(contains_owned_containers && string_event_completed && !script_errors.exception_count)release_containers();
         if(contains_object_array) {
             if(string_event_completed && !array_cleanup_done && !array_ledger.uncertain()) {
                 try{validate_array_inputs();}
@@ -2882,7 +2929,7 @@ struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::st
             throw HandlerError("game_result_error","Object array processing is incomplete; do not repeat the request",std::move(details));
         }
         if(!contains_string_input) {
-            if(contains_container_return) {
+            if(contains_owned_containers) {
                 json details={{"executed",string_event_completed},{"may_have_executed",string_event_started},{"do_not_retry",true},{"cause_code","result_processing_failed"}};
                 record_container_cleanup(details);
                 if(script_errors.exception_count) {
@@ -2890,7 +2937,7 @@ struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::st
                     details["script_errors"]={{"exception_count",script_errors.exception_count},{"full_capture",false}};
                     throw HandlerError("angelscript_exception","An AngelScript exception was recorded; the complete report could not be prepared",std::move(details));
                 }
-                throw HandlerError("game_result_error","Returned object set processing is incomplete; do not repeat the request",std::move(details));
+                throw HandlerError("game_result_error","Object container processing is incomplete; do not repeat the request",std::move(details));
             }
             if(script_errors.exception_count)
                 throw HandlerError("angelscript_exception","An AngelScript exception was recorded; the complete report could not be prepared",
@@ -2907,18 +2954,25 @@ struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::st
             string_ledger.mark_uncertain();string_quarantine_cause=4;
         }
         const auto cleanup=release_strings();
-        if(script_errors.exception_count)
-            throw HandlerError("angelscript_exception","An AngelScript exception was recorded; the complete report could not be prepared",
+        if(script_errors.exception_count) {
+            json details=
                 {{"executed",true},{"may_have_executed",true},{"do_not_retry",true},{"process_event_returned",string_event_completed},
                  {"script_completion_confirmed",false},{"script_errors",{{"source","observed_logging_entry"},
                     {"exception_count",script_errors.exception_count},{"full_capture",false},{"messages",json::array()},{"stack_captured",false}}},
-                 {"input_cleanup_confirmed",cleanup.confirmed},{"cleanup_confirmed",cleanup.confirmed && !contains_container_return},
-                 {"return_cleanup_confirmed",return_type!="StrProperty" && !contains_container_return}});
-        throw HandlerError("game_result_error","FString processing is incomplete; do not repeat the request",
+                 {"input_cleanup_confirmed",cleanup.confirmed},{"cleanup_confirmed",cleanup.confirmed && !contains_owned_containers},
+                 {"return_cleanup_confirmed",return_type!="StrProperty" && !contains_container_return}};
+            record_container_cleanup(details);
+            throw HandlerError("angelscript_exception","An AngelScript exception was recorded; the complete report could not be prepared",
+                std::move(details));
+        }
+        json details=
             {{"executed",string_event_completed},{"may_have_executed",string_event_started},{"do_not_retry",true},{"cause_code","result_processing_failed"},
-             {"cleanup_attempted",cleanup.attempted},{"cleanup_confirmed",cleanup.confirmed && (!contains_container_return || container_return_cleanup_confirmed)},
+             {"cleanup_attempted",cleanup.attempted},{"cleanup_confirmed",cleanup.confirmed && (!contains_owned_containers || container_return_cleanup_confirmed)},
              {"return_cleanup_confirmed",!contains_container_return || container_return_cleanup_confirmed},{"input_cleanup_confirmed",cleanup.confirmed},
-             {"cleanup_state",cleanup.confirmed && (!contains_container_return || container_return_cleanup_confirmed)?"released":"unknown"},{"string_input_quarantined",string_inputs_quarantined_.load()}});
+             {"cleanup_state",cleanup.confirmed && (!contains_owned_containers || container_return_cleanup_confirmed)?"released":"unknown"},{"string_input_quarantined",string_inputs_quarantined_.load()}};
+        record_container_cleanup(details);
+        throw HandlerError("game_result_error","FString processing is incomplete; do not repeat the request",
+            std::move(details));
     }
 }
 json GameAccess::execute(const json& request) {
