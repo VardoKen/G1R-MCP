@@ -36,6 +36,96 @@ struct SetLayout {
     bool operator==(const SetLayout&) const=default;
 };
 static_assert(sizeof(SetLayout)==20);
+std::vector<uint32_t> container_bitmap(const ContainerHeader& header) {
+    const auto word_count=(static_cast<size_t>(header.num_bits)+31)/32;
+    std::vector<uint32_t> words(word_count);
+    if(header.bitmap_heap) {
+        if(word_count && !game_memory::copy(words.data(),reinterpret_cast<void*>(header.bitmap_heap),word_count*sizeof(uint32_t)))
+            throw HandlerError("invalid_memory","The container allocation bitmap is unavailable");
+    } else {
+        if(word_count>header.inline_bitmap.size())throw HandlerError("invalid_container_header","The allocation bitmap exceeds its inline storage");
+        std::copy_n(header.inline_bitmap.begin(),word_count,words.begin());
+    }
+    return words;
+}
+struct ContainerPage {
+    ContainerHeader header;
+    std::vector<uint32_t> bitmap;
+    std::vector<int32_t> occupied;
+    std::vector<std::byte> copied;
+    int32_t total_count{},count{};
+};
+ContainerPage copy_container_page(uintptr_t address,const SetLayout& layout,int32_t offset,size_t limit) {
+    ContainerPage page;page.header=read<ContainerHeader>(address);const auto& header=page.header;
+    array_page({header.data,header.max_index,header.capacity},layout.stride,1,0,
+        header.max_index>0?static_cast<size_t>(header.max_index):size_t{1});
+    if(header.num_bits!=header.max_index || header.max_bits<header.num_bits || header.free_count<0 || header.free_count>header.max_index)
+        throw HandlerError("invalid_container_header","The sparse allocation metadata is inconsistent");
+    page.bitmap=container_bitmap(header);
+    for(int32_t sparse_index=0;sparse_index<header.max_index;++sparse_index)
+        if(page.bitmap[static_cast<size_t>(sparse_index)/32]&(uint32_t{1}<<(sparse_index&31)))page.occupied.push_back(sparse_index);
+    page.total_count=header.max_index-header.free_count;
+    if(page.occupied.size()!=static_cast<size_t>(page.total_count))
+        throw HandlerError("invalid_container_header","The sparse allocation bitmap does not match the occupied count");
+    if(offset>page.total_count)throw HandlerError("invalid_container_page","The page offset exceeds the occupied count");
+    page.count=static_cast<int32_t>(std::min<size_t>(static_cast<size_t>(page.total_count-offset),limit));
+    page.copied.resize(static_cast<size_t>(page.count)*static_cast<size_t>(layout.stride));
+    for(int32_t index=0;index<page.count;++index) {
+        const auto sparse_index=page.occupied[static_cast<size_t>(offset+index)];
+        const auto element_address=header.data+static_cast<uintptr_t>(sparse_index)*static_cast<uintptr_t>(layout.stride);
+        if(!game_memory::copy(page.copied.data()+static_cast<size_t>(index)*static_cast<size_t>(layout.stride),
+            reinterpret_cast<void*>(element_address),static_cast<size_t>(layout.stride)))
+            throw HandlerError("invalid_memory","A container element is unavailable");
+    }
+    return page;
+}
+}
+json GameAccess::capture_object_set_return(uintptr_t field,int size,int dim) const {
+    const auto flags=read<uint64_t>(field+0x38);
+    if(game_memory::field_type(field,[this](uint64_t value){return name(value);})!="SetProperty" || size!=80 || dim!=1
+       || read<int32_t>(field+0x34)!=size || read<int32_t>(field+0x30)!=dim || !(flags&0x80) || !(flags&0x400)
+       || (flags&(uint64_t{0x2}|uint64_t{0x08000000})))
+        throw HandlerError("unsupported_signature","Object sets require an 80-byte return by value");
+    const auto inner=read<uintptr_t>(field+0x70),klass=read<uintptr_t>(inner+8);
+    const auto inner_name=read<uint64_t>(inner+0x20),type_name=read<uint64_t>(klass);
+    if(name(type_name)!="ObjectProperty" || read<int32_t>(inner+0x34)!=8 || read<int32_t>(inner+0x30)!=1 || read<int32_t>(inner+0x44)!=0)
+        throw HandlerError("unsupported_signature","The returned set requires exact ObjectProperty elements");
+    const auto layout=read<SetLayout>(field+0x78);
+    if(layout.size<8 || layout.stride<layout.size || layout.alignment<1 || (layout.alignment&(layout.alignment-1))
+       || layout.stride%layout.alignment || layout.hash_next_offset<8 || layout.hash_next_offset>layout.size-4
+       || layout.hash_index_offset<layout.hash_next_offset+4 || layout.hash_index_offset>layout.size-4)
+        throw HandlerError("unsupported_container_layout","The reflected sparse element layout is unsupported");
+    const auto declared=read<uintptr_t>(inner+0x70);validate_class(reinterpret_cast<void*>(declared));
+    const auto identity=serial_identity(validate_object(reinterpret_cast<void*>(declared)));
+    const json public_metadata={{"container_type","SetProperty"},{"element",{{"type","ObjectProperty"},{"element_size",8},{"array_dim",1},{"offset",0},
+        {"declared_type",{{"name",object_name(reinterpret_cast<void*>(declared))},{"path",object_path(reinterpret_cast<void*>(declared))}}}}}};
+    return {{"inner",{{"pointer",inner},{"next",read<uintptr_t>(inner+0x18)},{"field_class",klass},{"owner",read<uint64_t>(inner+0x10)},
+        {"name",inner_name},{"type_name",type_name},{"flags",read<uint64_t>(inner+0x38)},{"offset",0},{"element_size",8},{"array_dim",1}}},
+        {"declared",{{"pointer",declared},{"class",identity.object_class},{"index",identity.index},{"name",identity.name},
+            {"serial",identity.serial},{"class_index",identity.class_index},{"class_name",identity.class_name},{"class_serial",identity.class_serial}}},
+        {"layout",{{"hash_next_offset",layout.hash_next_offset},{"hash_index_offset",layout.hash_index_offset},{"size",layout.size},
+            {"alignment",layout.alignment},{"stride",layout.stride}}},
+        {"public",public_metadata}};
+}
+json GameAccess::read_object_set_return(uintptr_t field,uintptr_t address,const json& metadata) {
+    if(capture_object_set_return(field,80,1)!=metadata)throw HandlerError("signature_changed","The returned set metadata changed after the call");
+    const auto& reflected=metadata.at("layout");
+    const SetLayout layout{reflected.at("hash_next_offset").get<int32_t>(),reflected.at("hash_index_offset").get<int32_t>(),
+        reflected.at("size").get<int32_t>(),reflected.at("alignment").get<int32_t>(),reflected.at("stride").get<int32_t>()};
+    const auto page=copy_container_page(address,layout,0,std::numeric_limits<size_t>::max());
+    json items=json::array();bool partial=false;const auto inner=metadata.at("inner").at("pointer").get<uintptr_t>();
+    for(int32_t index=0;index<page.count;++index) {
+        json item={{"index",index},{"sparse_index",page.occupied[static_cast<size_t>(index)]},{"supported",false}};
+        try {
+            item["value"]=property_value(reinterpret_cast<uintptr_t>(page.copied.data()+static_cast<size_t>(index)*static_cast<size_t>(layout.stride)),
+                "ObjectProperty",8,inner);item["supported"]=true;
+        } catch(const HandlerError& error) {item["error"]={{"code",error.code()},{"message",error.what()}};partial=true;}
+        items.push_back(std::move(item));
+    }
+    const auto after=read<ContainerHeader>(address);
+    if(capture_object_set_return(field,80,1)!=metadata || !(after==page.header) || container_bitmap(after)!=page.bitmap)
+        throw HandlerError("container_changed","The returned set metadata, header or bitmap changed during the read");
+    return {{"items",std::move(items)},{"total_count",page.total_count},{"max_index",page.header.max_index},{"partial",partial}};
 }
 json GameAccess::read_set(const json& params) {return read_container(params,false);}
 json GameAccess::read_map(const json& params) {return read_container(params,true);}
@@ -129,43 +219,12 @@ json GameAccess::read_container(const json& params,bool map) {
     if(object_address>std::numeric_limits<uintptr_t>::max()-static_cast<uintptr_t>(metadata.field.component.offset)-sizeof(ContainerHeader))
         throw HandlerError("invalid_container_header","The container header address overflows");
     const auto header_address=object_address+static_cast<uintptr_t>(metadata.field.component.offset);
-    const auto header=read<ContainerHeader>(header_address);
-    array_page({header.data,header.max_index,header.capacity},metadata.layout.stride,1,0,
-        header.max_index>0?static_cast<size_t>(header.max_index):size_t{1});
-    if(header.num_bits!=header.max_index || header.max_bits<header.num_bits || header.free_count<0 || header.free_count>header.max_index)
-        throw HandlerError("invalid_container_header","The sparse allocation metadata is inconsistent");
-    auto capture_bitmap=[&](const ContainerHeader& value) {
-        const auto word_count=(static_cast<size_t>(value.num_bits)+31)/32;
-        std::vector<uint32_t> words(word_count);
-        if(value.bitmap_heap) {
-            if(word_count && !game_memory::copy(words.data(),reinterpret_cast<void*>(value.bitmap_heap),word_count*sizeof(uint32_t)))
-                throw HandlerError("invalid_memory","The container allocation bitmap is unavailable");
-        } else {
-            if(word_count>value.inline_bitmap.size())throw HandlerError("invalid_container_header","The allocation bitmap exceeds its inline storage");
-            std::copy_n(value.inline_bitmap.begin(),word_count,words.begin());
-        }
-        return words;
-    };
-    const auto bitmap=capture_bitmap(header);std::vector<int32_t> occupied;
-    for(int32_t sparse_index=0;sparse_index<header.max_index;++sparse_index)
-        if(bitmap[static_cast<size_t>(sparse_index)/32]&(uint32_t{1}<<(sparse_index&31)))occupied.push_back(sparse_index);
-    const auto total_count=header.max_index-header.free_count;
-    if(occupied.size()!=static_cast<size_t>(total_count))
-        throw HandlerError("invalid_container_header","The sparse allocation bitmap does not match the occupied count");
-    if(offset>total_count)throw HandlerError("invalid_container_page","The page offset exceeds the occupied count");
-    const auto count=static_cast<int32_t>(std::min<size_t>(static_cast<size_t>(total_count-offset),limit));
-    const auto copy_bytes=static_cast<size_t>(count)*static_cast<size_t>(metadata.layout.stride);
-    std::vector<std::byte> copied(copy_bytes);
-    for(int32_t index=0;index<count;++index) {
-        const auto sparse_index=occupied[static_cast<size_t>(offset+index)];
-        const auto address=header.data+static_cast<uintptr_t>(sparse_index)*static_cast<uintptr_t>(metadata.layout.stride);
-        if(!game_memory::copy(copied.data()+static_cast<size_t>(index)*static_cast<size_t>(metadata.layout.stride),
-            reinterpret_cast<void*>(address),static_cast<size_t>(metadata.layout.stride)))
-            throw HandlerError("invalid_memory","A container element is unavailable");
-    }
+    const auto page=copy_container_page(header_address,metadata.layout,offset,limit);
+    const auto& header=page.header;const auto& bitmap=page.bitmap;const auto& occupied=page.occupied;
+    const auto& copied=page.copied;const auto total_count=page.total_count,count=page.count;
     auto revalidate=[&]() {
         const auto after=capture();const auto current_header=read<ContainerHeader>(header_address);
-        if(!(metadata==after) || !(header==current_header) || bitmap!=capture_bitmap(current_header)
+        if(!(metadata==after) || !(header==current_header) || bitmap!=container_bitmap(current_header)
            || !same_serial_identity(initial,serial_identity(validate_object(object))) || resolve(handle)!=object)
             throw HandlerError("container_changed","The object, container metadata, header or bitmap changed during the read");
     };
