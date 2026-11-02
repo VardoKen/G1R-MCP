@@ -423,7 +423,7 @@ json GameAccess::read_struct(void* object,const std::string& handle,const std::s
     if(resolve(handle)!=object)throw HandlerError("stale_handle","The struct handle changed");
     for(const auto& [header_address,header]:copied_arrays)
         if(!same_array_header(header,read<ArrayHeader>(header_address)))
-            throw HandlerError("array_changed","The GameplayTag array header changed while the struct was copied");
+            throw HandlerError("array_changed","A nested array header changed while the struct was copied");
     return {{"source","live_native"},{"session_id",handle_session_},{"handle",handle},{"property_name",property_name},
             {"struct_path",before.structure.path},{"properties_size",before.structure.layout.properties_size},
             {"min_alignment",before.structure.layout.min_alignment},{"components",components},
