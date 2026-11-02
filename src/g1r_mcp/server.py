@@ -635,11 +635,13 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
         except WorkspaceError as error:
             raise _tool_failure(error) from None
 
-    def native_request(operation: str, params: dict[str, Any]) -> dict[str, Any]:
+    def native_request(operation: str, params: dict[str, Any],
+                       timeout_seconds: float | None = None) -> dict[str, Any]:
         try:
             with native_lock:
                 client = native
-            return client.request(operation, params)
+            return client.request(operation, params) if timeout_seconds is None else client.request(
+                operation, params, timeout=timeout_seconds)
         except NativeError as error:
             raise ToolError(json.dumps({"code": error.code, "message": str(error),
                                        "may_have_executed": error.may_have_executed,
@@ -825,14 +827,15 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=False))
-    def g1r_movieplayer_finish(expected_wait_id: StrictStr, ctx: Context = None) -> dict[str, Any]:
+    def g1r_movieplayer_finish(expected_wait_id: StrictStr, ctx: Context = None,
+                                timeout_seconds: float | None = None) -> dict[str, Any]:
         """Explicitly request completion of an exact wait; the finish call, Wait return, and game Tick are distinct."""
         try:
             if transport == "streamable-http":
                 with ownership.lock:
                     ownership.require(request_owner(ctx))
-                    return native_request("movieplayer_finish", {"expected_wait_id": expected_wait_id})
-            return native_request("movieplayer_finish", {"expected_wait_id": expected_wait_id})
+                    return native_request("movieplayer_finish", {"expected_wait_id": expected_wait_id}, timeout_seconds)
+            return native_request("movieplayer_finish", {"expected_wait_id": expected_wait_id}, timeout_seconds)
         except DevelopmentError as error:
             raise ToolError(json.dumps({"code": error.code, "message": str(error),
                                        "outcome_unknown": error.outcome_unknown,
@@ -845,44 +848,47 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_find_objects(query: str = "", class_query: str = "", limit: int = 50,
-                         exact_path: str = "") -> dict[str, Any]:
+                         exact_path: str = "", timeout_seconds: float | None = None) -> dict[str, Any]:
         """Find UObject by partial name/class on game Tick; return opaque handles."""
         params = {"query": query, "class_query": class_query, "limit": limit}
         if exact_path:
             params["exact_path"] = exact_path
-        return native_request("objects", params)
+        return native_request("objects", params, timeout_seconds)
 
     @server.tool(annotations=read_only)
     def g1r_object_properties(handle: str, limit: int = 50,
-                              property_names: list[StrictStr] | None = None) -> dict[str, Any]:
+                              property_names: list[StrictStr] | None = None,
+                              timeout_seconds: float | None = None) -> dict[str, Any]:
         """Read handle properties; property_names selects exact unique names in the specified order."""
         params = {"handle": handle, "limit": limit}
         if property_names is not None:
             params["property_names"] = property_names
-        return native_request("properties", params)
+        return native_request("properties", params, timeout_seconds)
 
     @server.tool(annotations=read_only)
-    def g1r_read_array(handle: str, property_name: str, offset: int = 0, limit: int = 64) -> dict[str, Any]:
+    def g1r_read_array(handle: str, property_name: str, offset: int = 0, limit: int = 64,
+                        timeout_seconds: float | None = None) -> dict[str, Any]:
         """Copy an array page, including scalar DTO structures; pages do not share an atomic snapshot."""
-        return native_request("read_array", {"handle": handle, "property_name": property_name, "offset": offset, "limit": limit})
+        return native_request("read_array", {"handle": handle, "property_name": property_name, "offset": offset, "limit": limit}, timeout_seconds)
 
     @server.tool(annotations=read_only)
-    def g1r_read_struct(handle: str, property_name: str) -> dict[str, Any]:
+    def g1r_read_struct(handle: str, property_name: str, timeout_seconds: float | None = None) -> dict[str, Any]:
         """Copy a structure's owned scalar fields using reflected size and layout without game writes."""
-        return native_request("read_struct", {"handle": handle, "property_name": property_name})
+        return native_request("read_struct", {"handle": handle, "property_name": property_name}, timeout_seconds)
 
     @server.tool(annotations=read_only)
-    def g1r_object_functions(handle: str, limit: int = 50, function_query: str = "") -> dict[str, Any]:
+    def g1r_object_functions(handle: str, limit: int = 50, function_query: str = "",
+                              timeout_seconds: float | None = None) -> dict[str, Any]:
         """Get UFunction, parameters, declared classes, and enums with allowed values."""
         params = {"handle": handle, "limit": limit}
         if function_query:
             params["function_query"] = function_query
-        return native_request("functions", params)
+        return native_request("functions", params, timeout_seconds)
 
     @server.tool(annotations=read_only)
-    def g1r_snapshot(targets: list[dict[str, Any]]) -> dict[str, Any]:
+    def g1r_snapshot(targets: list[dict[str, Any]], timeout_seconds: float | None = None) -> dict[str, Any]:
         """Copy targets={handle, properties:[names]} on one Tick; reads are sequential."""
-        return native_request("snapshot", {"targets": targets})
+        return native_request("snapshot", {"targets": targets}, timeout_seconds)
 
     @server.tool(annotations=read_only)
     def g1r_compare_snapshots(before: dict[str, Any], after: dict[str, Any],
@@ -896,54 +902,59 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=False))
     def g1r_watch_start(handle: str, properties: list[str], duration_ms: int,
-                         interval_ms: int, capacity: int = 32, ctx: Context = None) -> dict[str, Any]:
+                         interval_ms: int, capacity: int = 32, ctx: Context = None,
+                         timeout_seconds: float | None = None) -> dict[str, Any]:
         """Observe selected properties on Tick with explicit duration, interval, and buffer capacity."""
         return native_request("watch_start", {"handle": handle, "properties": properties,
                               "duration_ms": duration_ms, "interval_ms": interval_ms,
-                              "capacity": capacity, "client_owner": watch_owner(ctx)})
+                              "capacity": capacity, "client_owner": watch_owner(ctx)}, timeout_seconds)
 
     @server.tool(annotations=read_only)
     def g1r_watch_read(watch_id: str, after_seq: int = 0, limit: int = 100,
-                       ctx: Context = None) -> dict[str, Any]:
+                       ctx: Context = None, timeout_seconds: float | None = None) -> dict[str, Any]:
         """Read events after seq without deleting them; gaps and overflow are explicitly reported."""
         return native_request("watch_read", {"watch_id": watch_id, "after_seq": after_seq,
-                              "limit": limit, "client_owner": watch_owner(ctx)})
+                              "limit": limit, "client_owner": watch_owner(ctx)}, timeout_seconds)
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=True, openWorldHint=False))
-    def g1r_watch_stop(watch_id: str, ctx: Context = None) -> dict[str, Any]:
+    def g1r_watch_stop(watch_id: str, ctx: Context = None,
+                        timeout_seconds: float | None = None) -> dict[str, Any]:
         """Stop subsequent reads on the game thread; retain final events."""
-        return native_request("watch_stop", {"watch_id": watch_id, "client_owner": watch_owner(ctx)})
+        return native_request("watch_stop", {"watch_id": watch_id, "client_owner": watch_owner(ctx)}, timeout_seconds)
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=False))
-    def g1r_watch_forget(watch_id: str, ctx: Context = None) -> dict[str, Any]:
+    def g1r_watch_forget(watch_id: str, ctx: Context = None,
+                          timeout_seconds: float | None = None) -> dict[str, Any]:
         """Release an already completed observation in the current session."""
-        return native_request("watch_forget", {"watch_id": watch_id, "client_owner": watch_owner(ctx)})
+        return native_request("watch_forget", {"watch_id": watch_id, "client_owner": watch_owner(ctx)}, timeout_seconds)
 
     @server.tool(annotations=read_only)
-    def g1r_watch_list(ctx: Context = None) -> dict[str, Any]:
+    def g1r_watch_list(ctx: Context = None, timeout_seconds: float | None = None) -> dict[str, Any]:
         """List observation metadata for the current native connection without events or values."""
-        return native_request("watch_list", {"client_owner": watch_owner(ctx)})
+        return native_request("watch_list", {"client_owner": watch_owner(ctx)}, timeout_seconds)
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=False))
     def g1r_watch_resume(watch_id: str, expected_session_id: str,
-                         expected_client_owner: str, ctx: Context = None) -> dict[str, Any]:
+                         expected_client_owner: str, ctx: Context = None,
+                         timeout_seconds: float | None = None) -> dict[str, Any]:
         """Explicitly transfer an existing observation to the current client while preserving its state and events."""
         return native_request("watch_resume", {"watch_id": watch_id,
                               "expected_session_id": expected_session_id,
                               "expected_client_owner": expected_client_owner,
-                              "client_owner": watch_owner(ctx)})
+                              "client_owner": watch_owner(ctx)}, timeout_seconds)
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def g1r_invoke(handle: str, function: str, arguments: dict[str, Any] | None = None,
-                    expected_signature_token: StrictStr | None = None) -> dict[str, Any]:
+                    expected_signature_token: StrictStr | None = None,
+                    timeout_seconds: float | None = None) -> dict[str, Any]:
         """Invoke UFunction by signature; a recorded AS runtime error is returned as angelscript_exception. Do not retry an unknown effect."""
         params = {"handle": handle, "function": function, "arguments": arguments or {}}
         if expected_signature_token is not None:
             params["expected_signature_token"] = expected_signature_token
-        return native_request("invoke", params)
+        return native_request("invoke", params, timeout_seconds)
 
     return server
 

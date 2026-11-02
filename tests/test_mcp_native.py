@@ -197,7 +197,7 @@ class MCPNativeTests(unittest.IsolatedAsyncioTestCase):
                 async with ClientSession(incoming, outgoing) as client:
                     await client.initialize()
                     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-                    self.assertEqual(len(tools), 41)
+                    self.assertEqual(len(tools), 49)
                     self.assertFalse(tools["g1r_invoke"].annotations.read_only_hint)
                     self.assertFalse(tools["g1r_native_enable"].annotations.read_only_hint)
                     self.assertFalse(tools["g1r_invoke"].annotations.idempotent_hint)
@@ -206,7 +206,8 @@ class MCPNativeTests(unittest.IsolatedAsyncioTestCase):
                     cases = [
                         ("g1r_native_status", {}, status),
                         ("g1r_native_enable", {}, status),
-                        ("g1r_find_objects", {"query": "Тест", "class_query": "Probe", "limit": 2}, found),
+                        ("g1r_find_objects", {"query": "Тест", "class_query": "Probe", "limit": 2,
+                                              "timeout_seconds": 6}, found),
                         ("g1r_object_properties", {"handle": "obj-1", "limit": 3}, properties),
                         ("g1r_object_functions", {"handle": "obj-1", "limit": 4}, functions),
                         ("g1r_invoke", {"handle": "obj-1", "function": "ReadOnlyProbe"}, invocation),
@@ -234,6 +235,8 @@ class MCPNativeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(list(workspace.iterdir()), [])
             self.assertEqual(native.connections, 1)
             self.assertEqual(len(native.requests), 8)
+            self.assertGreater(native.requests[2]["wait_timeout_ms"], 0)
+            self.assertLessEqual(native.requests[2]["wait_timeout_ms"], 6_000)
             self.assertEqual(len({request["id"] for request in native.requests}), 8)
 
 
