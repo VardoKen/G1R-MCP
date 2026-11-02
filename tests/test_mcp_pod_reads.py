@@ -143,7 +143,7 @@ class MCPPODReadTests(unittest.IsolatedAsyncioTestCase):
                     capabilities = await client.call_tool("g1r_capabilities", {})
                     self.assertFalse(capabilities.is_error, capabilities.content)
                     contract = capabilities.structured_content["struct_values"]
-                    self.assertEqual(contract["component_fields"], ["name", "type", "element_size", "offset", "array_dim", "supported", "value", "enum", "error", "struct_path"])
+                    self.assertEqual(contract["component_fields"], ["name", "type", "element_size", "offset", "array_dim", "supported", "value", "enum", "error", "struct_path", "total_count", "element_struct_path"])
                     self.assertEqual(contract["component_count"], "reflected")
                     self.assertEqual(contract["properties_size"], "reflected")
                     self.assertTrue(contract["own_fields_only"])

@@ -1,5 +1,6 @@
 #include "g1r_mcp/game_access.hpp"
 #include "g1r_mcp/game_memory.hpp"
+#include "g1r_mcp/array_page.hpp"
 #include "g1r_mcp/scalar_struct_values.hpp"
 #include "g1r_mcp/vector_arguments.hpp"
 #include "g1r_mcp/transform_arguments.hpp"
@@ -24,6 +25,7 @@ json GameAccess::read_struct(void* object,const std::string& handle,const std::s
         std::optional<rotator_arguments::Snapshot> rotator;
         std::optional<scalar_struct_values::Snapshot> quat;
         std::optional<linear_color_layout::Snapshot> color;
+        std::optional<scalar_struct_values::Snapshot> gameplay_tag_array;
         json error=nullptr;
         bool operator==(const Child&) const=default;
     };
@@ -103,6 +105,46 @@ json GameAccess::read_struct(void* object,const std::string& handle,const std::s
                             read<int32_t>(underlying+0x34),read<uint64_t>(underlying+0x38),read<int32_t>(underlying+0x44)};
                     }
                     if(enumeration.object)child.auxiliary["enum"]=identity(reinterpret_cast<uintptr_t>(enumeration.object));
+                } else if(type=="ArrayProperty") {
+                    auto& snapshot=child.gameplay_tag_array.emplace();
+                    snapshot.field=read<uintptr_t>(field+0x78);
+                    snapshot.next=read<uintptr_t>(snapshot.field+0x18);snapshot.field_class=read<uintptr_t>(snapshot.field+8);
+                    snapshot.owner=read<uint64_t>(snapshot.field+0x10);snapshot.name=read<uint64_t>(snapshot.field+0x20);
+                    snapshot.type_name=read<uint64_t>(snapshot.field_class);snapshot.flags=read<uint64_t>(snapshot.field+0x38);
+                    snapshot.offset=read<int32_t>(snapshot.field+0x44);snapshot.element_size=read<int32_t>(snapshot.field+0x34);
+                    snapshot.array_dim=read<int32_t>(snapshot.field+0x30);
+                    if(name(snapshot.type_name)!="StructProperty")
+                        throw HandlerError("unsupported_struct_field_type","The array requires exact GameplayTags.GameplayTag elements");
+                    snapshot.structure=read<uintptr_t>(snapshot.field+0x70);
+                    snapshot.identity=serial_identity(validate_object(reinterpret_cast<void*>(snapshot.structure)));
+                    validate_class(reinterpret_cast<void*>(snapshot.identity.object_class));
+                    snapshot.path=object_path(reinterpret_cast<void*>(snapshot.structure));snapshot.struct_name=name(snapshot.identity.name);
+                    snapshot.head=read<uintptr_t>(snapshot.structure+0x50);snapshot.super=read<uintptr_t>(snapshot.structure+0x40);
+                    snapshot.layout={read<int32_t>(snapshot.structure+0x58),read<int32_t>(snapshot.structure+0x5c),snapshot.super!=0,{}};
+                    if(snapshot.path!="/Script/GameplayTags.GameplayTag")
+                        throw HandlerError("unsupported_struct_field_type","The array requires exact GameplayTags.GameplayTag elements");
+                    if(snapshot.array_dim!=1 || snapshot.element_size<1 || snapshot.layout.properties_size!=snapshot.element_size)
+                        throw HandlerError("unsupported_struct_field_layout","GameplayTag elements require a matching reflected size and ArrayDim");
+                    std::set<uintptr_t> tag_fields;bool has_tag_name=false;
+                    for(auto tag_field=snapshot.head;tag_field;tag_field=read<uintptr_t>(tag_field+0x18)) {
+                        if(!tag_fields.insert(tag_field).second)
+                            throw HandlerError("struct_scan_incomplete","GameplayTag field chain is cyclic");
+                        scalar_struct_values::ComponentMetadata tag;
+                        tag.pointer=tag_field;tag.next=read<uintptr_t>(tag_field+0x18);tag.field_class=read<uintptr_t>(tag_field+8);
+                        tag.owner=read<uint64_t>(tag_field+0x10);tag.name=read<uint64_t>(tag_field+0x20);
+                        tag.type_name=read<uint64_t>(tag.field_class);tag.flags=read<uint64_t>(tag_field+0x38);
+                        tag.component={name(tag.name),read<int32_t>(tag_field+0x44),
+                            {name(tag.type_name),read<int32_t>(tag_field+0x34),read<int32_t>(tag_field+0x30)}};
+                        snapshot.layout.components.push_back(tag.component);snapshot.components.push_back(tag);
+                        if(tag.component.name!="TagName")continue;
+                        if(has_tag_name || tag.component.layout.type!="NameProperty" || tag.component.layout.element_size!=8
+                           || tag.component.layout.array_dim!=1 || tag.component.offset<0 || snapshot.element_size<8
+                           || tag.component.offset>snapshot.element_size-8)
+                            throw HandlerError("unsupported_struct_field_layout","GameplayTag requires one own TagName NameProperty");
+                        has_tag_name=true;
+                    }
+                    if(!has_tag_name)
+                        throw HandlerError("unsupported_struct_field_layout","GameplayTag requires an own TagName NameProperty");
                 } else if(type=="StructProperty") {
                     const auto pointer=read<uintptr_t>(field+0x70);child.auxiliary["structure"]=identity(pointer);
                     const auto path=object_path(reinterpret_cast<void*>(pointer));child.auxiliary["struct_path"]=path;
@@ -143,11 +185,14 @@ json GameAccess::read_struct(void* object,const std::string& handle,const std::s
        || !game_memory::copy(bytes.data(),reinterpret_cast<void*>(address),bytes.size()))
         throw HandlerError("invalid_memory","Struct bytes are unavailable");
     json components=json::array();bool partial=false;
+    std::vector<std::pair<uintptr_t,ArrayHeader>> copied_arrays;
     for(const auto& child:before.children) {
         const auto& component=child.field.component;const auto& layout=component.layout;
         json item={{"name",component.name},{"type",layout.type},{"element_size",layout.element_size},
             {"offset",component.offset},{"array_dim",layout.array_dim},{"supported",false}};
         if(child.auxiliary.contains("struct_path"))item["struct_path"]=child.auxiliary.at("struct_path");
+        if(child.gameplay_tag_array && !child.gameplay_tag_array->path.empty())
+            item["element_struct_path"]=child.gameplay_tag_array->path;
         try {
             if(!child.error.is_null())throw HandlerError(child.error.at("code").get<std::string>(),child.error.at("message").get<std::string>());
             if(layout.array_dim!=1 || layout.element_size<1 || component.offset<0
@@ -160,6 +205,31 @@ json GameAccess::read_struct(void* object,const std::string& handle,const std::s
             else if(child.rotator)value=rotator_arguments::decode(child.rotator->layout,copied);
             else if(child.quat)value=scalar_struct_values::decode(child.quat->layout,copied);
             else if(child.color)value=linear_color_arguments::decode(child.color->layout,copied);
+            else if(child.gameplay_tag_array) {
+                if(layout.element_size!=sizeof(ArrayHeader))
+                    throw HandlerError("unsupported_struct_field_layout","An array field requires a 16-byte header");
+                const auto& snapshot=*child.gameplay_tag_array;
+                const auto& tag=*std::find_if(snapshot.components.begin(),snapshot.components.end(),
+                    [](const auto& field){return field.component.name=="TagName";});
+                const auto header=read<ArrayHeader>(address);
+                const auto page=array_page(header,snapshot.element_size,snapshot.array_dim,0,
+                    header.count>0?static_cast<size_t>(header.count):size_t{1});
+                std::vector<std::byte> payload(page.bytes);
+                if(page.bytes && !game_memory::copy(payload.data(),reinterpret_cast<void*>(page.begin),page.bytes))
+                    throw HandlerError("invalid_memory","GameplayTag array bytes are unavailable");
+                value=json::array();item["total_count"]=header.count;
+                for(int32_t index=0;index<page.count;++index) {
+                    const auto element=std::span<const std::byte>(payload).subspan(
+                        static_cast<size_t>(index)*static_cast<size_t>(snapshot.element_size),static_cast<size_t>(snapshot.element_size));
+                    value.push_back({{"TagName",property_value(reinterpret_cast<uintptr_t>(element.data())+static_cast<uintptr_t>(tag.component.offset),
+                        tag.component.layout.type,tag.component.layout.element_size,tag.pointer)}});
+                }
+                const auto live_header_address=reinterpret_cast<uintptr_t>(object)+static_cast<uintptr_t>(before.structure.offset)
+                    +static_cast<uintptr_t>(component.offset);
+                if(!same_array_header(header,read<ArrayHeader>(live_header_address)))
+                    throw HandlerError("array_changed","The GameplayTag array header changed while being copied");
+                copied_arrays.emplace_back(live_header_address,header);
+            }
             else if(layout.type=="EnumProperty" || layout.type=="ByteProperty") {
                 const auto result=enum_property(address,layout.type,layout.element_size,child.field.pointer);
                 value=result.at("value");if(result.contains("enum"))item["enum"]=result.at("enum");
@@ -176,6 +246,9 @@ json GameAccess::read_struct(void* object,const std::string& handle,const std::s
        || !same_serial_identity(serial_identity(initial),serial_identity(validate_object(object))))
         throw HandlerError("struct_metadata_changed","Struct metadata or identity changed while being copied");
     if(resolve(handle)!=object)throw HandlerError("stale_handle","The struct handle changed");
+    for(const auto& [header_address,header]:copied_arrays)
+        if(!same_array_header(header,read<ArrayHeader>(header_address)))
+            throw HandlerError("array_changed","The GameplayTag array header changed while the struct was copied");
     return {{"source","live_native"},{"session_id",handle_session_},{"handle",handle},{"property_name",property_name},
             {"struct_path",before.structure.path},{"properties_size",before.structure.layout.properties_size},
             {"min_alignment",before.structure.layout.min_alignment},{"components",components},
