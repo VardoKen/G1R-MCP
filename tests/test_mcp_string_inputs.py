@@ -72,8 +72,11 @@ class MCPStringInputTests(unittest.IsolatedAsyncioTestCase):
                     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
                     invoke_schema = tools["g1r_invoke"].input_schema
                     self.assertEqual(set(invoke_schema["properties"]),
-                                     {"handle", "function", "arguments", "expected_signature_token"})
+                                     {"handle", "function", "arguments", "expected_signature_token", "timeout_seconds"})
                     self.assertEqual(set(invoke_schema["required"]), {"handle", "function"})
+                    self.assertEqual(invoke_schema["properties"]["timeout_seconds"], {
+                        "anyOf": [{"type": "number"}, {"type": "null"}],
+                        "default": None, "title": "Timeout Seconds"})
                     self.assertEqual(invoke_schema["properties"]["arguments"], {
                         "anyOf": [{"additionalProperties": True, "type": "object"}, {"type": "null"}],
                         "default": None, "title": "Arguments"})

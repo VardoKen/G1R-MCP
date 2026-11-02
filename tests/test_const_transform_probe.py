@@ -141,7 +141,8 @@ class ConstTransformProbeTests(unittest.TestCase):
         with self.assertRaises(probe.ProbeError) as caught: asyncio.run(probe.exercise(fixture.call))
         self.assertEqual(caught.exception.code, "probe_vector_value")
         self.assertTrue(any("TransformLocation" in note for note in caught.exception.__notes__))
-        self.assertTrue(any("очистка" in note for note in caught.exception.__notes__))
+        self.assertTrue(any("Owned Transform CDO cleanup is not confirmed" in note
+                            for note in caught.exception.__notes__))
         self.assertEqual(fixture.resets, 1)
 
     def test_unknown_native_result_skips_reset_and_does_not_retry_math(self):

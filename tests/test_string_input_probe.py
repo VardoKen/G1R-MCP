@@ -88,7 +88,7 @@ class StringInputProbeTests(unittest.TestCase):
         self.assertEqual(report["completed_mutating_calls"], 9)
         self.assertEqual(len(report["rejections"]), 16)
         self.assertEqual([item["result"] for item in report["calls"] if item["method"] == "ReadInputLength"], [0, 6, 6, 4])
-        self.assertEqual(report["calls"][-1]["result"], "Готика 😀")
+        self.assertEqual(report["calls"][-1]["result"], "Gothic 😀")
         self.assertEqual(report["calls"][-1]["utf16_units"], 9)
         self.assertTrue(all(item["cleanup"] == {"cleanup_confirmed": True, "input_cleanup_confirmed": True} for item in report["calls"]))
         self.assertEqual(fixture.count, 0)
@@ -154,7 +154,8 @@ class StringInputProbeTests(unittest.TestCase):
         with self.assertRaises(probe.ProbeError) as caught: asyncio.run(probe.exercise(fixture.call))
         self.assertEqual(caught.exception.code, "probe_scalar_out_result")
         self.assertTrue(any("reflected_functions" in note for note in caught.exception.__notes__))
-        self.assertTrue(any("очистка" in note for note in caught.exception.__notes__))
+        self.assertTrue(any("Owned FString CDO cleanup was not confirmed" in note
+                            for note in caught.exception.__notes__))
         self.assertEqual(fixture.resets, 1)
 
     def test_unknown_execution_or_ownership_skips_reset_without_retry(self):

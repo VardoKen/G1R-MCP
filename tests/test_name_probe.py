@@ -523,7 +523,8 @@ class NameInputProbeTests(unittest.TestCase):
             asyncio.run(live.exercise_name_inputs(fixture.call))
         self.assertEqual(caught.exception.code, "probe_name_input_result")
         self.assertEqual(fixture.resets, 1)
-        self.assertTrue(any("очистка" in note for note in caught.exception.__notes__))
+        self.assertTrue(any("FName input cleanup was not confirmed" in note
+                            for note in caught.exception.__notes__))
 
     def test_repeated_cancellation_waits_for_one_reset_and_its_verification(self):
         async def scenario():

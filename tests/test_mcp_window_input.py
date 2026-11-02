@@ -94,14 +94,18 @@ class MCPHTTPWindowInputTests(unittest.IsolatedAsyncioTestCase):
                         claim = await tool(first, owner, "g1r_session_acquire", {"reason": "Проверка MoviePlayer Wait"})
                         self.assertTrue(claim["claimed"])
                         listed = (await rpc(second, "tools/list", {}, other)).json()["result"]["tools"]
-                        self.assertEqual(len(listed), 46)
+                        self.assertEqual(len(listed), 51)
                         tools = {item["name"]: item for item in listed}
                         self.assertTrue(tools["g1r_movieplayer_status"]["annotations"]["readOnlyHint"])
                         self.assertFalse(tools["g1r_movieplayer_finish"]["annotations"]["readOnlyHint"])
                         self.assertFalse(tools["g1r_movieplayer_finish"]["annotations"]["idempotentHint"])
                         schema = tools["g1r_movieplayer_finish"]["inputSchema"]
-                        self.assertEqual(set(schema["properties"]), {"expected_wait_id"})
+                        self.assertEqual(set(schema["properties"]), {"expected_wait_id", "timeout_seconds"})
                         self.assertEqual(schema["properties"]["expected_wait_id"]["type"], "string")
+                        self.assertEqual(set(schema["required"]), {"expected_wait_id"})
+                        self.assertEqual(schema["properties"]["timeout_seconds"], {
+                            "anyOf": [{"type": "number"}, {"type": "null"}],
+                            "default": None, "title": "Timeout Seconds"})
                         observed = await tool(second, other, "g1r_movieplayer_status")
                         self.assertEqual(observed, cached)
                         refused = (await rpc(second, "tools/call", {"name": "g1r_movieplayer_finish",

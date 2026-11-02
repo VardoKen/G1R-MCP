@@ -46,7 +46,7 @@ class MCPScriptPatchTests(unittest.IsolatedAsyncioTestCase):
                 async with ClientSession(incoming, outgoing) as client:
                     await client.initialize()
                     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-                    self.assertEqual(len(tools), 41)
+                    self.assertEqual(len(tools), 51)
                     self.assertTrue(tools["g1r_build_script_patch"].annotations.read_only_hint)
                     self.assertFalse(tools["g1r_build_script_patch"].annotations.destructive_hint)
                     self.assertTrue(tools["g1r_read_source_exact"].annotations.read_only_hint)
@@ -231,9 +231,12 @@ class MCPScriptPatchTests(unittest.IsolatedAsyncioTestCase):
                         "relative_path": "Limits", "file_path": "Script/TooLarge.as",
                     })
                     self.assertEqual(large_read["text"].encode("utf-8"), large_script.read_bytes())
-                    await self.call_error(client, "g1r_read_package_file_exact", {
+                    descriptor_read = await self.call_ok(client, "g1r_read_package_file_exact", {
                         "relative_path": "Limits", "file_path": "GothicMod.json",
-                    }, "file_too_large")
+                    })
+                    self.assertEqual(descriptor_read["text"].encode("utf-8"), large_descriptor.read_bytes())
+                    self.assertEqual(descriptor_read["sha256"], hashlib.sha256(large_descriptor.read_bytes()).hexdigest())
+                    self.assertFalse(descriptor_read["truncated"])
             self.assertEqual(source.read_bytes(), b"external edit\n")
             self.assertEqual(example.read_bytes(), b"example\n")
             self.assertEqual([path.name for path in workspace.iterdir()], ["Limits"])

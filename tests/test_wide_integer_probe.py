@@ -163,7 +163,8 @@ class WideIntegerProbeTests(unittest.TestCase):
         with self.assertRaises(probe.ProbeError) as caught:
             asyncio.run(probe.exercise(fixture.call))
         self.assertEqual(caught.exception.code, "probe_integer_result")
-        self.assertTrue(any("очистка" in note for note in caught.exception.__notes__))
+        self.assertTrue(any("Wide-integer cleanup is not confirmed" in note
+                            for note in caught.exception.__notes__))
         self.assertEqual(fixture.resets, 1)
 
     def test_wrong_unsigned_signed_width_or_ref_signature_rejected(self):

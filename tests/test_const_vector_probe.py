@@ -191,7 +191,8 @@ class ConstVectorProbeTests(unittest.TestCase):
         with self.assertRaises(probe.ProbeError) as caught: asyncio.run(probe.exercise(fixture.call))
         self.assertEqual(caught.exception.code, "probe_vector_value")
         self.assertTrue(any("reflected_functions" in note for note in caught.exception.__notes__))
-        self.assertTrue(any("очистка" in note for note in caught.exception.__notes__))
+        self.assertTrue(any("Owned const-vector CDO cleanup is not confirmed" in note
+                            for note in caught.exception.__notes__))
         self.assertEqual(fixture.resets, 1)
 
     def test_unknown_failures_in_as_or_native_skip_reset_without_repeat(self):
@@ -205,7 +206,8 @@ class ConstVectorProbeTests(unittest.TestCase):
             with self.assertRaises(probe.ProbeError) as caught: await probe.exercise(call)
             self.assertEqual(caught.exception.code, code)
             self.assertEqual(fixture.resets, 0)
-            self.assertTrue(any("пропущена" in note for note in caught.exception.__notes__))
+            self.assertTrue(any("Const-vector cleanup skipped after an uncertain call or unavailable connection" in note
+                                for note in caught.exception.__notes__))
             self.assertEqual(sum(name == "g1r_invoke" and args["function"] == failed_method for name, args, _ in fixture.calls), 1)
         for code in probe.UNKNOWN_GAME:
             for method in ("EchoConstVector", probe.NATIVE_METHOD):

@@ -199,7 +199,8 @@ class ArrayPreparationTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "isolated_failure")
         self.assertEqual(len(sentinels), 1)
         self.assertEqual(sentinels[0].read_bytes(), b"user-owned content")
-        self.assertTrue(any("очистка" in note.lower() for note in caught.exception.__notes__))
+        self.assertTrue(any("Unsafe cleanup was skipped; remaining files were preserved" in note
+                            for note in caught.exception.__notes__))
 
 
 class ArrayRuntimeProofTests(unittest.TestCase):

@@ -164,7 +164,8 @@ class VectorProbeTests(unittest.TestCase):
         with self.assertRaises(probe.ProbeError) as caught:
             asyncio.run(probe.exercise(fixture.call))
         self.assertEqual(caught.exception.code, "probe_vector_value")
-        self.assertTrue(any("очистка" in note for note in caught.exception.__notes__))
+        self.assertTrue(any("Owned FVector CDO cleanup is not confirmed" in note
+                            for note in caught.exception.__notes__))
         self.assertEqual(fixture.resets, 1)
 
     def test_unknown_timeout_or_call_fault_skips_cleanup_and_preserves_original(self):
@@ -179,7 +180,8 @@ class VectorProbeTests(unittest.TestCase):
                 await probe.exercise(call)
             self.assertEqual(caught.exception.code, code)
             self.assertEqual(fixture.resets, 0)
-            self.assertTrue(any("пропущена" in note for note in caught.exception.__notes__))
+            self.assertTrue(any("FVector cleanup skipped after an uncertain call or unavailable connection" in note
+                                for note in caught.exception.__notes__))
             self.assertEqual(sum(name == "g1r_invoke" and arguments["function"] == "EchoVector" for name, arguments, _ in fixture.calls), 1)
         for code in ("game_timeout", "game_call_fault", "native_disconnected"):
             with self.subTest(code=code):

@@ -121,8 +121,16 @@ class MCPDirectoryTests(unittest.IsolatedAsyncioTestCase):
                     occupied.write_bytes(b"// preserve user file\r\n")
                     before = {path.relative_to(root).as_posix(): path.read_bytes()
                               for path in root.rglob("*") if path.is_file()}
-                    for path, code in (("Content/Cooked", "unsupported_directory"),
-                                       ("Script/CON", "unsafe_path"),
+                    content = await self.ok(client, "g1r_create_package_directory", {
+                        "relative_path": "Port", "directory_path": "Content/Cooked"})
+                    self.assertTrue(content["created"])
+                    self.assertEqual(content["created_paths"], ["Content", "Content/Cooked"])
+                    self.assertTrue((root / "Port" / "Content" / "Cooked").is_dir())
+                    repeated = await self.ok(client, "g1r_create_package_directory", {
+                        "relative_path": "Port", "directory_path": "Content/Cooked"})
+                    self.assertFalse(repeated["created"])
+                    self.assertEqual(repeated["created_paths"], [])
+                    for path, code in (("Script/CON", "unsafe_path"),
                                        ("Script/../Config", "unsafe_path"),
                                        ("Script/User.as/Modules", "conflict")):
                         await self.denied(client, "g1r_create_package_directory", {
@@ -131,7 +139,6 @@ class MCPDirectoryTests(unittest.IsolatedAsyncioTestCase):
                         "relative_path": "Modkit", "directory_path": "Script/New"}, "unsafe_path", root)
                     self.assertEqual(before, {path.relative_to(root).as_posix(): path.read_bytes()
                                             for path in root.rglob("*") if path.is_file()})
-                    self.assertFalse((root / "Port" / "Content").exists())
                     self.assertFalse((modkit / "Script" / "New").exists())
                     self.assertEqual(occupied.read_bytes(), b"// preserve user file\r\n")
             self.assertEqual(official.read_bytes(), original)

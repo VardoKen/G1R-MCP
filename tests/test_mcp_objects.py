@@ -110,10 +110,10 @@ class MCPObjectTests(unittest.IsolatedAsyncioTestCase):
             {"op": "snapshot", "params": {"targets": targets}, "result": initial},
             {"op": "snapshot", "params": {"targets": targets}, "result": selected},
             {"op": "snapshot", "params": {"targets": targets}, "result": stable},
-            {"op": "watch_start", "params": watch_params, "result": started},
-            {"op": "watch_read", "params": {"watch_id": "watch-1", "after_seq": 0, "limit": 100}, "result": running},
-            {"op": "watch_stop", "params": {"watch_id": "watch-1"}, "result": stopped},
-            {"op": "watch_forget", "params": {"watch_id": "watch-1"}, "result": forgotten},
+            {"op": "watch_start", "params": watch_params, "result": started, "session_owner": True},
+            {"op": "watch_read", "params": {"watch_id": "watch-1", "after_seq": 0, "limit": 100}, "result": running, "session_owner": True},
+            {"op": "watch_stop", "params": {"watch_id": "watch-1"}, "result": stopped, "session_owner": True},
+            {"op": "watch_forget", "params": {"watch_id": "watch-1"}, "result": forgotten, "session_owner": True},
         ]
         with tempfile.TemporaryDirectory() as directory, SessionNativeFixture(steps) as native:
             async with stdio_client(self.parameters(Path(directory), native.port)) as (incoming, outgoing):

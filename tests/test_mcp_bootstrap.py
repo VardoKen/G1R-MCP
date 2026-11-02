@@ -319,10 +319,18 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                     expected = ["GothicMod.json"] + [f"Script/File{index:03}.as" for index in range(205)]
                     self.assertEqual(pages, expected)
                     self.assertEqual(len(set(pages)), 206)
-                    for invalid in (-1, 10001):
-                        await self.call_error(client, "g1r_list_package_files", {
-                            "relative_path": "LargePackage", "limit": 100, "offset": invalid,
-                        }, "invalid_arguments")
+                    empty = await self.call_ok(client, "g1r_list_package_files", {
+                        "relative_path": "LargePackage", "limit": 100, "offset": 10001,
+                    })
+                    self.assertEqual(empty["items"], [])
+                    self.assertEqual(empty["offset"], 10001)
+                    self.assertEqual(empty["total"], 206)
+                    self.assertIsNone(empty["next_offset"])
+                    self.assertFalse(empty["has_more"])
+                    self.assertTrue(empty["truncated"])
+                    await self.call_error(client, "g1r_list_package_files", {
+                        "relative_path": "LargePackage", "limit": 100, "offset": -1,
+                    }, "invalid_arguments")
             self.assertEqual({str(path.relative_to(package)): path.read_bytes() for path in package.rglob("*") if path.is_file()}, before)
             self.assertFalse(game.exists())
 

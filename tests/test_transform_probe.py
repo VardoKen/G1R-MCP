@@ -206,7 +206,8 @@ class TransformProbeTests(unittest.TestCase):
         with self.assertRaises(probe.ProbeError) as caught: asyncio.run(probe.exercise(fixture.call))
         self.assertEqual(caught.exception.code, "probe_transform_rotation")
         self.assertTrue(any("reflected_functions" in note for note in caught.exception.__notes__))
-        self.assertTrue(any("очистка" in note for note in caught.exception.__notes__))
+        self.assertTrue(any("Owned Transform CDO cleanup is not confirmed" in note
+                            for note in caught.exception.__notes__))
         self.assertEqual(fixture.resets, 1)
 
     def test_unknown_result_skips_reset_without_repeat(self):

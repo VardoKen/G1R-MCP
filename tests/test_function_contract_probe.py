@@ -143,7 +143,8 @@ class FunctionContractProbeTests(unittest.TestCase):
         fixture = ContractFixture(mutation_on_refusal=True, bad_reset=True)
         with self.assertRaises(probe.ProbeError) as caught: asyncio.run(probe.exercise(fixture.call))
         self.assertEqual(caught.exception.code, "probe_contract_call_unconfirmed")
-        self.assertTrue(any("очистка" in note for note in caught.exception.__notes__))
+        self.assertTrue(any("NameProbe cleanup was not confirmed" in note
+                            for note in caught.exception.__notes__))
         self.assertEqual(fixture.resets, 1)
 
     def test_cancellation_during_refusal_waits_for_single_reset(self):

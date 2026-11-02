@@ -336,7 +336,8 @@ class ObjectProbeTests(unittest.TestCase):
             with self.assertRaises(probe.WorkspaceError) as captured:
                 self.prepare()
         self.assertEqual(captured.exception.code, "isolated_failure")
-        self.assertTrue(any("остатки сохранены" in note for note in captured.exception.__notes__))
+        self.assertTrue(any("Unsafe cleanup was skipped; temporary files were preserved" in note
+                            for note in captured.exception.__notes__))
         self.assertEqual(sentinel.read_text(encoding="utf-8"), "external sentinel")
         self.assertFalse((self.workspace / probe.PACKAGE_NAME).exists())
         self.assertEqual(len(links), 1)

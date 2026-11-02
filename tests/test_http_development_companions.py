@@ -77,7 +77,9 @@ class HTTPDevelopmentCompanionTests(unittest.IsolatedAsyncioTestCase):
             self.addCleanup(service.close)
             backend = NativeClient(port=native.port)
             self.addCleanup(backend.close)
-            with patch("g1r_mcp.server.NativeClient", return_value=backend) as native_factory, \
+            replacement_backend = NativeClient(port=native.port)
+            self.addCleanup(replacement_backend.close)
+            with patch("g1r_mcp.server.NativeClient", side_effect=[backend, replacement_backend]) as native_factory, \
                     patch("g1r_mcp.server.DevelopmentService", return_value=service) as service_factory:
                 server = create_server(modkit, workspace, native_port=native.port,
                                        game_root=game, transport="streamable-http")
@@ -207,8 +209,8 @@ class HTTPDevelopmentCompanionTests(unittest.IsolatedAsyncioTestCase):
                         self.assertIs(released["game_stopped"], False)
                         self.assertIs((await call(second, second_session, "g1r_session_status"))["claimed"], False)
                 service_factory.assert_called_once()
-                native_factory.assert_called_once_with(port=native.port)
-            self.assertEqual(native.connections, 1)
+                self.assertEqual(native_factory.call_args_list, [unittest.mock.call(port=native.port)] * 2)
+                self.assertEqual(native.connections, 2)
             self.assertEqual([request["op"] for request in native.requests], ["status", "status"])
             self.assertEqual(len({request["id"] for request in native.requests}), 2)
             self.assertEqual([Path(arguments[arguments.index("-File") + 1]).name

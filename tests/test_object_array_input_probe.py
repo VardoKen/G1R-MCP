@@ -159,7 +159,8 @@ class ObjectArrayInputProbeTests(unittest.TestCase):
         fixture = ObjectArrayFixture(bad_result=True, bad_reset=True)
         with self.assertRaises(probe.ProbeError) as caught: asyncio.run(probe.exercise(fixture.call))
         self.assertTrue(any("reflected_functions" in note for note in caught.exception.__notes__))
-        self.assertTrue(any("очистка" in note for note in caught.exception.__notes__))
+        self.assertTrue(any("Owned object-array CDO cleanup was not confirmed" in note
+                            for note in caught.exception.__notes__))
         self.assertEqual(fixture.resets, 1)
 
     def test_unknown_execution_or_quarantine_skips_reset_without_retry(self):

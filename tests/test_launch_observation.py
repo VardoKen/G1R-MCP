@@ -67,6 +67,8 @@ class LaunchObservationTests(unittest.TestCase):
         if tool == "game_process_state.ps1":
             return CommandResult(0, json.dumps({"processes": self.processes}))
         return CommandResult(0, json.dumps({"state": "launch_requested", "package_name": "Probe",
+                                            "mods": arguments[arguments.index("-ModsCsv") + 1].split(","),
+                                            "mods_directory": arguments[arguments.index("-ModsDirectory") + 1],
                                             "SteamRequestPid": 999}))
 
     def capture(self, identity):

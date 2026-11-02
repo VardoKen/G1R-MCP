@@ -34,7 +34,7 @@ class StringInputPreparationTests(unittest.TestCase):
                                                                 {"name": "Right", "type": "const FString&in"}])
             cases = {item["input"]: item for item in result["expected"]["text_cases"]}
             self.assertEqual(cases[""]["utf16_units"], 0)
-            self.assertEqual(cases["A😀Б"]["utf16_units"], 4)
+            self.assertEqual(cases["A😀B"]["utf16_units"], 4)
             self.assertEqual(result["expected"]["concat_case"]["utf16_units"], 9)
             self.assertIn(b"return Input.Len();", source)
             self.assertNotIn(b"&inout", source)

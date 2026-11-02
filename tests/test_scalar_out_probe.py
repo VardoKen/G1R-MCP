@@ -189,7 +189,8 @@ class ScalarOutProbeTests(unittest.TestCase):
             asyncio.run(probe.exercise(fixture.call))
         self.assertEqual(caught.exception.code, "probe_scalar_out_value")
         self.assertTrue(any("reflected_functions" in note and "OutUInt64" in note for note in caught.exception.__notes__))
-        self.assertTrue(any("очистка" in note for note in caught.exception.__notes__))
+        self.assertTrue(any("Owned scalar-out CDO cleanup was not confirmed" in note
+                            for note in caught.exception.__notes__))
         self.assertEqual(fixture.resets, 1)
 
     def test_unknown_game_failures_skip_cleanup_and_never_repeat_getoutputs(self):
@@ -204,7 +205,8 @@ class ScalarOutProbeTests(unittest.TestCase):
                 await probe.exercise(call)
             self.assertEqual(caught.exception.code, code)
             self.assertEqual(fixture.resets, 0)
-            self.assertTrue(any("пропущена" in note for note in caught.exception.__notes__))
+            self.assertTrue(any("Scalar out cleanup was skipped after an uncertain call or unavailable connection" in note
+                                for note in caught.exception.__notes__))
             self.assertEqual(sum(name == "g1r_invoke" and args["function"] == "GetOutputs" for name, args, _ in fixture.calls), 1)
         for code in probe.UNKNOWN_GAME:
             with self.subTest(code=code): asyncio.run(scenario(code))

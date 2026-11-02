@@ -396,7 +396,7 @@ class MCPHTTPSharedServerTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse((await tool(second, second_session, "g1r_session_status"))["claimed"])
                     listed = await rpc(second, "tools/list", {}, second_session)
                     self.assertEqual(listed.status_code, 200, listed.text)
-                    self.assertEqual(len(listed.json()["result"]["tools"]), 44)
+                    self.assertEqual(len(listed.json()["result"]["tools"]), 51)
                     self.assertEqual((await tool(second, second_session, "g1r_status"))["server"]["transport"], "streamable-http")
                     self.assertEqual(await tool(first, first_session, "g1r_native_status"), native_status)
                     found = await tool(first, first_session, "g1r_find_objects", {"query": "Probe"})
