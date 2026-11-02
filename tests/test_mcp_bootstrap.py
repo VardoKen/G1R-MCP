@@ -57,7 +57,7 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                                       "g1r_read_package_file_exact", "reconnect", "do not automatically retry"):
                         self.assertIn(important, instructions)
                     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-                    self.assertEqual(len(tools), 49)
+                    self.assertEqual(len(tools), 51)
                     self.assertTrue(tools["g1r_list_source_functions"].annotations.read_only_hint)
                     self.assertTrue(tools["g1r_source_identity"].annotations.read_only_hint)
                     self.assertTrue(tools["g1r_verify_source_game"].annotations.read_only_hint)

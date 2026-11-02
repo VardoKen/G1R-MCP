@@ -27,7 +27,7 @@ target_include_directories(g1r_mcp_observations PUBLIC include)
 target_link_libraries(g1r_mcp_observations PUBLIC g1r_mcp_transport)
 target_compile_options(g1r_mcp_observations PRIVATE /utf-8 /W4 /EHsc)
 
-add_library(g1r_mcp_native SHARED src/entry.cpp src/game_access.cpp src/game_access_array.cpp src/game_access_struct.cpp src/game_access_vector.cpp src/game_access_transform.cpp src/game_access_object_array.cpp src/game_access_linear_color.cpp)
+add_library(g1r_mcp_native SHARED src/entry.cpp src/game_access.cpp src/game_access_array.cpp src/game_access_containers.cpp src/game_access_struct.cpp src/game_access_vector.cpp src/game_access_transform.cpp src/game_access_object_array.cpp src/game_access_linear_color.cpp)
 target_include_directories(g1r_mcp_native PRIVATE include)
 target_link_libraries(g1r_mcp_native PRIVATE g1r_mcp_transport g1r_mcp_observations g1r_mcp_movieplayer_jobs minhook bcrypt)
 target_compile_options(g1r_mcp_native PRIVATE /utf-8 /W4 /EHsc)

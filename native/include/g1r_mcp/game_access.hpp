@@ -114,6 +114,9 @@ private:
     nlohmann::json enum_property(uintptr_t address, const std::string& type, int size, uintptr_t field);
     nlohmann::json enum_metadata(void* object, const nlohmann::json& value, const std::string& underlying_type);
     nlohmann::json read_array(const nlohmann::json& params);
+    nlohmann::json read_set(const nlohmann::json& params);
+    nlohmann::json read_map(const nlohmann::json& params);
+    nlohmann::json read_container(const nlohmann::json& params,bool map);
     nlohmann::json read_struct(void* object, const std::string& handle, const std::string& property_name);
     vector_layout::Snapshot capture_vector_parameter(std::uintptr_t field,int size,int dim) const;
     transform_layout::Snapshot capture_transform_parameter(std::uintptr_t field,int size,int dim) const;

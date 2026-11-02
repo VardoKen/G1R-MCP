@@ -135,10 +135,10 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
 
                         native.request.side_effect = boundary
                         listed = (await rpc(second, "tools/list", {}, two)).json()["result"]["tools"]
-                        self.assertEqual(len(listed), 49)
+                        self.assertEqual(len(listed), 51)
                         schemas = {item["name"]: item["inputSchema"] for item in listed}
-                        self.assertEqual(set(schemas["g1r_watch_list"].get("properties", {})), set())
-                        self.assertEqual(set(schemas["g1r_watch_resume"]["properties"]), set(resume))
+                        self.assertEqual(set(schemas["g1r_watch_list"].get("properties", {})), {"timeout_seconds"})
+                        self.assertEqual(set(schemas["g1r_watch_resume"]["properties"]), set(resume) | {"timeout_seconds"})
                         for name in ("g1r_watch_list", "g1r_watch_resume"):
                             for hidden in ("ctx", "client_owner", "new_owner"):
                                 self.assertNotIn(hidden, schemas[name].get("properties", {}))
@@ -351,7 +351,7 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                         listed = (await rpc(first, "tools/list", {}, one)).json()["result"]["tools"]
                         schemas = {item["name"]: item["inputSchema"] for item in listed}
                         for name, _, arguments in calls:
-                            self.assertEqual(set(schemas[name]["properties"]), set(arguments))
+                            self.assertEqual(set(schemas[name]["properties"]), set(arguments) | {"timeout_seconds"})
                             self.assertNotIn("ctx", schemas[name]["properties"])
                             self.assertNotIn("client_owner", schemas[name]["properties"])
                         for client, session in ((first, one), (second, two)):
@@ -405,7 +405,7 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(initialized.server_info.version, __version__)
                     tools = (await client.list_tools()).tools
                     names = {tool.name for tool in tools}
-                    self.assertEqual(len(names), 49)
+                    self.assertEqual(len(names), 51)
                     self.assertTrue({"g1r_movieplayer_status", "g1r_movieplayer_finish"}.issubset(names))
                     self.assertIn("g1r_development_key", names)
                     source_tools = {"g1r_source_identity", "g1r_verify_source_game", "g1r_list_source_functions"}

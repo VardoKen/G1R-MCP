@@ -562,7 +562,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.84"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.85"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -586,7 +586,7 @@ json GameAccess::status() const {
                 {"retained_allocations",object_array_inputs_retained_count_.load()},
                 {"retained_bytes",object_array_inputs_retained_bytes_.load()},
                 {"max_inputs",nullptr},{"max_elements",std::numeric_limits<int32_t>::max()},{"max_input_bytes",nullptr}}},
-            {"operations",{"status","enable_game","compile_diagnostics","movieplayer_status","movieplayer_finish","objects","properties","functions","invoke","read_array","read_struct",
+            {"operations",{"status","enable_game","compile_diagnostics","movieplayer_status","movieplayer_finish","objects","properties","functions","invoke","read_array","read_set","read_map","read_struct",
                            "snapshot","watch_start","watch_read","watch_stop","watch_forget","watch_list","watch_resume"}},
             {"snapshot_limits",{{"objects",nullptr},{"properties_per_object",nullptr},{"scan_fields_per_object",nullptr},
                                 {"property_value_bytes",nullptr},{"object_path_bytes",nullptr},
@@ -2556,7 +2556,7 @@ json GameAccess::execute(const json& request) {
     if(op=="watch_forget")return observations_.forget(params.value("client_owner",session),params);
     if(op=="watch_list")return observations_.list(session,params.value("client_owner",session));
     if(op=="watch_resume")return observations_.resume(session,params.value("client_owner",session),params);
-    if(op!="objects" && op!="properties" && op!="functions" && op!="invoke" && op!="read_array" && op!="read_struct")throw HandlerError("unknown_operation","The operation is unsupported");
+    if(op!="objects" && op!="properties" && op!="functions" && op!="invoke" && op!="read_array" && op!="read_set" && op!="read_map" && op!="read_struct")throw HandlerError("unknown_operation","The operation is unsupported");
     if(op=="objects") {
         auto query=params.value("query",std::string{}),class_query=params.value("class_query",std::string{});const auto limit=limit_of(params);
         if(params.contains("exact_path") && !params.at("exact_path").is_string())
@@ -2585,6 +2585,8 @@ json GameAccess::execute(const json& request) {
         return {{"items",items},{"total_slots",count},{"scanned_slots",scanned},{"skipped",skipped},{"truncated",scanned<count},{"thread_id",GetCurrentThreadId()}};
     }
     if(op=="read_array")return read_array(params);
+    if(op=="read_set")return read_set(params);
+    if(op=="read_map")return read_map(params);
     if(op=="properties" && params.contains("property_names"))selected_property_query::validate(params.at("property_names"));
     auto object=resolve(params.at("handle").get<std::string>());
     if(op=="read_struct") {

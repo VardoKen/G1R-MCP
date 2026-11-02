@@ -62,6 +62,8 @@ NATIVE_TOOLS = (
     ("g1r_object_properties", "Read reflected scalar properties"),
     ("g1r_read_array", "Copy an array page, including structures with owned reflected fields"),
     ("g1r_read_struct", "Copy a structure's owned reflected fields with per-field support and errors"),
+    ("g1r_read_set", "Copy an occupied-slot page of a Set<Name> property"),
+    ("g1r_read_map", "Copy an occupied-slot page of a Map<Name,Object> property"),
     ("g1r_object_functions", "List an object's reflected functions"),
     ("g1r_invoke", "One explicit reflected-function call"),
     ("g1r_snapshot", "Copy selected object properties on one Tick"),
@@ -214,7 +216,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                 for name, description in LOCAL_TOOLS
             ],
             "native_tools": [{"name": name, "description": description, "implemented": True,
-                              "read_only_hint": name in {"g1r_native_status", "g1r_find_objects", "g1r_object_properties", "g1r_object_functions", "g1r_read_array", "g1r_read_struct", "g1r_snapshot", "g1r_watch_read", "g1r_watch_list", "g1r_movieplayer_status"},
+                              "read_only_hint": name in {"g1r_native_status", "g1r_find_objects", "g1r_object_properties", "g1r_object_functions", "g1r_read_array", "g1r_read_struct", "g1r_read_set", "g1r_read_map", "g1r_snapshot", "g1r_watch_read", "g1r_watch_list", "g1r_movieplayer_status"},
                               "availability": ("requires_native_tcp_channel" if name == "g1r_movieplayer_status"
                                                else "requires_loaded_movieplayer_hooks_and_matching_wait" if name == "g1r_movieplayer_finish"
                                                else "requires_live_native_status")} for name, description in NATIVE_TOOLS],
@@ -267,6 +269,30 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                              "consistency": "single_tick_sequential", "multiple_pages_atomic": False,
                              "availability": "requires_live_native_status_and_current_game_tick",
                              "current_checked": False},
+            "set_values": {"tool": "g1r_read_set", "source": "runtime_reflection",
+                           "container_type": "SetProperty", "supported_element_types": ["NameProperty"],
+                           "result_field": "items", "item_fields": ["index", "sparse_index", "supported", "value", "error"],
+                           "element_metadata_field": "element",
+                           "element_metadata_fields": ["type", "element_size", "array_dim", "offset"],
+                           "offset_semantics": "occupied_slot_ordinal", "sparse_index_semantics": "physical_slot_index",
+                           "page_fields": ["total_count", "max_index", "offset", "next_offset", "has_more", "truncated", "partial"],
+                           "total_count_semantics": "occupied_slots", "max_index_semantics": "sparse_slot_upper_bound",
+                           "consistency": "copied_slots_then_metadata_revalidated", "multiple_pages_atomic": False,
+                           "availability": "requires_live_native_status_and_current_game_tick", "current_checked": False},
+            "map_values": {"tool": "g1r_read_map", "source": "runtime_reflection",
+                           "container_type": "MapProperty", "supported_key_types": ["NameProperty"],
+                           "supported_value_types": ["ObjectProperty"], "null_object_values_supported": True,
+                           "result_field": "items", "item_fields": ["index", "sparse_index", "supported", "key", "value", "error"],
+                           "key_metadata_field": "key", "value_metadata_field": "value",
+                           "key_metadata_fields": ["type", "element_size", "array_dim", "offset"],
+                           "value_metadata_fields": ["type", "element_size", "array_dim", "offset", "declared_type"],
+                           "value_offset_field": "value_offset", "value_offset_source": "reflected_embedded_layout",
+                           "declared_type_fields": ["name", "path"],
+                           "offset_semantics": "occupied_slot_ordinal", "sparse_index_semantics": "physical_slot_index",
+                           "page_fields": ["total_count", "max_index", "offset", "next_offset", "has_more", "truncated", "partial"],
+                           "total_count_semantics": "occupied_slots", "max_index_semantics": "sparse_slot_upper_bound",
+                           "consistency": "copied_slots_then_metadata_revalidated", "multiple_pages_atomic": False,
+                           "availability": "requires_live_native_status_and_current_game_tick", "current_checked": False},
             "struct_values": {"tool": "g1r_read_struct", "source": "runtime_reflection",
                               "result_field": "components",
                               "component_fields": ["name", "type", "element_size", "offset", "array_dim", "supported", "value", "enum", "error", "struct_path", "total_count", "element_struct_path"],
@@ -893,6 +919,18 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     def g1r_read_struct(handle: str, property_name: str, timeout_seconds: float | None = None) -> dict[str, Any]:
         """Copy owned reflected fields with per-field support/errors and known nested Vector, Rotator, Transform, LinearColor, and Quat layouts."""
         return native_request("read_struct", {"handle": handle, "property_name": property_name}, timeout_seconds)
+
+    @server.tool(annotations=read_only)
+    def g1r_read_set(handle: str, property_name: str, offset: int = 0, limit: int = 64,
+                     timeout_seconds: float | None = None) -> dict[str, Any]:
+        """Copy a Set<Name> page; offset counts occupied slots, items retain sparse_index, and pages do not share an atomic snapshot."""
+        return native_request("read_set", {"handle": handle, "property_name": property_name, "offset": offset, "limit": limit}, timeout_seconds)
+
+    @server.tool(annotations=read_only)
+    def g1r_read_map(handle: str, property_name: str, offset: int = 0, limit: int = 64,
+                     timeout_seconds: float | None = None) -> dict[str, Any]:
+        """Copy a Map<Name,Object> page with object descriptors or null; offset counts occupied slots and pages do not share an atomic snapshot."""
+        return native_request("read_map", {"handle": handle, "property_name": property_name, "offset": offset, "limit": limit}, timeout_seconds)
 
     @server.tool(annotations=read_only)
     def g1r_object_functions(handle: str, limit: int = 50, function_query: str = "",
