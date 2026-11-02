@@ -54,10 +54,10 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIsInstance(instructions, str)
                     for important in ("GothicMod.json", "SHA-256", "g1r_native_enable", "g1r_native_status",
                                       "g1r_development_start", "g1r_native_load", "g1r_read_source_exact",
-                                      "g1r_read_package_file_exact", "reconnect", "не повтор"):
+                                      "g1r_read_package_file_exact", "reconnect", "do not automatically retry"):
                         self.assertIn(important, instructions)
                     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-                    self.assertEqual(len(tools), 44)
+                    self.assertEqual(len(tools), 49)
                     self.assertTrue(tools["g1r_list_source_functions"].annotations.read_only_hint)
                     self.assertTrue(tools["g1r_source_identity"].annotations.read_only_hint)
                     self.assertTrue(tools["g1r_verify_source_game"].annotations.read_only_hint)
@@ -99,14 +99,14 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn("handling_confirmed", contracts["g1r_development_key"]["result"]["fields"])
                     self.assertNotIn("native_tcp_channel", contracts["g1r_read_source_exact"]["context"]["requires"])
                     watch_list = contracts["g1r_watch_list"]
-                    self.assertEqual(watch_list["args"].get("properties", {}), {})
+                    self.assertEqual(set(watch_list["args"].get("properties", {})), {"timeout_seconds"})
                     self.assertEqual(watch_list["args"].get("required", []), [])
                     self.assertEqual(watch_list["result"]["fields"], ["session_id", "current_client_owner", "items"])
                     self.assertTrue(watch_list["effects"]["read_only"])
                     self.assertNotIn("events", watch_list["result"]["fields"])
                     watch_resume = contracts["g1r_watch_resume"]
                     self.assertEqual(set(watch_resume["args"]["properties"]),
-                                     {"watch_id", "expected_session_id", "expected_client_owner"})
+                                     {"watch_id", "expected_session_id", "expected_client_owner", "timeout_seconds"})
                     self.assertEqual(set(watch_resume["args"]["required"]),
                                      {"watch_id", "expected_session_id", "expected_client_owner"})
                     self.assertFalse(watch_resume["effects"]["read_only"])
@@ -186,7 +186,8 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                     development = catalog["development_tools"]["operations"]
                     self.assertEqual(set(development), {"g1r_development_recipe", "g1r_development_processes",
                                                        "g1r_development_start", "g1r_development_stop", "g1r_development_key", "g1r_native_load",
-                                                         "g1r_session_status", "g1r_session_acquire", "g1r_session_release", "g1r_compile_diagnostics"})
+                                                         "g1r_session_status", "g1r_session_acquire", "g1r_session_release", "g1r_compile_diagnostics",
+                                                         "g1r_apply_staged_file"})
                     catalogued = {item["name"] for group in ("local_tools", "native_tools", "workspace_tools")
                                   for item in catalog[group]}
                     catalogued.update(development)

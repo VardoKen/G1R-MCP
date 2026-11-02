@@ -170,7 +170,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             "One TCP client owns handles and observations; find objects again after reconnecting. "
             "Edit complete bytes through g1r_read_source_exact/g1r_read_package_file_exact and SHA-256; "
             "line-based reads normalize text. Search and valid_structure do not constitute compilation. "
-            "ScriptPatches are created as diffs, but their application in the game is not confirmed. "
+            "ScriptPatches are created as diffs without applying them; official-runtime application to base Script sources was confirmed by an isolated probe. Each package still requires runtime verification. "
             "Starting, stopping, DLL loading, and invoke change external state: do not automatically retry an operation "
             "after outcome_unknown, may_have_executed, or do_not_retry. "
             "Do not infer that a game API works merely because its source exists."

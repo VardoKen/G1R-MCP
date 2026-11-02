@@ -562,7 +562,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.75"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.76"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -573,7 +573,7 @@ json GameAccess::status() const {
                      {"freshness_limit_ms",kRequestWaitMs},{"world_ready_confirmed",false}}},
             {"requests",{{"queue_depth",pending},{"queue_limit",nullptr},{"active",active},{"metadata_available",queue_metadata_available},
                          {"completed",completed_jobs_.load()},{"cancelled_before_start",cancelled_jobs_.load()},
-                         {"wait_timeout_ms",kRequestWaitMs},{"cancelled_jobs_can_execute",false}}},
+                         {"wait_timeout_ms",nullptr},{"default_wait_timeout_ms",kRequestWaitMs},{"cancelled_jobs_can_execute",false}}},
             {"build_hash",kHash},{"startup_error",startup_error_},
             {"process_id",GetCurrentProcessId()},
             {"string_inputs",{{"quarantined",string_inputs_quarantined_.load()},
