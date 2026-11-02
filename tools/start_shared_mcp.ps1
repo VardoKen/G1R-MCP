@@ -36,7 +36,7 @@ function Get-G1RSharedConfiguration {
         $basePython = [IO.Path]::GetFullPath((Join-Path $Matches[1].Trim() 'python.exe'))
     }
     $modkit = [IO.Path]::GetFullPath((Join-Path $resolved '..\G1R-Modkit'))
-    $arguments = '-B -m g1r_mcp.server --transport streamable-http --host 127.0.0.1 --port 27124 --modkit-root "' + $modkit + '" --workspace-root "' + $resolved + '" --native-port 27123'
+    $arguments = '-B -m g1r_mcp.server --transport streamable-http --host 127.0.0.1 --port 27124 --modkit-root "' + $modkit + '" --workspace-root "' + $resolved + '" --native-port 27123 --runtime-root "' + $resolved + '"'
     [pscustomobject]@{
         root = $resolved; artifacts = $artifactRoot; python = $python; modkit = $modkit
         base_python = $basePython
