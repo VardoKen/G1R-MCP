@@ -92,7 +92,7 @@ json GameAccess::read_struct(void* object,const std::string& handle,const std::s
                 if(type=="BoolProperty") {
                     layout.field_size=read<uint8_t>(field+0x70);layout.byte_offset=read<uint8_t>(field+0x71);
                     layout.byte_mask=read<uint8_t>(field+0x72);layout.field_mask=read<uint8_t>(field+0x73);
-                } else if(type=="ObjectProperty" || type=="ClassProperty") {
+                } else if(type=="ObjectProperty" || type=="ClassProperty" || type=="WeakObjectProperty") {
                     child.auxiliary["declared"]=identity(read<uintptr_t>(field+0x70));
                     if(type=="ClassProperty")child.auxiliary["meta"]=identity(read<uintptr_t>(field+0x78));
                 } else if(type=="EnumProperty" || type=="ByteProperty") {
@@ -234,7 +234,7 @@ json GameAccess::read_struct(void* object,const std::string& handle,const std::s
                 const auto result=enum_property(address,layout.type,layout.element_size,child.field.pointer);
                 value=result.at("value");if(result.contains("enum"))item["enum"]=result.at("enum");
             } else value=property_value(address,layout.type,layout.element_size,child.field.pointer);
-            if(value.is_null() && layout.type!="ObjectProperty" && layout.type!="ClassProperty")
+            if(value.is_null() && layout.type!="ObjectProperty" && layout.type!="ClassProperty" && layout.type!="WeakObjectProperty")
                 throw HandlerError("unsupported_struct_field_type","The struct field type is unsupported");
             item["value"]=std::move(value);item["supported"]=true;
         } catch(const HandlerError& error) {item["error"]={{"code",error.code()},{"message",error.what()}};partial=true;}

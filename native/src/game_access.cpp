@@ -562,7 +562,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.86"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.87"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -887,6 +887,20 @@ json GameAccess::property_value(uintptr_t address,const std::string& type,int si
         const auto expected_class=reinterpret_cast<void*>(read<uintptr_t>(field+0x70));
         return object_descriptor(reinterpret_cast<void*>(read<uintptr_t>(address)),expected_class);
     }
+    if(type=="WeakObjectProperty") {
+        struct WeakValue { int32_t index;int32_t serial; };
+        if(size!=sizeof(WeakValue))throw HandlerError("unsupported_property_layout","WeakObjectProperty requires an 8-byte index/serial pair");
+        const auto value=read<WeakValue>(address);
+        if(value.serial==0 || value.index<0)return nullptr;
+        const auto identity=slot_identity(value.index);
+        if(!identity.object || identity.serial!=value.serial)return nullptr;
+        auto result=object_descriptor(identity.object,reinterpret_cast<void*>(read<uintptr_t>(field+0x70)));
+        const auto after=slot_identity(value.index);
+        const auto copied=read<WeakValue>(address);
+        if(after.object!=identity.object || after.serial!=identity.serial || copied.index!=value.index || copied.serial!=value.serial)
+            throw HandlerError("stale_handle","The weak object value changed while copied");
+        return result;
+    }
     if(type=="NameProperty") {
         if(size!=8)throw HandlerError("unsupported_property_layout","NameProperty requires an 8-byte FName");
         return name(read<uint64_t>(address));
@@ -1021,7 +1035,7 @@ json GameAccess::properties(void* object,std::size_t limit) {
                         const auto result=enum_property(reinterpret_cast<uintptr_t>(object)+offset,type,size,field);
                         value=result.at("value");if(result.contains("enum"))item["enum"]=result.at("enum");
                     } else value=property_value(reinterpret_cast<uintptr_t>(object)+offset,type,size,field);
-                    item["value"]=value;item["supported"]=type=="ObjectProperty" || type=="ClassProperty" || !value.is_null();
+                    item["value"]=value;item["supported"]=type=="ObjectProperty" || type=="ClassProperty" || type=="WeakObjectProperty" || !value.is_null();
                 } catch(const HandlerError& error) {
                     item["supported"]=false;item["error"]={{"code",error.code()},{"message",error.what()}};
                 }
@@ -1057,7 +1071,7 @@ json GameAccess::selected_properties(void* object,const json& names) {
                     const auto result=enum_property(reinterpret_cast<uintptr_t>(object)+offset,type,size,field);
                     value=result.at("value");if(result.contains("enum"))item["enum"]=result.at("enum");
                 } else value=property_value(reinterpret_cast<uintptr_t>(object)+offset,type,size,field);
-                if(value.is_null() && type!="ObjectProperty" && type!="ClassProperty")throw HandlerError("unsupported_property_type","The property type is unsupported");
+                if(value.is_null() && type!="ObjectProperty" && type!="ClassProperty" && type!="WeakObjectProperty")throw HandlerError("unsupported_property_type","The property type is unsupported");
                 item["value"]=std::move(value);item["supported"]=true;
             } catch(const HandlerError& error) {
                 item["error"]={{"code",error.code()},{"message",error.what()}};

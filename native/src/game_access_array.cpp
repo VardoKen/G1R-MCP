@@ -95,6 +95,7 @@ json GameAccess::read_array(const json& params) {
             || (type=="NameProperty" && result.stride==8)
             || (type=="ObjectProperty" && result.stride==8)
             || (type=="ClassProperty" && result.stride==8)
+            || (type=="WeakObjectProperty" && result.stride==8)
             || type=="BoolProperty" || type=="EnumProperty" || type=="StructProperty";
         if(!supported || result.inner_dim!=1)
             throw HandlerError("unsupported_array_element","The array element type or ArrayDim is unsupported");
@@ -131,7 +132,7 @@ json GameAccess::read_array(const json& params) {
                     if(layout.type=="BoolProperty") {
                         layout.field_size=read<uint8_t>(field+0x70);layout.byte_offset=read<uint8_t>(field+0x71);
                         layout.byte_mask=read<uint8_t>(field+0x72);layout.field_mask=read<uint8_t>(field+0x73);
-                    } else if(layout.type=="ObjectProperty" || layout.type=="ClassProperty") {
+                    } else if(layout.type=="ObjectProperty" || layout.type=="ClassProperty" || layout.type=="WeakObjectProperty") {
                         const auto declared=read<uintptr_t>(field+0x70);validate_class(reinterpret_cast<void*>(declared));
                         child.auxiliary["declared"]=identity(declared);
                         if(layout.type=="ClassProperty") {
@@ -157,7 +158,7 @@ json GameAccess::read_array(const json& params) {
             const auto byte_offset=read<uint8_t>(result.inner+0x71),mask=read<uint8_t>(result.inner+0x73);
             validate_bool_layout(result.stride,byte_offset,mask);
             result.auxiliary={byte_offset,mask};
-        } else if(type=="ObjectProperty" || type=="ClassProperty") {
+        } else if(type=="ObjectProperty" || type=="ClassProperty" || type=="WeakObjectProperty") {
             result.auxiliary={read<uintptr_t>(result.inner+0x70)};
             validate_class(reinterpret_cast<void*>(result.auxiliary[0]));
             if(type=="ClassProperty") {
@@ -230,7 +231,7 @@ json GameAccess::read_array(const json& params) {
                             const auto decoded=enum_property(field_address,layout.type,layout.element_size,child.field.pointer);
                             field_value=decoded.at("value");if(decoded.contains("enum"))field["enum"]=decoded.at("enum");
                         } else field_value=property_value(field_address,layout.type,layout.element_size,child.field.pointer);
-                        if(field_value.is_null() && layout.type!="ObjectProperty" && layout.type!="ClassProperty")
+                        if(field_value.is_null() && layout.type!="ObjectProperty" && layout.type!="ClassProperty" && layout.type!="WeakObjectProperty")
                             throw HandlerError("unsupported_struct_field_type","The struct field type is unsupported");
                         value[component.name]=field_value;field["value"]=std::move(field_value);field["supported"]=true;
                     } catch(const HandlerError& error) {
@@ -243,7 +244,7 @@ json GameAccess::read_array(const json& params) {
                 const auto result=enum_property(address,metadata.element_type,metadata.stride,metadata.inner);
                 value=result.at("value");if(result.contains("enum"))item["enum"]=result.at("enum");
             } else value=property_value(address,metadata.element_type,metadata.stride,metadata.inner);
-            if(value.is_null() && metadata.element_type!="ObjectProperty" && metadata.element_type!="ClassProperty")
+            if(value.is_null() && metadata.element_type!="ObjectProperty" && metadata.element_type!="ClassProperty" && metadata.element_type!="WeakObjectProperty")
                 throw HandlerError("unsupported_array_value","The element value is unsupported");
             item["value"]=std::move(value);item["supported"]=true;
         } catch(const HandlerError& error) {
