@@ -1,12 +1,20 @@
 # Проверки G1R MCP: локальные инструменты и нативный маршрут
 
-## Затронутые локальные проверки dev.100 — 04.11.2026
+## Текущие проверки dev.101 — 04.11.2026
+
+Готовы [runtime bundle dev.101](../../../artifacts/bridge-bundle-dev101/manifest.json) и [wheel dev.101](../../../artifacts/wheel-dev101/g1r_mcp-1.0.0.dev101-py3-none-any.whl): целостность manifest/байтов, ZIP CRC и wheel RECORD — **PASS**; новая installed-consumer проверка не запускалась.
+
+Сборка DLL завершилась успешно ([build](../../../artifacts/native-build-dev101-update.txt)); упаковочные проверки — **9/9 PASS**. [Финальная live-приёмка](../../../artifacts/dev101-name-reload-live-final.json) имеет `accepted=true`: **8/8 итоговых проверок**, marker 71→72→72→71, успешный/неудачный reload, неизменное поколение при ошибке, capture complete, точные совпадения путей и восстановленные bytes. Собственная игра закрыта, HTTP-заявка освобождена. Проверка выполнена на DLL/server **1.0.0-dev.101**, Steam build **26394867** после устранения полного SHA-gate и фиксированных native RVA.
+
+Полный Python/CTest повторно не запускался; **736/736**, helper-case 1/1 и **39/39** ниже относятся к базовой dev.99. Live dev.101 проверяет конкретный name-fixture и reload receipt; она не доказывает компиляцию конкретного source SHA, поэтому `compiled=false`, `exact_source_compiled=false`, correlation=`unknown`. Типизированный input fixture/runner пока подготовлены для следующей работы, но не проверены и не объявлены реализованным runtime-контрактом.
+
+## Исторические затронутые локальные проверки dev.100 — 04.11.2026
 
 Исходники и DLL `artifacts/build-dev64/Release/G1R_MCP.dll` обновлены до **1.0.0-dev.100**; canonical DLL и общий HTTP-сервер пока dev.99. Python runtime diagnostics **7/7** и parser **15/15** прошли. Одна incremental-сборка завершилась с exit code 0; существующие `native_array_page` и `native_string_return` прошли **2/2**, 0,44 с. Вывод: [build](../../../artifacts/native-build-dev100.txt), [CTest](../../../artifacts/native-ctest-dev100.txt); Python-проверки — `tests/test_runtime_compile_diagnostics.py` и `tests/test_compile_diagnostics.py`.
 
 Проверены локальные контракты последней завершённой reload-записи, хешей до/после compiler-чтения и точного сопоставления выбранных/staged AS-путей. CTest покрывает используемые array/FString-примитивы, а не новый live reload. `compiled=false`, `exact_source_compiled=false` и `source_current_correlation="unknown"` сохранены: совпавший путь и успешный reload не удостоверяют скомпилированные байты. **Live-проверка dev.100 не проведена**; исторические результаты ниже не переобъявляются её PASS.
 
-## Актуальная проверка dev.99 — 04.11.2026
+## Базовая проверка dev.99 — 04.11.2026
 
 Инструмент предназначен для **исследования, разработки и отладки официальных модов** Gothic 1 Remake. Возможность начать перенос модов с UE4SS — промежуточный рубеж, а не полное назначение или подтверждение будущей публичной поставки. Текущий внутренний сервер — **1.0.0-dev.99**, **51 MCP-инструмент**. [Локальная приёмка общего сервера](../../../artifacts/dev99-shared-acceptance.json) подтвердила Streamable HTTP, согласованность версии сервера/каталога/package metadata и наличие canonical DLL. DLL не загружали: `loaded=false` и `runtime_validation: "not_performed"` отделяют доступность runtime-файлов от игровой готовности DLL dev.99.
 

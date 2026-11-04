@@ -46,8 +46,8 @@ class BridgeBundleTests(unittest.TestCase):
             self.write(f"tests/fixtures/{name}/GothicMod.json", b'{"name":"Probe"}\n')
             self.write(f"tests/fixtures/{name}/Script/{bundle.FIXTURE_SCRIPTS[name]}", b"class UProbe {}\n")
         self.write("tests/fixtures/patch_probe/ScriptPatches/Marker.patch", b"# isolated patch\n")
-        self.write("native/src/game_access.cpp", ('constexpr const char* kHash = "' + "a" * 64 + '";\n').encode())
-        self.write(bundle.BINARIES[0], fake_pe(self.version.encode() + b"a" * 64))
+        self.write("native/src/game_access.cpp", b'"bindings_source","runtime_image_patterns"\n')
+        self.write(bundle.BINARIES[0], fake_pe(self.version.encode() + b"runtime_image_patterns"))
         self.write(bundle.BINARIES[1], fake_pe())
 
     def write(self, path, raw):
@@ -66,7 +66,8 @@ class BridgeBundleTests(unittest.TestCase):
         self.write("mods/UserMod/GothicMod.json", b"user mod")
         result = self.prepare()
         self.assertEqual(result["version"], self.version)
-        self.assertEqual(result["supported_game_exe_sha256"], "a" * 64)
+        self.assertEqual(result["binding_method"], "runtime_image_patterns")
+        self.assertNotIn("supported_game_exe_sha256", result)
         self.assertFalse(result["game_launched"])
         self.assertFalse(result["installed"])
         self.assertTrue(result["verified_files"])
@@ -78,7 +79,25 @@ class BridgeBundleTests(unittest.TestCase):
         self.assertEqual(verified["file_count"], result["file_count"])
         manifest = json.loads((self.target / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["compatibility"]["native_version_marker"], self.version)
+        self.assertEqual(manifest["compatibility"]["binding_method"], "runtime_image_patterns")
+        self.assertNotIn("supported_game_exe_sha256", manifest["compatibility"])
         self.assertIn("not an installer or a public release", (self.target / "START.md").read_text(encoding="utf-8"))
+
+        old_dll = fake_pe(self.version.encode() + b"a" * 64)
+        (self.target / bundle.BINARIES[0]).write_bytes(old_dll)
+        manifest["compatibility"].pop("binding_method")
+        manifest["compatibility"]["supported_game_exe_sha256"] = "a" * 64
+        entry = next(item for item in manifest["files"] if item["path"] == bundle.BINARIES[0])
+        manifest["total_bytes"] += len(old_dll) - entry["bytes"]
+        entry.update(bytes=len(old_dll), sha256=bundle._sha(old_dll))
+        manifest_path = self.target / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        self.assertTrue(bundle.verify_bundle(self.target)["verified_files"])
+        manifest["compatibility"]["supported_game_exe_sha256"] = "b" * 64
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        with self.assertRaises(bundle.BundleError) as captured:
+            bundle.verify_bundle(self.target)
+        self.assertEqual(captured.exception.code, "native_version_mismatch")
 
     def test_existing_outside_and_symlink_targets_refused(self):
         self.prepare()
@@ -108,7 +127,7 @@ class BridgeBundleTests(unittest.TestCase):
         with self.assertRaises(bundle.BundleError) as captured:
             self.prepare()
         self.assertEqual(captured.exception.code, "native_version_mismatch")
-        self.write(bundle.BINARIES[0], fake_pe(self.version.encode() + b"a" * 64))
+        self.write(bundle.BINARIES[0], fake_pe(self.version.encode() + b"runtime_image_patterns"))
         self.write(bundle.BINARIES[1], b"not a PE")
         with self.assertRaises(bundle.BundleError) as captured:
             self.prepare()

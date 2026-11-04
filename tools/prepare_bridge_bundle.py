@@ -91,18 +91,18 @@ def _version(repository: Path) -> str:
 
 def _compatibility(repository: Path, version: str, dll: bytes, loader: bytes) -> dict:
     source = _read(repository / "native/src/game_access.cpp", repository).decode("utf-8-sig")
-    hashes = re.findall(r'constexpr\s+const\s+char\s*\*\s*kHash\s*=\s*"([0-9a-f]{64})"', source)
-    if len(hashes) != 1 or version.encode("ascii") not in dll or hashes[0].encode("ascii") not in dll:
-        raise BundleError("native_version_mismatch", "The built DLL does not match the current version or EXE contract")
+    method = "runtime_image_patterns"
+    if f'"{method}"' not in source or version.encode("ascii") not in dll or method.encode("ascii") not in dll:
+        raise BundleError("native_version_mismatch", "The built DLL does not match the current version or runtime binding contract")
     for label, raw in (("DLL", dll), ("loader", loader)):
         if len(raw) < 64 or raw[:2] != b"MZ":
             raise BundleError("invalid_binary", f"{label} is not a PE x64 binary")
         offset = struct.unpack_from("<I", raw, 60)[0]
         if offset < 64 or offset + 6 > len(raw) or raw[offset:offset + 4] != b"PE\0\0" or struct.unpack_from("<H", raw, offset + 4)[0] != 0x8664:
             raise BundleError("invalid_binary", f"{label} is not a PE x64 binary")
-    return {"platform": "Windows x64", "supported_game_exe_sha256": hashes[0],
+    return {"platform": "Windows x64", "binding_method": method,
             "supported_game_exe_name": "G1R/Binaries/Win64/G1R-Win64-Shipping.exe",
-            "source": "native/src/game_access.cpp:kHash", "native_version_marker": version,
+            "source": "native/src/game_access.cpp:bindings_source", "native_version_marker": version,
             "runtime_validation": "not_performed_by_packager"}
 
 
@@ -222,8 +222,8 @@ Verification does not launch the game or load the DLL.
    The start_shared_mcp.ps1/stop_shared_mcp.ps1 scripts are intended for a working copy
    with a local `.venv` and adjacent G1R-Modkit, not an immutable bundle
    with an external environment. For the latter, use the direct command above.
-5. Verify the game EXE
-   SHA-256 against manifest.json before using the DLL. Loading is performed only
+5. After loading, check g1r_native_status for uniquely resolved runtime image patterns
+   and native readiness. A bundle does not prove compatibility with every game update. Loading is performed only
    through an explicit development/native_load tool; the bundle installs nothing itself.
 
 The development workflow provides MCP commands g1r_development_recipe/processes/start/stop,
@@ -354,7 +354,7 @@ def prepare_bundle(destination: Path, *, repository_root: Path = ROOT) -> dict:
             stage = None
             return {"destination": str(target), "version": version, "file_count": verified["file_count"],
                     "total_bytes": verified["total_bytes"], "manifest_sha256": _sha(raw_files["manifest.json"]),
-                    "supported_game_exe_sha256": compatibility["supported_game_exe_sha256"],
+                    "binding_method": compatibility["binding_method"],
                     "verified_files": True, "installed": False, "game_launched": False,
                     "runtime_validation": "not_performed_by_packager"}
         finally:
@@ -409,15 +409,20 @@ def verify_bundle(bundle_root: Path) -> dict:
     compatibility = manifest.get("compatibility")
     if (manifest.get("version") != version or not isinstance(compatibility, dict)
             or compatibility.get("native_version_marker") != version
-            or compatibility.get("platform") != "Windows x64"
-            or not isinstance(compatibility.get("supported_game_exe_sha256"), str)
-            or not re.fullmatch(r"[0-9a-f]{64}", compatibility["supported_game_exe_sha256"])):
+            or compatibility.get("platform") != "Windows x64"):
         raise BundleError("invalid_manifest", "The bundle version or compatibility contract is invalid")
     dll = _read(root / BINARIES[0], root)
     loader = _read(root / BINARIES[1], root)
-    game_hash = compatibility["supported_game_exe_sha256"]
-    if version.encode("ascii") not in dll or game_hash.encode("ascii") not in dll:
-        raise BundleError("native_version_mismatch", "The DLL does not match the version or game hash in the manifest")
+    method = compatibility.get("binding_method")
+    if method == "runtime_image_patterns":
+        marker = method
+    elif method is None and isinstance(compatibility.get("supported_game_exe_sha256"), str) and re.fullmatch(
+            r"[0-9a-f]{64}", compatibility["supported_game_exe_sha256"]):
+        marker = compatibility["supported_game_exe_sha256"]
+    else:
+        raise BundleError("invalid_manifest", "The bundle compatibility binding method is invalid")
+    if version.encode("ascii") not in dll or marker.encode("ascii") not in dll:
+        raise BundleError("native_version_mismatch", "The DLL does not match the version or binding contract in the manifest")
     for content in (dll, loader):
         if len(content) < 64 or content[:2] != b"MZ":
             raise BundleError("invalid_binary", "The bundle binary is not a PE x64 binary")

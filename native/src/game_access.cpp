@@ -31,15 +31,14 @@
 #include "g1r_mcp/cleanup_once.hpp"
 #include "g1r_mcp/native_exception.hpp"
 #include "g1r_mcp/as_exception_capture.hpp"
+#include "g1r_mcp/image_patterns.hpp"
 #include <MinHook.h>
-#include <bcrypt.h>
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
 #include <cstring>
 #include <fstream>
-#include <iomanip>
 #include <optional>
 #include <sstream>
 #include <set>
@@ -171,42 +170,26 @@ void diagnostic(const char* text) {
     wchar_t path[32768]{};GetModuleFileNameW(self,path,32768);std::wstring file(path);file=file.substr(0,file.find_last_of(L"\\/"))+L"\\native-tick.log";
     std::ofstream output(file,std::ios::app);output<<text<<"\n";
 }
-constexpr uintptr_t kObjects = 0x9e9fbd0;
-constexpr uintptr_t kNames = 0x9de8d80;
-constexpr uintptr_t kTick = 0x3fbced0;
-constexpr uintptr_t kProcessEvent = 0x13a6ad0;
-constexpr uintptr_t kFree = 0x1081690;
-constexpr uintptr_t kAngelscriptManager = 0xa02fdb8;
-constexpr uintptr_t kFormatDiagnostics = 0x417d2b0;
-constexpr uintptr_t kASExceptionLogger = 0x4183050;
-constexpr uint8_t kASExceptionLoggerBytes[] = {0x48,0x89,0x5c,0x24,0x18,0x56,0x48,0x81,0xec,0xc0,0x01,0x00,0x00};
-constexpr uintptr_t kASStackTrace = 0x4180060;
-constexpr uintptr_t kASReload = 0x4183ae0;
-constexpr uint8_t kASReloadBytes[] = {0x48,0x89,0x5c,0x24,0x10,0x55,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57};
-constexpr uint8_t kASStackTraceBytes[] = {0x40,0x55,0x53,0x57,0x41,0x55,0x41,0x56,0x48,0x8d,0xac,0x24,0xa0,0xfc,0xff,0xff};
-constexpr uintptr_t kMoviePlayerInterfaceVtable = 0x7e181d0;
-constexpr uintptr_t kMoviePlayerWait = 0x326c2c0;
-constexpr uint8_t kMoviePlayerWaitBytes[] = {0x40,0x55,0x53,0x41,0x56,0x41,0x57,0x48,0x8d,0xac,0x24,0x18,0xff,0xff,0xff,0x48,0x81,0xec,0xe8,0x01,0x00,0x00};
-constexpr uintptr_t kPlatformPumpMessages = 0x14405f0;
-constexpr uint8_t kPlatformPumpMessagesBytes[] = {0x48,0x81,0xec,0x88,0x00,0x00,0x00,0x0f,0xb6,0x05,0xde,0x06,0x97,0x08,0x84,0xc0};
-constexpr uintptr_t kMoviePlayerLoadingFinished = 0x32695c0;
-constexpr uint8_t kMoviePlayerLoadingFinishedBytes[] = {0x33,0xd2,0x33,0xc0,0xf0,0x0f,0xb1,0x91,0x9c,0x00,0x00,0x00,0x0f,0x95,0xc0,0xc3};
-constexpr uintptr_t kMoviePlayerPlaying = 0x32695d0;
-constexpr uint8_t kMoviePlayerPlayingBytes[] = {0x48,0x83,0xb9,0x90,0x00,0x00,0x00,0x00,0x75,0x0c,0x80,0xb9,0xa0,0x00,0x00,0x00,0x00,0x75,0x03,0x32,0xc0,0xc3,0xb0,0x01,0xc3};
-constexpr uintptr_t kMoviePlayerStop = 0x326bc80;
-constexpr uint8_t kMoviePlayerStopBytes[] = {0x48,0xc7,0x81,0x50,0x01,0x00,0x00,0x00,0x00,0x00,0x00,0xc6,0x81,0xa1,0x00,0x00,0x00,0x01,0xc3};
-constexpr uintptr_t kStringConstruct = 0x10316e0;
-constexpr uintptr_t kNameConstruct = 0x11b37a0;
-constexpr uintptr_t kObjectArrayRealloc = 0x108f6a0;
-constexpr uint8_t kObjectArrayReallocBytes[]={0x48,0x89,0x5c,0x24,0x08,0x48,0x89,0x74,0x24,0x10,0x57,0x48,0x83,0xec,0x20,0x48,
-    0x8b,0xf1,0x41,0x8b,0xd8,0x48,0x8b,0x0d,0x2c,0x16,0xd2,0x08,0x48,0x8b,0xfa,0x48};
-constexpr uint8_t kStringConstructBytes[]={0x48,0x89,0x6c,0x24,0x18,0x56,0x41,0x56,0x41,0x57,0x48,0x83,0xec,0x20,0x45,0x33,
-    0xff,0x49,0x63,0xe8,0x4c,0x89,0x39,0x4c,0x8b,0xf2,0x4c,0x89,0x79,0x08,0x48,0x8b};
-constexpr uint8_t kStringFreeBytes[]={0x48,0x85,0xc9,0x74,0x2e,0x53,0x48,0x83,0xec,0x20,0x48,0x8b,0xd9,0x48,0x8b,0x0d,
-    0x44,0xf6,0xd2,0x08,0x48,0x85,0xc9,0x75,0x0c,0xe8,0x92,0x00,0x00,0x00,0x48,0x8b};
-constexpr const char* kHash = "0e369f64ba50aeb85925119ded60e0449dbc4917e38b46cf7251e533d422820b";
-constexpr uint8_t kTickBytes[] = {0x4c,0x8b,0xdc,0x55,0x57,0x41,0x54,0x49,0x8d,0xab,0x08,0xfc,0xff,0xff,0x48,0x81,0xec,0xe0,0x04,0x00,0x00};
-constexpr uint8_t kEventBytes[] = {0x40,0x55,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x81,0xec,0x70,0x01,0x00,0x00,0x48,0x8d,0x6c,0x24,0x30};
+uintptr_t kObjects{};
+uintptr_t kNames{};
+uintptr_t kTick{};
+uintptr_t kProcessEvent{};
+uintptr_t kFree{};
+uintptr_t kAngelscriptManager{};
+uintptr_t kFormatDiagnostics{};
+uintptr_t kASExceptionLogger{};
+uintptr_t kCompilationLockOffset{};
+uintptr_t kASStackTrace{};
+uintptr_t kASReload{};
+uintptr_t kMoviePlayerInterfaceVtable{};
+uintptr_t kMoviePlayerWait{};
+uintptr_t kPlatformPumpMessages{};
+uintptr_t kMoviePlayerLoadingFinished{};
+uintptr_t kMoviePlayerPlaying{};
+uintptr_t kMoviePlayerStop{};
+uintptr_t kStringConstruct{};
+uintptr_t kNameConstruct{};
+uintptr_t kObjectArrayRealloc{};
 
 bool copy_memory(void* destination, const void* source, size_t count) {
     if (!source) return false;
@@ -300,24 +283,6 @@ void capture_reload_changed_files(void* changed_files,json& output) {
     if(!same_array_header(header,read<ArrayHeader>(address)))
         throw HandlerError("reload_capture_changed","The changed-file array header changed while being copied");
 }
-std::string file_hash() {
-    wchar_t path[32768]{};
-    if (!GetModuleFileNameW(nullptr,path,32768)) return {};
-    std::ifstream file(path,std::ios::binary);
-    if (!file) return {};
-    BCRYPT_ALG_HANDLE algorithm{}; BCRYPT_HASH_HANDLE hash{};
-    if (BCryptOpenAlgorithmProvider(&algorithm,BCRYPT_SHA256_ALGORITHM,nullptr,0)<0) return {};
-    DWORD object_size{}, digest_size{}, received{};
-    BCryptGetProperty(algorithm,BCRYPT_OBJECT_LENGTH,reinterpret_cast<PUCHAR>(&object_size),sizeof(object_size),&received,0);
-    BCryptGetProperty(algorithm,BCRYPT_HASH_LENGTH,reinterpret_cast<PUCHAR>(&digest_size),sizeof(digest_size),&received,0);
-    std::vector<unsigned char> object(object_size),digest(digest_size);
-    if (BCryptCreateHash(algorithm,&hash,object.data(),object_size,nullptr,0,0)<0) {BCryptCloseAlgorithmProvider(algorithm,0);return {};}
-    std::array<char,65536> buffer{};
-    while(file) {file.read(buffer.data(),buffer.size()); auto count=file.gcount(); if(count) BCryptHashData(hash,reinterpret_cast<PUCHAR>(buffer.data()),static_cast<ULONG>(count),0);}
-    BCryptFinishHash(hash,digest.data(),digest_size,0); BCryptDestroyHash(hash); BCryptCloseAlgorithmProvider(algorithm,0);
-    std::ostringstream output; output<<std::hex<<std::setfill('0'); for(auto byte:digest) output<<std::setw(2)<<static_cast<unsigned>(byte);
-    return output.str();
-}
 std::size_t limit_of(const json& params,std::size_t default_value=50) {
     if(!params.contains("limit"))return default_value;
     const auto& value=params.at("limit");
@@ -362,39 +327,81 @@ scalar_outputs::Layout capture_scalar_output_layout(uintptr_t field,const std::s
 GameAccess* GameAccess::active_{};
 uintptr_t GameAccess::ensure_image_base() {
     if(base_)return base_;
-    if(file_hash()!=kHash) {
-        startup_error_="exe_hash_mismatch";
-        throw HandlerError("exe_hash_mismatch","The confirmed game executable is required");
-    }
-    base_=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    const auto candidate_base=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+    const image_patterns::Image image(candidate_base);
+    kTick=image.find_unique("game_tick",
+        "4C 8B DC 55 57 41 54 49 8D AB 08 FC FF FF 48 81 EC E0 04 00 00 "
+        "48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 85 B8 03 00 00");
+    kProcessEvent=image.find_unique("process_event",
+        "40 55 56 57 41 54 41 55 41 56 41 57 48 81 EC 70 01 00 00 48 8D 6C 24 30");
+    const auto name_string=image.find_unique("name_pool_reference",
+        "48 89 5C 24 10 48 89 74 24 18 57 48 83 EC 30 83 79 04 00 "
+        "48 8B FA 8B 19 48 8B F1 0F 85 ?? ?? ?? ?? 80 3D ?? ?? ?? ?? 00 "
+        "74 09 4C 8D 05 ?? ?? ?? ?? EB 16 48 8D 0D ?? ?? ?? ??");
+    kNames=image.rip_target(name_string+42,3,7);
+    const auto object_walk=image.find_unique("object_registry_reference",
+        "40 53 48 83 EC 40 48 8D 15 ?? ?? ?? ?? 48 8D 4C 24 20 E8 ?? ?? ?? ?? "
+        "44 8B 05 ?? ?? ?? ?? 33 DB 45 85 C0 0F 8E ?? ?? ?? ?? "
+        "4C 8B 0D ?? ?? ?? ?? 48 89 7C 24 50");
+    kObjects=image.rip_target(object_walk+41,3,7);
+    const auto compilation_lock=image.find_unique("angelscript_manager_lock",
+        "48 8B 35 ?? ?? ?? ?? 80 BE ?? ?? ?? ?? 00 0F 85 ?? ?? ?? ?? "
+        "48 89 9C 24 C8 01 00 00 48 8D 9E ?? ?? ?? ?? "
+        "4C 89 A4 24 D0 01 00 00 48 8B CB");
+    kAngelscriptManager=image.rip_target(compilation_lock,3,7);
+    kCompilationLockOffset=read<int32_t>(candidate_base+compilation_lock+31);
+    kFormatDiagnostics=image.find_unique("angelscript_diagnostics",
+        "48 89 5C 24 18 55 56 57 41 54 41 55 41 56 41 57 "
+        "48 8D 6C 24 D9 48 81 EC 00 01 00 00 45 33 F6 C7 44 24 34 01 00 00 00 "
+        "48 8D 99 ?? ?? ?? ?? 4C 89 32");
+    kASExceptionLogger=image.find_unique("angelscript_exception_logger",
+        "48 81 EC C8 01 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4 "
+        "48 89 84 24 A0 01 00 00 48 8B 05 ?? ?? ?? ?? "
+        "48 8B 90 ?? ?? ?? ?? 48 85 D2");
+    kASReload=image.find_unique("angelscript_reload",
+        "48 89 5C 24 10 55 56 57 41 54 41 55 41 56 41 57 "
+        "48 8D AC 24 B0 FB FF FF 48 81 EC 50 05 00 00 "
+        "48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 85 40 04 00 00 "
+        "0F B6 05 ?? ?? ?? ?? 44 0F B6 EA");
+    kASStackTrace=image.find_unique("angelscript_stack_trace",
+        "40 55 53 57 41 55 41 56 48 8D AC 24 A0 FC FF FF 48 81 EC 60 04 00 00");
+    kFree=image.find_unique("engine_free",
+        "48 85 C9 74 2E 53 48 83 EC 20 48 8B D9 48 8B 0D ?? ?? ?? ?? "
+        "48 85 C9 75 0C E8 ?? ?? ?? ?? 48 8B");
+    kObjectArrayRealloc=image.find_unique("engine_realloc",
+        "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 "
+        "48 8B F1 41 8B D8 48 8B 0D ?? ?? ?? ?? 48 8B FA");
+    kStringConstruct=image.find_unique("string_constructor",
+        "48 89 6C 24 18 56 41 56 41 57 48 83 EC 20 45 33 FF "
+        "49 63 E8 4C 89 39 4C 8B F2 4C 89 79 08");
+    kNameConstruct=image.find_unique("name_constructor",
+        "40 53 48 83 EC 30 45 33 D2 48 89 54 24 20 48 8B D9 48 8B C2 "
+        "48 85 D2 74 2C 44 0F B7 0A 66 45 85 C9");
+    kMoviePlayerWait=image.find_unique("movieplayer_wait",
+        "40 55 53 41 56 41 57 48 8D AC 24 18 FF FF FF 48 81 EC E8 01 00 00 "
+        "48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 85 80 00 00 00 "
+        "48 8B 01 0F 57 C0 0F 2F 81 C8 00 00 00");
+    kPlatformPumpMessages=image.find_unique("platform_message_pump",
+        "48 81 EC 88 00 00 00 0F B6 05 ?? ?? ?? ?? 84 C0");
+    kMoviePlayerLoadingFinished=image.find_unique("movieplayer_loading_finished",
+        "33 D2 33 C0 F0 0F B1 91 9C 00 00 00 0F 95 C0 C3");
+    kMoviePlayerPlaying=image.find_unique("movieplayer_playing",
+        "48 83 B9 90 00 00 00 00 75 0C 80 B9 A0 00 00 00 00 75 03 32 C0 C3 B0 01 C3");
+    kMoviePlayerStop=image.find_unique("movieplayer_stop",
+        "48 C7 81 50 01 00 00 00 00 00 00 C6 81 A1 00 00 00 01 C3");
+    const std::array<uintptr_t,4> movieplayer_entries={candidate_base+kMoviePlayerStop,
+        candidate_base+kMoviePlayerWait,candidate_base+kMoviePlayerLoadingFinished,candidate_base+kMoviePlayerPlaying};
+    const auto movieplayer_table=image.unique("movieplayer_interface_table",
+        std::span<const uint8_t>{reinterpret_cast<const uint8_t*>(movieplayer_entries.data()),sizeof(movieplayer_entries)},
+        std::string(sizeof(movieplayer_entries),'x'),false);
+    kMoviePlayerInterfaceVtable=movieplayer_table-0x50;
+    base_=candidate_base;
     return base_;
 }
 bool GameAccess::start() {
     if(enabled_) return true;
     try {ensure_image_base();}
-    catch(const HandlerError&) {return false;}
-    uint8_t tick[sizeof(kTickBytes)]{},event[sizeof(kEventBytes)]{},exception_logger[sizeof(kASExceptionLoggerBytes)]{},stack_trace[sizeof(kASStackTraceBytes)]{};
-    uint8_t movie_wait[sizeof(kMoviePlayerWaitBytes)]{},platform_pump[sizeof(kPlatformPumpMessagesBytes)]{};
-    uint8_t movie_finished[sizeof(kMoviePlayerLoadingFinishedBytes)]{},movie_playing[sizeof(kMoviePlayerPlayingBytes)]{},movie_stop[sizeof(kMoviePlayerStopBytes)]{};
-    if(!copy_memory(tick,reinterpret_cast<void*>(base_+kTick),sizeof(tick)) ||
-       !copy_memory(event,reinterpret_cast<void*>(base_+kProcessEvent),sizeof(event)) ||
-       !copy_memory(exception_logger,reinterpret_cast<void*>(base_+kASExceptionLogger),sizeof(exception_logger)) ||
-       !copy_memory(stack_trace,reinterpret_cast<void*>(base_+kASStackTrace),sizeof(stack_trace)) ||
-        !copy_memory(movie_wait,reinterpret_cast<void*>(base_+kMoviePlayerWait),sizeof(movie_wait)) ||
-        !copy_memory(platform_pump,reinterpret_cast<void*>(base_+kPlatformPumpMessages),sizeof(platform_pump)) ||
-        !copy_memory(movie_finished,reinterpret_cast<void*>(base_+kMoviePlayerLoadingFinished),sizeof(movie_finished)) ||
-        !copy_memory(movie_playing,reinterpret_cast<void*>(base_+kMoviePlayerPlaying),sizeof(movie_playing)) ||
-        !copy_memory(movie_stop,reinterpret_cast<void*>(base_+kMoviePlayerStop),sizeof(movie_stop)) ||
-       std::memcmp(tick,kTickBytes,sizeof(tick)) || std::memcmp(event,kEventBytes,sizeof(event)) ||
-       std::memcmp(exception_logger,kASExceptionLoggerBytes,sizeof(exception_logger)) ||
-        std::memcmp(stack_trace,kASStackTraceBytes,sizeof(stack_trace)) ||
-        std::memcmp(movie_wait,kMoviePlayerWaitBytes,sizeof(movie_wait)) ||
-        std::memcmp(platform_pump,kPlatformPumpMessagesBytes,sizeof(platform_pump)) ||
-        std::memcmp(movie_finished,kMoviePlayerLoadingFinishedBytes,sizeof(movie_finished)) ||
-        std::memcmp(movie_playing,kMoviePlayerPlayingBytes,sizeof(movie_playing)) ||
-        std::memcmp(movie_stop,kMoviePlayerStopBytes,sizeof(movie_stop))) {
-        startup_error_="signature_mismatch";return false;
-    }
+    catch(const HandlerError& error) {startup_error_=error.code();return false;}
     auto initialized=MH_Initialize();
     if(initialized!=MH_OK && initialized!=MH_ERROR_ALREADY_INITIALIZED) {startup_error_="hook_initialize_failed";return false;}
     active_=this;process_event_=reinterpret_cast<ProcessEventFn>(base_+kProcessEvent);
@@ -424,10 +431,7 @@ bool GameAccess::start() {
         MH_RemoveHook(reinterpret_cast<void*>(base_+kTick));MH_DisableHook(reinterpret_cast<void*>(base_+kASExceptionLogger));
         MH_RemoveHook(reinterpret_cast<void*>(base_+kASExceptionLogger));startup_error_="tick_hook_failed";return false;
     }
-    uint8_t reload_bytes[sizeof(kASReloadBytes)]{};
-    if(!copy_memory(reload_bytes,reinterpret_cast<void*>(base_+kASReload),sizeof(reload_bytes))
-       || std::memcmp(reload_bytes,kASReloadBytes,sizeof(reload_bytes))
-       || MH_CreateHook(reinterpret_cast<void*>(base_+kASReload),reinterpret_cast<void*>(&hooked_as_reload),
+    if(MH_CreateHook(reinterpret_cast<void*>(base_+kASReload),reinterpret_cast<void*>(&hooked_as_reload),
            reinterpret_cast<void**>(&original_as_reload_))!=MH_OK) {
         MH_DisableHook(reinterpret_cast<void*>(base_+kTick));MH_RemoveHook(reinterpret_cast<void*>(base_+kTick));
         MH_DisableHook(reinterpret_cast<void*>(base_+kASStackTrace));MH_RemoveHook(reinterpret_cast<void*>(base_+kASStackTrace));
@@ -645,7 +649,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.100"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.101"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -657,7 +661,7 @@ json GameAccess::status() const {
             {"requests",{{"queue_depth",pending},{"queue_limit",nullptr},{"active",active},{"metadata_available",queue_metadata_available},
                          {"completed",completed_jobs_.load()},{"cancelled_before_start",cancelled_jobs_.load()},
                          {"wait_timeout_ms",nullptr},{"default_wait_timeout_ms",kRequestWaitMs},{"cancelled_jobs_can_execute",false}}},
-            {"build_hash",kHash},{"startup_error",startup_error_},
+            {"bindings_source","runtime_image_patterns"},{"startup_error",startup_error_},
             {"process_id",GetCurrentProcessId()},
             {"string_inputs",{{"quarantined",string_inputs_quarantined_.load()},
                 {"quarantine_cause",string_inputs_quarantine_cause_.load()},
@@ -689,13 +693,13 @@ json GameAccess::status() const {
                               {"checks",{"object_serial","class_identity","class_serial"}},
                               {"coverage","conditional_on_observed_nonzero_object_and_class_serial"},
                               {"allocates_serial",false},{"zero_aba_protection",false}}},
-            {"limitations",{"Experimental binding to one executable","Zero serial values do not protect against ABA; an observed serial change invalidates the previous handle","One active connection; handles and observations belong to its session","World generation follows GameEngine.GameViewport.World identity; script generation counts successful reload attempts and does not prove a particular source changed","The DLL cannot be unloaded; close the game to terminate it"}}};
+            {"limitations",{"Native binding requires uniquely resolved compatible image patterns","Zero serial values do not protect against ABA; an observed serial change invalidates the previous handle","One active connection; handles and observations belong to its session","World generation follows GameEngine.GameViewport.World identity; script generation counts successful reload attempts and does not prove a particular source changed","The DLL cannot be unloaded; close the game to terminate it"}}};
 }
 json GameAccess::compile_diagnostics() {
     const auto image_base=ensure_image_base();
     const auto manager=read<uintptr_t>(image_base+kAngelscriptManager);
     if(!manager)throw HandlerError("compile_diagnostics_unavailable","The AngelScript manager has not been created");
-    auto* compilation_lock=reinterpret_cast<CRITICAL_SECTION*>(manager+0x390);
+    auto* compilation_lock=reinterpret_cast<CRITICAL_SECTION*>(manager+kCompilationLockOffset);
     std::string text;
     std::uint64_t started_before{},completed_before{},started_after{},completed_after{};
     json reload_receipt;
@@ -2103,12 +2107,6 @@ struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::st
     };
     if(contains_object_array) {
         if(object_array_inputs_quarantined_)throw HandlerError("object_array_input_quarantined","Object array inputs are blocked after unconfirmed cleanup");
-        uint8_t realloc_bytes[sizeof(kObjectArrayReallocBytes)]{},free_bytes[sizeof(kStringFreeBytes)]{};
-        if(!copy_memory(realloc_bytes,reinterpret_cast<void*>(base_+kObjectArrayRealloc),sizeof(realloc_bytes))
-           || !copy_memory(free_bytes,reinterpret_cast<void*>(base_+kFree),sizeof(free_bytes))
-           || std::memcmp(realloc_bytes,kObjectArrayReallocBytes,sizeof(realloc_bytes))
-           || std::memcmp(free_bytes,kStringFreeBytes,sizeof(free_bytes)))
-            throw HandlerError("unsupported_array_allocator","The object array Realloc or Free signatures do not match");
         object_array_input_lifetime::InputBudget budget;
         array_inputs.reserve(parameter_fields.size());
         for(const auto field:parameter_fields) {
@@ -2249,12 +2247,6 @@ struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::st
     };
     if(contains_string_input) {
         if(string_inputs_quarantined_)throw HandlerError("string_input_quarantined","FString inputs are blocked after unconfirmed cleanup");
-        uint8_t constructor_bytes[sizeof(kStringConstructBytes)]{},free_bytes[sizeof(kStringFreeBytes)]{};
-        if(!copy_memory(constructor_bytes,reinterpret_cast<void*>(base_+kStringConstruct),sizeof(constructor_bytes))
-           || !copy_memory(free_bytes,reinterpret_cast<void*>(base_+kFree),sizeof(free_bytes))
-           || std::memcmp(constructor_bytes,kStringConstructBytes,sizeof(constructor_bytes))
-           || std::memcmp(free_bytes,kStringFreeBytes,sizeof(free_bytes)))
-            throw HandlerError("unsupported_string_allocator","The FString constructor or release signatures do not match");
         string_input_lifetime::InputBudget budget;
         string_inputs.reserve(parameter_fields.size());
         for(const auto field:parameter_fields) {
