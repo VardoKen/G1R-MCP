@@ -212,7 +212,8 @@ Verification does not launch the game or load the DLL.
 4. For all Codex chats, start one shared server as a separate process:
    `<environment>\\Scripts\\python.exe -B -m g1r_mcp.server --transport streamable-http
    --host 127.0.0.1 --port 27124 --modkit-root <official Modkit>
-   --workspace-root <working packages> --game-root <installed game>`.
+   --workspace-root <working packages> --runtime-root <bundle or working runtime>
+   --game-root <installed game>`.
    In Codex config.toml, set `[mcp_servers.g1r_mcp]` and
    `url = "http://127.0.0.1:27124/mcp"`; do not set command/args for each chat.
    The server does not launch the game; all chats share one native TCP owner.
@@ -235,7 +236,9 @@ a C++ compiler is not required to run the prepared bundle. Native build sources
 are not included in this minimal bundle; rebuilds are performed in the Git workspace.
 
 The game compiles .as; hot reload is confirmed only for function bodies.
-Unverified compiler APIs and ScriptPatches application are not considered ready.
+Native compiler reports can be read through g1r_compile_diagnostics. ScriptPatches
+application was confirmed by an isolated official-runtime probe; each package
+still requires its own compilation and runtime verification.
 Isolated probe packages are prepared separately from tests/fixtures into artifacts;
 user mods and results from past experiments are not included.
 
