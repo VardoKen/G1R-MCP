@@ -10,6 +10,7 @@
 #include "g1r_mcp/name_return.hpp"
 #include "g1r_mcp/name_argument.hpp"
 #include "g1r_mcp/string_return.hpp"
+#include "g1r_mcp/array_page.hpp"
 #include "g1r_mcp/enum_values.hpp"
 #include "g1r_mcp/enum_arguments.hpp"
 #include "g1r_mcp/vector_layout.hpp"
@@ -273,6 +274,32 @@ std::string copied_string(const g1r_mcp::StringHeader& header) {
     if(header.count && text.back()==0)text.pop_back();
     return utf8(text.data(),static_cast<int>(text.size()));
 }
+// Current executable evidence: dev91-script-reload-source-evidence.json.
+// The caller passes a 16-byte array header of two-FString, 32-byte entries.
+// The source meanings of these two fields remain unknown.
+struct ReloadChangedFilePair {
+    StringHeader first;
+    StringHeader second;
+};
+static_assert(sizeof(ReloadChangedFilePair)==32);
+void capture_reload_changed_files(void* changed_files,json& output) {
+    const auto address=reinterpret_cast<uintptr_t>(changed_files);
+    const auto header=read<ArrayHeader>(address);
+    const auto page=array_page(header,sizeof(ReloadChangedFilePair),1,0,
+        std::numeric_limits<std::size_t>::max());
+    for(int32_t index=0;index<page.count;++index) {
+        const auto pair_address=page.begin+static_cast<uintptr_t>(index)*sizeof(ReloadChangedFilePair);
+        const auto pair=read<ReloadChangedFilePair>(pair_address);
+        auto first=copied_string(pair.first);
+        auto second=copied_string(pair.second);
+        const auto after=read<ReloadChangedFilePair>(pair_address);
+        if(std::memcmp(&pair,&after,sizeof(pair)))
+            throw HandlerError("reload_capture_changed","The changed-file string headers changed while being copied");
+        output.push_back({{"first",std::move(first)},{"second",std::move(second)}});
+    }
+    if(!same_array_header(header,read<ArrayHeader>(address)))
+        throw HandlerError("reload_capture_changed","The changed-file array header changed while being copied");
+}
 std::string file_hash() {
     wchar_t path[32768]{};
     if (!GetModuleFileNameW(nullptr,path,32768)) return {};
@@ -443,8 +470,36 @@ bool GameAccess::start() {
 }
 bool __fastcall GameAccess::hooked_as_reload(void* manager,std::uint8_t mode,void* changed_files) {
     auto self=active_;
+    const auto attempt_id=++self->script_reload_attempts_started_;
+    const auto generation_before=self->successful_script_reloads_.load();
+    json receipt;
+    try {
+        receipt={{"changed_files",json::array()},{"capture_complete",false}};
+        capture_reload_changed_files(changed_files,receipt["changed_files"]);
+        receipt["capture_complete"]=true;
+    } catch(const HandlerError& error) {
+        try {receipt["capture_error"]={{"code",error.code()},{"message",error.what()}};}catch(...) {}
+    } catch(const std::exception& error) {
+        try {receipt["capture_error"]={{"code","reload_capture_failed"},{"message",error.what()}};}catch(...) {}
+    } catch(...) {
+        try {receipt["capture_error"]={{"code","reload_capture_failed"},{"message","Could not capture changed-file metadata"}};}catch(...) {}
+    }
     const bool result=self->original_as_reload_(manager,mode,changed_files);
     if(result)++self->successful_script_reloads_;else ++self->failed_script_reloads_;
+    const auto completion_id=++self->script_reload_attempts_completed_;
+    try {
+        const bool capture_complete=receipt.is_object() && receipt.value("capture_complete",false);
+        receipt.update({{"attempt_id",attempt_id},{"completion_id",completion_id},{"mode",mode},{"success",result},
+            {"script_generation_before",generation_before},
+            {"script_generation_after",self->successful_script_reloads_.load()},{"capture_complete",capture_complete}});
+        if(!receipt.contains("changed_files"))receipt["changed_files"]=json::array();
+        std::lock_guard lock(self->script_reload_receipt_mutex_);
+        if(self->last_completed_script_reload_.is_null() ||
+           self->last_completed_script_reload_.value("completion_id",std::uint64_t{})<completion_id)
+            self->last_completed_script_reload_=std::move(receipt);
+    } catch(...) {
+        // A failed bridge capture must not change the engine reload result.
+    }
     return result;
 }
 void __fastcall GameAccess::hooked_as_exception_logger(const char* message) {
@@ -590,7 +645,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.99"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.100"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -642,8 +697,12 @@ json GameAccess::compile_diagnostics() {
     if(!manager)throw HandlerError("compile_diagnostics_unavailable","The AngelScript manager has not been created");
     auto* compilation_lock=reinterpret_cast<CRITICAL_SECTION*>(manager+0x390);
     std::string text;
+    std::uint64_t started_before{},completed_before{},started_after{},completed_after{};
+    json reload_receipt;
     EnterCriticalSection(compilation_lock);
     try {
+        started_before=script_reload_attempts_started_.load();
+        completed_before=script_reload_attempts_completed_.load();
         StringHeader header{};
         using Formatter=StringHeader*(__fastcall*)(void*,StringHeader*);
         reinterpret_cast<Formatter>(image_base+kFormatDiagnostics)(reinterpret_cast<void*>(manager),&header);
@@ -663,13 +722,26 @@ json GameAccess::compile_diagnostics() {
         },[image_base](uintptr_t data) {
             return free_string(image_base+kFree,reinterpret_cast<void*>(data));
         });
+        {
+            std::lock_guard lock(script_reload_receipt_mutex_);
+            reload_receipt=last_completed_script_reload_;
+            started_after=script_reload_attempts_started_.load();
+            completed_after=script_reload_attempts_completed_.load();
+        }
         LeaveCriticalSection(compilation_lock);
     } catch(...) {
         LeaveCriticalSection(compilation_lock);
         throw;
     }
+    const bool receipt_current=completed_after==0 ? reload_receipt.is_null() :
+        reload_receipt.is_object() && reload_receipt.value("completion_id",std::uint64_t{})==completed_after;
+    const bool reload_context_consistent=started_before==started_after && completed_before==completed_after &&
+        started_after==completed_after && receipt_current;
     return {{"status","available"},{"source","FAngelscriptManager::FormatDiagnostics"},
-            {"process_id",GetCurrentProcessId()},{"text",std::move(text)}};
+            {"process_id",GetCurrentProcessId()},{"text",std::move(text)},
+            {"reload_attempt_started",started_after},{"reload_attempt_completed",completed_after},
+            {"compiler_read_reload_context_consistent",reload_context_consistent},
+            {"last_completed_reload",std::move(reload_receipt)}};
 }
 json GameAccess::request(const json& envelope) {
     if(envelope.at("op")=="status") return status();

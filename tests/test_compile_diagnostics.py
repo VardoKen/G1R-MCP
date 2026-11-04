@@ -17,6 +17,7 @@ class CompileDiagnosticsTests(unittest.TestCase):
         self.assertEqual(report["diagnostics"][0]["line"], 48)
         self.assertEqual(report["compilation_state"], "errors_reported")
         self.assertFalse(report["compiled"])
+        self.assertFalse(report["exact_source_compiled"])
         self.assertFalse(report["report_matches_runtime_compile"])
         empty = parse_report("Everything compiled", "Probe", files)
         self.assertEqual(empty["compilation_state"], "unknown")

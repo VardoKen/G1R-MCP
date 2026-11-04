@@ -78,6 +78,10 @@ private:
     std::atomic<bool> script_reload_hook_installed_{false};
     std::atomic<std::uint64_t> successful_script_reloads_{0};
     std::atomic<std::uint64_t> failed_script_reloads_{0};
+    std::atomic<std::uint64_t> script_reload_attempts_started_{0};
+    std::atomic<std::uint64_t> script_reload_attempts_completed_{0};
+    std::mutex script_reload_receipt_mutex_;
+    nlohmann::json last_completed_script_reload_=nullptr;
     std::uint64_t script_generation_{};
     ProcessEventFn process_event_{};
     MoviePlayerWaitFn original_movieplayer_wait_{};

@@ -1,10 +1,12 @@
-# Локальные MCP-инструменты — 1.0.0-dev.99
+# Локальные MCP-инструменты — 1.0.0-dev.100
 
 Дата сверки: **04.11.2026**. Документ описывает текущую реализацию в `src/g1r_mcp/` и `native/src/`. Сервер использует официальный Python SDK `mcp==2.3.0`; в `server.py` зарегистрирован **51 инструмент**. Схемы аргументов задаёт регистрация MCP, а `g1r_capabilities` дополняет их происхождением данных, доступностью, форматами и ограничениями. Ответы и ошибки моста — на английском языке; проектная документация — на русском.
 
 Назначение G1R MCP — полноценное исследование, разработка и отладка официальных модов, а перенос пользовательских модов с UE4SS — промежуточный рубеж. Рабочие пакеты — официальные `GothicMod.json` и AngelScript. Каталог ниже описывает реализованные инструменты, а не завершение всей цели. Игровой маршрут, включая загрузку DLL и выполнение через Tick, описан в [native-route.md](native-route.md); сводка готового и неготового — в [README.md](README.md), доказательства — в [описании проверок](../../tests/G1R_MCP/README.md).
 
 ## Каталог 51 инструмента
+
+Исходники и DLL в `artifacts/build-dev64/Release/` имеют версию dev.100; canonical DLL и общий HTTP-сервер пока dev.99. Новая диагностика проверена локально, но ещё не в игре.
 
 В таблицах перечислены пользовательские аргументы. Контекст MCP-сессии `ctx` передаётся SDK. Необязательный `timeout_seconds` игровых запросов меняет ожидание ответа, но не доказывает отмену уже исполняемого вызова.
 
@@ -111,7 +113,7 @@ Start/restart, stop и load сверяют PID, время создания и �
 
 Для hot reload сначала прочитать canonical и staging exact-файлы, записать canonical с ожидаемым хешем и вызвать `g1r_apply_staged_file` с обоими ожидаемыми хешами и process identity. Ответ подтверждает применение файла, а не завершение компиляции. File watcher применим к телам функций; новые классы, поля и defaults требуют restart. Поколение scripts считает успешные возвраты наблюдаемого native reload; не подтверждает компиляцию конкретного SHA-256 и не увеличивается при неудачной попытке.
 
-Без `report_path` `g1r_compile_diagnostics` читает native compiler formatter; с `report_path` читает явно предоставленный рабочий `.txt`/`.log`. Возвращаются сообщения, severity, файл, line/column и, когда сопоставление найдено, SHA-256 текущего исходника. `compiler_api_available=true` у native-маршрута означает доступ к formatter. Ни пустой отчёт, ни SHA-256 текущего файла не доказывают компиляцию этих байтов: `compiled=false`, `report_matches_runtime_compile=false`, `source_current_correlation="unknown"`. Ошибки текущего AngelScript invoke возвращаются отдельно как `angelscript_exception`/`script_errors`, с наблюдаемыми сведениями о стеке; отсутствие наблюдаемого сообщения не доказывает завершение произвольного скрипта.
+Без `report_path` `g1r_compile_diagnostics` читает native compiler formatter; с `report_path` читает явно предоставленный рабочий `.txt`/`.log`. Возвращаются сообщения, severity, файл, line/column и, когда сопоставление найдено, SHA-256 текущего исходника. Dev.100 дополнительно возвращает `last_completed_reload`, счётчики начатых/завершённых попыток, согласованность reload-контекста при compiler-чтении, хеши выбранного и связанного staged-пакета до/после чтения и совпадения полных абсолютных AS-путей. Значение двух полей пары changed-file остаётся неизвестным; basename и суффикс пути не принимаются за идентичность файла. `compiler_api_available=true` у native-маршрута означает доступ к formatter. Ни пустой отчёт, ни SHA-256 текущего файла, ни успешный reload с совпавшим путём не доказывают компиляцию этих байтов: `compiled=false`, `exact_source_compiled=false`, `report_matches_runtime_compile=false`, `source_current_correlation="unknown"`. Ошибки текущего AngelScript invoke возвращаются отдельно как `angelscript_exception`/`script_errors`, с наблюдаемыми сведениями о стеке; отсутствие наблюдаемого сообщения не доказывает завершение произвольного скрипта.
 
 Development helper поставляется отдельным companion-пакетом `development/helpers/G1RMCPDevelopmentHelpers`. Он предоставляет отражённые `GetHelperVersion`, `ReadText`, `HasWorld`, `HasGameplayPlayer`, `GetVisibilityTraceChannel`, `TraceImpactPoint`. Живой world-instance и явное включение пакета нужны для его игровых операций; наличие helper в bundle само его не активирует.
 

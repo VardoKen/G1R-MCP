@@ -1,6 +1,7 @@
 """Автоматический compiler report проходит существующий MCP и общий нативный клиент."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -120,6 +121,109 @@ class RuntimeCompileDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["compilation_state"], "unknown")
         self.assertFalse(result["compiled"])
         self.assertFalse(result["report_matches_runtime_compile"])
+        self.native.request.assert_called_once_with("compile_diagnostics", {})
+        self.executor.assert_not_called()
+
+    def reload_response(self, path, *, success=True):
+        return {**self.response(""), "last_completed_reload": {
+            "attempt_id": 9, "completion_id": 9, "mode": 1, "success": success,
+            "script_generation_before": 3, "script_generation_after": 4 if success else 3,
+            "changed_files": [{"first": str(path), "second": "opaque-pair-value"}],
+            "capture_complete": True}, "reload_attempt_started": 9, "reload_attempt_completed": 9,
+            "compiler_read_reload_context_consistent": True}
+
+    async def test_successful_staged_reload_matches_selected_source_without_compiled_byte_claim(self):
+        staged_path = "artifacts/session/packages/Probe"
+        staged = self.workspace / staged_path
+        (staged / "Script").mkdir(parents=True)
+        (staged / "GothicMod.json").write_bytes((self.package / "GothicMod.json").read_bytes())
+        staged_script = staged / "Script" / self.script.name
+        staged_script.write_bytes("class UСтадия {}\r\n".encode("utf-8"))
+        self.service._launch_observation = {"launch_id": "launch-1", "stage": "process_running",
+            "process": {"pid": 12345}, "development_staging": {"packages": [{
+                "source_package_path": self.package_path, "relative_package": staged_path}]}}
+        producer = self.reload_response(str(staged_script).replace("/", "\\").upper())
+        self.native.request.return_value = producer
+        selections = [self.package_path, staged_path]
+        if os.name == "nt":
+            selections += ["ACTIVE/Probe", "ARTIFACTS/session/packages/Probe"]
+        for selected in selections:
+            with self.subTest(selected=selected):
+                result = await self.tool({**self.arguments, "relative_package": selected,
+                    "expected_manifest_sha256": self.service._manifest(selected,
+                        show_script_errors=True)["manifest_sha256"]})
+                self.assertTrue(result["observed_successful_reload"])
+                self.assertTrue(result["reload_event_matches_selected_file"])
+                self.assertTrue(result["reload_event_matches_selected_package"])
+                self.assertEqual(result["last_completed_reload"], producer["last_completed_reload"])
+                self.assertEqual(result["reload_attempt_started"], 9)
+                self.assertEqual(result["reload_attempt_completed"], 9)
+                match, = result["reload_event_file_matches"]
+                self.assertEqual((match["role"], match["file_path"], match["pair_field"]),
+                                 ("staged", "Script/Проба.as", "first"))
+                self.assertEqual(match["current_file_sha256"], hashlib.sha256(staged_script.read_bytes()).hexdigest())
+                self.assertNotEqual(match["current_file_sha256"], hashlib.sha256(self.script.read_bytes()).hexdigest())
+                self.assertTrue(result["manifest_stable_during_read"])
+                self.assertTrue(result["package_observations_complete"])
+                self.assertTrue(result["compiler_read_reload_context_consistent"])
+                self.assertEqual(result["reload_event_file_pair_semantics"], "unknown")
+                self.assertFalse(result["compiled"])
+                self.assertFalse(result["exact_source_compiled"])
+                self.assertEqual(result["source_current_correlation"], "unknown")
+        (staged / "GothicMod.json").unlink()
+        self.native.request.return_value = self.reload_response(self.script)
+        result = await self.tool(self.arguments)
+        self.assertTrue(result["observed_successful_reload"])
+        self.assertTrue(result["reload_event_matches_selected_file"])
+        self.assertFalse(result["package_observations_complete"])
+        unavailable, = [item for item in result["package_observations"] if item["role"] == "staged"]
+        self.assertFalse(unavailable["available_before"])
+        self.assertFalse(unavailable["available_after"])
+        self.assertEqual(unavailable["error_after"]["code"], "invalid_package")
+        self.assertFalse(result["compiled"])
+        self.assertFalse(result["exact_source_compiled"])
+        self.native.request.return_value = producer
+        self.service._launch_observation["process"]["pid"] = 12346
+        result = await self.tool(self.arguments)
+        self.assertTrue(result["observed_successful_reload"])
+        self.assertFalse(result["reload_event_matches_selected_package"])
+        self.assertEqual([item["role"] for item in result["package_observations"]], ["selected"])
+        self.executor.assert_not_called()
+
+    async def test_other_package_same_basename_and_failed_reload_remain_distinct(self):
+        cases = [(self.workspace / "other" / "Probe" / "Script" / self.script.name, True, False),
+                 (self.script, False, True)]
+        for path, success, matched in cases:
+            with self.subTest(path=path, success=success):
+                self.native.request.return_value = self.reload_response(path, success=success)
+                result = await self.tool(self.arguments)
+                self.assertIs(result["observed_successful_reload"], success)
+                self.assertIs(result["reload_event_matches_selected_file"], matched)
+                self.assertIs(result["reload_event_matches_selected_package"], matched)
+                self.assertFalse(result["exact_source_compiled"])
+                self.assertFalse(result["compiled"])
+                self.assertFalse(result["report_matches_runtime_compile"])
+        self.executor.assert_not_called()
+
+    async def test_matching_reload_path_with_changed_source_reports_current_hash_and_instability(self):
+        original_hash = hashlib.sha256(self.script.read_bytes()).hexdigest()
+        producer = self.reload_response(self.script)
+        def change_source(*_):
+            self.script.write_bytes("class UИзменённаяПроба {}\r\n".encode("utf-8"))
+            return producer
+        self.native.request.side_effect = change_source
+        result = await self.tool(self.arguments)
+        self.assertTrue(result["observed_successful_reload"])
+        self.assertTrue(result["reload_event_matches_selected_file"])
+        self.assertFalse(result["manifest_stable_during_read"])
+        self.assertFalse(result["expected_manifest_matches_current"])
+        match, = result["reload_event_file_matches"]
+        self.assertEqual(match["file_sha256_before"], original_hash)
+        self.assertEqual(match["current_file_sha256"], hashlib.sha256(self.script.read_bytes()).hexdigest())
+        self.assertFalse(match["file_stable_during_read"])
+        self.assertFalse(result["exact_source_compiled"])
+        self.assertFalse(result["compiled"])
+        self.assertEqual(result["source_current_correlation"], "unknown")
         self.native.request.assert_called_once_with("compile_diagnostics", {})
         self.executor.assert_not_called()
 
