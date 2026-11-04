@@ -1,5 +1,11 @@
 # Проверки G1R MCP: локальные инструменты и нативный маршрут
 
+## Текущие проверки dev.103 — 05.11.2026
+
+[Live-приёмка](../../../artifacts/dev103-typed-input-live-complete.json) имеет accepted=true на source/canonical/shared runtime **1.0.0-dev.103**, Steam build **26394867**: **10/10 typed-вызовов**, **9/9 итоговых проверок**. FName-массивы: пустой 0, текстовые Entry/miss/Entry 304, None/Entry 211, собственный SourceName через name_from 102; прежние int32/scalar-результаты сохранены. Reflection подтверждает NameProperty8 и input value/const_reference; array input cleanup подтверждён. Reload marker 71→72→72→71, source/staging восстановлены; своя игра закрыта и заявка освобождена.
+
+[DLL-сборка](../../../artifacts/native-build-dev103.txt) и [исправление аргумента Number](../../../artifacts/native-build-dev103-name-number.txt) прошли; [bootstrap](../../../artifacts/python-bootstrap-dev103.txt) **3/3, 16,188 с**. Первичный Name[] вызов вернул 300 вместо 304: ctor Number=1 изменял числовую часть имени; после Number=0 повторный live-цикл принят. Другие типы массива, произвольные POD и полный новый Python/CTest-набор не проверялись. [Runtime-комплект dev.103](../../../artifacts/bridge-bundle-dev103/manifest.json) и [wheel dev.103](../../../artifacts/wheel-dev103/g1r_mcp-1.0.0.dev103-py3-none-any.whl) подготовлены; проверка bundle и CRC/RECORD/metadata wheel прошли. Установленный consumer-сеанс не повторялся; прежние результаты ниже сохраняют свои версии.
+
 ## Текущие проверки dev.102 — 04.11.2026
 
 [Live-приёмка](../../../artifacts/dev102-typed-input-live-complete.json) имеет accepted=true на source/canonical/shared runtime **1.0.0-dev.102**, Steam build **26394867**: **6/6 typed-вызовов**, **9/9 итоговых проверок**. Int32-массивы дали 0/6/−1, собственная scalar-структура — 1009/−9/0. Marker 71→72→72→71, успешный/неудачный reload, поколение/capture/exact paths и source/staging проверены; своя игра закрыта, заявка освобождена.

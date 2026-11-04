@@ -21,7 +21,7 @@ nlohmann::json GameAccess::capture_object_array_parameter(std::uintptr_t field,i
     return before;
 }
 
-nlohmann::json GameAccess::capture_int32_array_parameter(std::uintptr_t field,int size,int dim,std::uint64_t flags) const {
+nlohmann::json GameAccess::capture_scalar_array_parameter(std::uintptr_t field,int size,int dim,std::uint64_t flags) const {
     using json=nlohmann::json;
     using game_memory::read;
     const auto capture=[&]() {
@@ -38,21 +38,23 @@ nlohmann::json GameAccess::capture_int32_array_parameter(std::uintptr_t field,in
         const auto offset=outer.at("offset").get<std::int32_t>();
         if(outer.at("type")!="ArrayProperty" || size!=16 || dim!=1 || outer.at("element_size")!=size || outer.at("array_dim")!=dim
            || offset<0 || offset%8 || outer.at("flags")!=flags)
-            throw HandlerError("unsupported_signature","Int32 arrays require a 16-byte input layout");
+            throw HandlerError("unsupported_signature","Scalar arrays require a 16-byte input layout");
         if(vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
-            throw HandlerError("unsupported_signature","Int32 arrays require value or const reference input");
+            throw HandlerError("unsupported_signature","Scalar arrays require value or const reference input");
         outer["array_flags"]=read<std::uint8_t>(field+0x70);
         const auto inner_pointer=read<std::uintptr_t>(field+0x78);
         outer["inner"]=inner_pointer;
         auto inner=field_snapshot(inner_pointer);
-        if(inner.at("type")!="IntProperty" || inner.at("element_size")!=4 || inner.at("array_dim")!=1 || inner.at("offset")!=0)
-            throw HandlerError("unsupported_signature","The int32 array requires four-byte IntProperty elements");
-        return json{{"outer",std::move(outer)},{"inner",std::move(inner)},{"scalar_type","IntProperty"},
-            {"public",{{"container_type","ArrayProperty"},{"element",{{"type","IntProperty"},
-                {"element_size",4},{"array_dim",1},{"offset",0}}}}}};
+        const auto scalar_type=inner.at("type").get<std::string>();
+        const auto element_size=scalar_type=="IntProperty"?4:scalar_type=="NameProperty"?8:0;
+        if(!element_size || inner.at("element_size")!=element_size || inner.at("array_dim")!=1 || inner.at("offset")!=0)
+            throw HandlerError("unsupported_signature","Scalar arrays require four-byte IntProperty or eight-byte NameProperty elements");
+        return json{{"outer",std::move(outer)},{"inner",std::move(inner)},{"scalar_type",scalar_type},
+            {"public",{{"container_type","ArrayProperty"},{"element",{{"type",scalar_type},
+                {"element_size",element_size},{"array_dim",1},{"offset",0}}}}}};
     };
     const auto before=capture();
-    if(before!=capture())throw HandlerError("int32_array_metadata_changed","Reflected int32 array metadata changed during validation");
+    if(before!=capture())throw HandlerError("scalar_array_metadata_changed","Reflected scalar array metadata changed during validation");
     return before;
 }
 nlohmann::json GameAccess::capture_enum_array_parameter(std::uintptr_t field,int size,int dim,std::uint64_t flags) const {

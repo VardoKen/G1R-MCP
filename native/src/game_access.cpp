@@ -234,7 +234,7 @@ bool construct_string(uintptr_t constructor,g1r_mcp::StringHeader* header,const 
     __except(EXCEPTION_EXECUTE_HANDLER) {return false;}
 }
 bool construct_name(uintptr_t constructor,uint64_t* value,const char16_t* text) {
-    __try {reinterpret_cast<uint64_t*(__fastcall*)(uint64_t*,const char16_t*,uint32_t)>(constructor)(value,text,1);return true;}
+    __try {reinterpret_cast<uint64_t*(__fastcall*)(uint64_t*,const char16_t*,uint32_t)>(constructor)(value,text,0);return true;}
     __except(EXCEPTION_EXECUTE_HANDLER) {return false;}
 }
 bool allocate_object_array(uintptr_t allocator,size_t bytes,void** result) {
@@ -650,7 +650,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.102"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.103"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -1599,8 +1599,8 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                 } else if(field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);})=="ObjectProperty") {
                     const auto array=capture_object_array_parameter(field,size,array_dim,flags);
                     captured["aux"]={{"object_array",array}};array_public=array.at("public");supported=true;
-                } else if(field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);})=="IntProperty") {
-                    const auto array=capture_int32_array_parameter(field,size,array_dim,flags);
+                } else if(const auto inner_type=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);});inner_type=="IntProperty" || inner_type=="NameProperty") {
+                    const auto array=capture_scalar_array_parameter(field,size,array_dim,flags);
                     captured["aux"]={{"scalar_array",array}};array_public=array.at("public");supported=true;
                 } else {
                     const auto array=capture_enum_array_parameter(field,size,array_dim,flags);
@@ -1692,7 +1692,8 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                 } else {
                     if(value_array)public_parameter["passing"]=(flags&kConstParm)?"const_reference":"value";
                     public_parameter["argument_constraints"]={{"max_elements",std::numeric_limits<int32_t>::max()},
-                        {"element_form",value_array?"integer":"null_or_handle"},{"ownership",value_array?"engine_owned_copy":"engine_owned_pointer_copy"}};
+                        {"element_form",value_array?(captured["aux"].contains("scalar_array") && captured["aux"]["scalar_array"].at("scalar_type")=="NameProperty"?"name_or_name_from":"integer"):"null_or_handle"},
+                        {"ownership",value_array?"engine_owned_copy":"engine_owned_pointer_copy"}};
                 }
             }
         }
@@ -1780,8 +1781,8 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                     if(capture_object_array_return(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>(),true)!=auxiliary.at("object_array_output"))
                         throw HandlerError("signature_changed","The object array output metadata changed while reading the signature");
                 } else if(auxiliary.contains("scalar_array")) {
-                    if(capture_int32_array_parameter(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>(),captured.at("flags").get<uint64_t>())!=auxiliary.at("scalar_array"))
-                        throw HandlerError("signature_changed","The int32 array metadata changed while reading the signature");
+                    if(capture_scalar_array_parameter(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>(),captured.at("flags").get<uint64_t>())!=auxiliary.at("scalar_array"))
+                        throw HandlerError("signature_changed","The scalar array metadata changed while reading the signature");
                 } else if(auxiliary.contains("enum_array")) {
                     if(capture_enum_array_parameter(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>(),captured.at("flags").get<uint64_t>())!=auxiliary.at("enum_array"))
                         throw HandlerError("signature_changed","The enum array metadata changed while reading the signature");
@@ -2013,7 +2014,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     };
     struct NameInput {uintptr_t field{};int32_t field_offset{},destination_offset{};NameSource source;};
     std::vector<NameInput> name_inputs;
-    auto pack_name=[&](uintptr_t field,int32_t field_offset,int32_t destination_offset,const json& value) {
+    auto encode_name=[&](uintptr_t field,int32_t field_offset,int32_t destination_offset,const json& value)->uint64_t {
         validate_name_argument_layout(read<int32_t>(field+0x34),read<int32_t>(field+0x30));
         if(value.is_object() && value.contains("name")) {
             if(value.size()!=1 || !value.at("name").is_string())
@@ -2033,12 +2034,16 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             uint64_t packed{};
             if(!construct_name(base_+kNameConstruct,&packed,reinterpret_cast<const char16_t*>(encoded.c_str())))
                 throw HandlerError("name_constructor_fault","The FName constructor raised a native exception");
-            std::memcpy(buffer+destination_offset,&packed,sizeof(packed));
+            return packed;
         } else {
             const auto source=validated_name_argument(read<int32_t>(field+0x34),read<int32_t>(field+0x30),value,capture_name);
-            std::memcpy(buffer+destination_offset,&source.packed,sizeof(source.packed));
             name_inputs.push_back({field,field_offset,destination_offset,source});
+            return source.packed;
         }
+    };
+    auto pack_name=[&](uintptr_t field,int32_t field_offset,int32_t destination_offset,const json& value) {
+        const auto packed=encode_name(field,field_offset,destination_offset,value);
+        std::memcpy(buffer+destination_offset,&packed,sizeof(packed));
     };
     struct VectorParameter {uintptr_t field{};int offset{},size{};uint64_t flags{};std::string key;vector_layout::Snapshot layout;bool output{},returned{};};
     std::vector<VectorParameter> vector_parameters;
@@ -2122,7 +2127,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             if((flags&0x400) || ((flags&0x100) && !(flags&0x2)) || field_type(field,[this](auto value){return name(value);})!="ArrayProperty")continue;
             const auto inner_type=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);});
             const auto metadata=inner_type=="ObjectProperty"?capture_object_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags)
-                :inner_type=="IntProperty"?capture_int32_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags)
+                :(inner_type=="IntProperty" || inner_type=="NameProperty")?capture_scalar_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags)
                 :capture_enum_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags);
             const auto key=name(read<uint64_t>(field+0x20));
             if(!arguments.contains(key))throw HandlerError("missing_argument","Object array argument is missing: "+key);
@@ -2131,15 +2136,19 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                 throw HandlerError("invalid_argument","Object array requires a JSON array");
             const bool enum_array=metadata.contains("enum");
             const bool scalar_array=metadata.contains("scalar_type");
-            budget.add(values.size(),enum_array?1:scalar_array?4:8);
+            const auto stride=enum_array?size_t{1}:scalar_array?metadata.at("inner").at("element_size").get<size_t>():size_t{8};
+            budget.add(values.size(),stride);
             ObjectArrayInput input{field,read<int32_t>(field+0x44),flags,key,metadata,{},{},{}};
             if(enum_array || scalar_array) {
-                input.stride=enum_array?1:4;input.scalar_bytes.resize(values.size()*input.stride);
+                input.stride=stride;input.scalar_bytes.resize(values.size()*input.stride);
                 size_t index{};
                 for(const auto& value:values) {
                     if(enum_array) {
                         const auto encoded=enum_arguments::encode_integer("ByteProperty",1,value);
                         input.scalar_bytes[index]=encoded.bytes[0];
+                    } else if(metadata.at("scalar_type")=="NameProperty") {
+                        const auto encoded=encode_name(metadata.at("inner").at("pointer").get<uintptr_t>(),0,0,value);
+                        std::memcpy(input.scalar_bytes.data()+index*input.stride,&encoded,sizeof(encoded));
                     } else {
                         const auto encoded=int32_argument(value);
                         std::memcpy(input.scalar_bytes.data()+index*input.stride,&encoded,sizeof(encoded));
@@ -2599,14 +2608,6 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                 throw HandlerError("unsupported_signature","The declared UEnum changed before the call");
         }
     }
-    for(const auto& input:name_inputs) {
-        if(field_type(input.field,[this](uint64_t value){return name(value);})!="NameProperty"
-           || read<int32_t>(input.field+0x44)!=input.field_offset)
-            throw HandlerError("unsupported_signature","FName argument metadata changed before the call");
-        validate_name_argument_layout(read<int32_t>(input.field+0x34),read<int32_t>(input.field+0x30));
-        if(!(capture_name(input.source.source)==input.source))
-            throw HandlerError("name_source_changed","The FName source value or metadata changed before the call");
-    }
     const auto invocation_after=validate_object(object);
     if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(invocation_after)))
         throw HandlerError("stale_handle","Target identity changed before the call; obtain a new handle");
@@ -2683,6 +2684,14 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         const auto final_contract=capture_function_contract(object,function_owner,function,target_handle);
         if(expected_token)require_same_function_contract(expected_contract,final_contract);
         if(strict_pod_contract)require_same_function_contract(pod_function_contract,final_contract);
+    }
+    for(const auto& input:name_inputs) {
+        if(field_type(input.field,[this](uint64_t value){return name(value);})!="NameProperty"
+           || read<int32_t>(input.field+0x44)!=input.field_offset)
+            throw HandlerError("unsupported_signature","FName argument metadata changed before the call");
+        validate_name_argument_layout(read<int32_t>(input.field+0x34),read<int32_t>(input.field+0x30));
+        if(!(capture_name(input.source.source)==input.source))
+            throw HandlerError("name_source_changed","The FName source value or metadata changed before the call");
     }
     if(script_call && call_script_generation!=successful_script_reloads_.load())
         throw HandlerError("script_reloaded","The script context changed before ProcessEvent",
