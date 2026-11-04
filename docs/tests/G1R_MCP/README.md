@@ -1,5 +1,13 @@
 # Проверки G1R MCP: локальные инструменты и нативный маршрут
 
+## Текущие проверки dev.104 — 05.11.2026
+
+[Общий live-цикл](../../../artifacts/dev104-typed-input-live-complete.json): accepted=true, **12/12 типизированных вызовов**, **9/9 проверок**. Возврат `TArray<int>`: пустой массив и `[2147483647, -2147483648]`; reflection `ArrayProperty16`/`IntProperty4`, полная копия значений и `return_cleanup_confirmed=true`. Сохранены прежние int32/FName/scalar-входы, marker 71→72→72→71, реальные successful/failed reload, точные пути; source/staging восстановлены, игра закрыта, сессия освобождена.
+
+[Инкрементальная DLL-сборка](../../../artifacts/native-build-dev104.txt) прошла; [bootstrap](../../../artifacts/python-bootstrap-dev104.txt) — **3/3, 14,297 с**. Полный новый Python/CTest-прогон не выполнялся. Первичная попытка использовала старую копию fixture без новой функции; после обновления файла в том же пакете общий цикл принят. Точные скомпилированные байты и произвольные типы массивов этим результатом не подтверждаются.
+
+[Runtime-комплект](../../../artifacts/bridge-bundle-dev104/manifest.json): 79 payload-файлов, проверка manifest пройдена. [Wheel](../../../artifacts/wheel-dev104/g1r_mcp-1.0.0.dev104-py3-none-any.whl) — серверная половина поставки; consumer-сеанс не повторялся.
+
 ## Текущие проверки dev.103 — 05.11.2026
 
 [Live-приёмка](../../../artifacts/dev103-typed-input-live-complete.json) имеет accepted=true на source/canonical/shared runtime **1.0.0-dev.103**, Steam build **26394867**: **10/10 typed-вызовов**, **9/9 итоговых проверок**. FName-массивы: пустой 0, текстовые Entry/miss/Entry 304, None/Entry 211, собственный SourceName через name_from 102; прежние int32/scalar-результаты сохранены. Reflection подтверждает NameProperty8 и input value/const_reference; array input cleanup подтверждён. Reload marker 71→72→72→71, source/staging восстановлены; своя игра закрыта и заявка освобождена.

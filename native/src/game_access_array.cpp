@@ -4,6 +4,7 @@
 #include "g1r_mcp/scalar_arguments.hpp"
 #include "g1r_mcp/scalar_struct_values.hpp"
 #include <array>
+#include <cstring>
 #include <limits>
 #include <optional>
 #include <set>
@@ -40,6 +41,56 @@ json GameAccess::capture_object_array_return(uintptr_t field,int size,int dim,bo
         {"public",public_metadata}};
 }
 
+json GameAccess::capture_int32_array_return(uintptr_t field,int size,int dim) const {
+    const auto capture=[&]() {
+        const auto snapshot=[&](uintptr_t pointer) {
+            const auto klass=read<uintptr_t>(pointer+8);
+            const auto type_name=read<uint64_t>(klass);
+            return json{{"pointer",pointer},{"next",read<uintptr_t>(pointer+0x18)},
+                {"owner",read<uint64_t>(pointer+0x10)},{"field_class",klass},{"type_name",type_name},{"type",name(type_name)},
+                {"name",read<uint64_t>(pointer+0x20)},{"field_flags",read<uint32_t>(pointer+0x28)},
+                {"element_size",read<int32_t>(pointer+0x34)},{"array_dim",read<int32_t>(pointer+0x30)},
+                {"offset",read<int32_t>(pointer+0x44)},{"flags",read<uint64_t>(pointer+0x38)}};
+        };
+        auto outer=snapshot(field);
+        const auto flags=outer.at("flags").get<uint64_t>();
+        const auto offset=outer.at("offset").get<int32_t>();
+        if(outer.at("type")!="ArrayProperty" || size!=16 || dim!=1 || outer.at("element_size")!=size
+           || outer.at("array_dim")!=dim || offset<0 || offset%8 || !(flags&0x80) || !(flags&0x400)
+           || (flags&(uint64_t{0x2}|uint64_t{0x08000000})))
+            throw HandlerError("unsupported_signature","Int32 arrays require a 16-byte return by value");
+        outer["array_flags"]=read<uint8_t>(field+0x70);
+        const auto inner_pointer=read<uintptr_t>(field+0x78);
+        outer["inner"]=inner_pointer;
+        auto inner=snapshot(inner_pointer);
+        if(inner.at("type")!="IntProperty" || inner.at("element_size")!=4 || inner.at("array_dim")!=1 || inner.at("offset")!=0)
+            throw HandlerError("unsupported_signature","The returned int32 array requires four-byte IntProperty elements");
+        return json{{"outer",std::move(outer)},{"inner",std::move(inner)},{"scalar_type","IntProperty"},
+            {"public",{{"container_type","ArrayProperty"},{"element",{{"type","IntProperty"},{"element_size",4},
+                {"array_dim",1},{"offset",0}}}}}};
+    };
+    const auto before=capture();
+    if(before!=capture())throw HandlerError("int32_array_metadata_changed","Reflected int32 return metadata changed during capture");
+    return before;
+}
+json GameAccess::read_int32_array_return(uintptr_t field,uintptr_t address,const json& metadata) {
+    if(capture_int32_array_return(field,16,1)!=metadata)
+        throw HandlerError("signature_changed","The returned int32 array metadata changed after the call");
+    const auto header=read<ArrayHeader>(address);
+    const auto page=array_page(header,4,1,0,std::numeric_limits<size_t>::max());
+    std::vector<std::byte> copied(page.bytes);
+    if(page.bytes && !game_memory::copy(copied.data(),reinterpret_cast<void*>(page.begin),page.bytes))
+        throw HandlerError("invalid_memory","The returned int32 array elements are unavailable");
+    json items=json::array();
+    for(int32_t index=0;index<page.count;++index) {
+        int32_t value{};
+        std::memcpy(&value,copied.data()+static_cast<size_t>(index)*sizeof(value),sizeof(value));
+        items.push_back({{"index",index},{"supported",true},{"value",value}});
+    }
+    if(capture_int32_array_return(field,16,1)!=metadata || !same_array_header(header,read<ArrayHeader>(address)))
+        throw HandlerError("array_changed","The returned int32 array metadata or header changed during read");
+    return {{"items",std::move(items)},{"total_count",header.count},{"partial",false}};
+}
 json GameAccess::read_object_array_return(uintptr_t field,uintptr_t address,const json& metadata) {
     const bool output=!(metadata.at("outer").at("flags").get<uint64_t>()&0x400);
     if(capture_object_array_return(field,16,1,output)!=metadata)throw HandlerError("signature_changed",output ? "The output array metadata changed after the call" : "The returned array metadata changed after the call");

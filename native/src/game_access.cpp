@@ -650,7 +650,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.103"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.104"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -1590,8 +1590,9 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         }
         else if(type=="ArrayProperty") {
             if(returned) {
-                const auto array=capture_object_array_return(field,size,array_dim);
-                captured["aux"]={{"object_array_return",array}};array_public=array.at("public");supported=true;
+                const bool int_array=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);})=="IntProperty";
+                const auto array=int_array?capture_int32_array_return(field,size,array_dim):capture_object_array_return(field,size,array_dim);
+                captured["aux"]={{int_array?"int_array_return":"object_array_return",array}};array_public=array.at("public");supported=true;
             } else {
                 if((flags&0x100) && !(flags&kConstParm)) {
                     const auto array=capture_object_array_return(field,size,array_dim,true);
@@ -1774,7 +1775,10 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                 throw HandlerError("signature_changed","The returned set metadata changed while reading the signature");
         } else if(type=="ArrayProperty") {
             if(captured.at("flags").get<uint64_t>()&0x400) {
-                if(capture_object_array_return(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>())!=auxiliary.at("object_array_return"))
+                if(auxiliary.contains("int_array_return")) {
+                    if(capture_int32_array_return(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>())!=auxiliary.at("int_array_return"))
+                        throw HandlerError("signature_changed","The returned int32 array metadata changed while reading the signature");
+                } else if(capture_object_array_return(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>())!=auxiliary.at("object_array_return"))
                     throw HandlerError("signature_changed","The returned object array metadata changed while reading the signature");
             } else {
                 if(auxiliary.contains("object_array_output")) {
@@ -2390,7 +2394,9 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                 continue;
             }
             if(type=="ArrayProperty") {
-                array_return_metadata=capture_object_array_return(field,size,read<int32_t>(field+0x30));
+                array_return_metadata=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);})=="IntProperty"
+                    ?capture_int32_array_return(field,size,read<int32_t>(field+0x30))
+                    :capture_object_array_return(field,size,read<int32_t>(field+0x30));
                 continue;
             }
             if(type=="NameProperty")validate_name_return_layout(size,read<int32_t>(field+0x30));
@@ -2913,7 +2919,9 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             result=read_object_set_return(return_field,reinterpret_cast<uintptr_t>(buffer+return_offset),set_return_metadata);
             result_metadata=set_return_metadata.at("public");
         } else if(return_type=="ArrayProperty") {
-            result=read_object_array_return(return_field,reinterpret_cast<uintptr_t>(buffer+return_offset),array_return_metadata);
+            result=array_return_metadata.contains("scalar_type")
+                ?read_int32_array_return(return_field,reinterpret_cast<uintptr_t>(buffer+return_offset),array_return_metadata)
+                :read_object_array_return(return_field,reinterpret_cast<uintptr_t>(buffer+return_offset),array_return_metadata);
             result_metadata=array_return_metadata.at("public");
         } else if(return_type=="StructProperty") {
             // The POD result is copied below using its saved reflected layout.

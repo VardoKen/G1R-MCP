@@ -44,6 +44,20 @@ class UG1RMCPTypedInputProbe : UObject
         return Sum;
     }
 
+    // Fresh local int array; Add syntax: Modkit Script/UI/UpscalingQualitySettings.as.
+    // false -> []; true -> [2147483647, -2147483648].
+    UFUNCTION(BlueprintCallable)
+    TArray<int> ReturnIntArray(bool WithValues)
+    {
+        TArray<int> Result;
+        if (WithValues)
+        {
+            Result.Add(2147483647);
+            Result.Add(-2147483647 - 1);
+        }
+        return Result;
+    }
+
     // [] -> 0; [Entry, miss, Entry] -> 304; [None, Entry] -> 211.
     // Read-only marker checks the array length and FName equality; no world access.
     UFUNCTION(BlueprintCallable)
