@@ -1,12 +1,20 @@
 # Проверки G1R MCP: локальные инструменты и нативный маршрут
 
+## Текущие проверки dev.102 — 04.11.2026
+
+[Live-приёмка](../../../artifacts/dev102-typed-input-live-complete.json) имеет accepted=true на source/canonical/shared runtime **1.0.0-dev.102**, Steam build **26394867**: **6/6 typed-вызовов**, **9/9 итоговых проверок**. Int32-массивы дали 0/6/−1, собственная scalar-структура — 1009/−9/0. Marker 71→72→72→71, успешный/неудачный reload, поколение/capture/exact paths и source/staging проверены; своя игра закрыта, заявка освобождена.
+
+Сгруппированная [DLL-сборка](../../../artifacts/native-build-dev102.txt) и сборка после нормализации reflection-флагов ([вывод](../../../artifacts/native-build-dev102-normalized.txt)) прошли. [Scalar-struct CTest](../../../artifacts/native-ctest-dev102.txt): **1/1, 0,21 с**; [каталог](../../../artifacts/python-catalog-dev102.txt): **1/1, 8,626 с**; [bootstrap](../../../artifacts/python-bootstrap-dev102.txt): **3/3, 19,171 с**, повтор после окончательной metadata-правки также 3/3 PASS. Полный Python/CTest-набор не повторялся; 736/736 и 39/39 ниже остаются базой dev.99. [Runtime-комплект dev.102](../../../artifacts/bridge-bundle-dev102/manifest.json) и [wheel](../../../artifacts/wheel-dev102/g1r_mcp-1.0.0.dev102-py3-none-any.whl) подготовлены; целостность runtime-комплекта и CRC/RECORD/metadata wheel подтверждены, установленный consumer-сеанс не повторялся.
+
+Подтверждены только int32 input-массивы и собственная простая numeric/bool-структура. Передача определяется фактической reflection, включая const reference; произвольные POD и вложенные структуры/контейнеры этим не проверены. Совпадение exact paths не доказывает компиляцию исходного SHA: compiled=false, exact_source_compiled=false, correlation=unknown.
+
 ## Текущие проверки dev.101 — 04.11.2026
 
 Готовы [runtime bundle dev.101](../../../artifacts/bridge-bundle-dev101/manifest.json) и [wheel dev.101](../../../artifacts/wheel-dev101/g1r_mcp-1.0.0.dev101-py3-none-any.whl): целостность manifest/байтов, ZIP CRC и wheel RECORD — **PASS**; новая installed-consumer проверка не запускалась.
 
 Сборка DLL завершилась успешно ([build](../../../artifacts/native-build-dev101-update.txt)); упаковочные проверки — **9/9 PASS**. [Финальная live-приёмка](../../../artifacts/dev101-name-reload-live-final.json) имеет `accepted=true`: **8/8 итоговых проверок**, marker 71→72→72→71, успешный/неудачный reload, неизменное поколение при ошибке, capture complete, точные совпадения путей и восстановленные bytes. Собственная игра закрыта, HTTP-заявка освобождена. Проверка выполнена на DLL/server **1.0.0-dev.101**, Steam build **26394867** после устранения полного SHA-gate и фиксированных native RVA.
 
-Полный Python/CTest повторно не запускался; **736/736**, helper-case 1/1 и **39/39** ниже относятся к базовой dev.99. Live dev.101 проверяет конкретный name-fixture и reload receipt; она не доказывает компиляцию конкретного source SHA, поэтому `compiled=false`, `exact_source_compiled=false`, correlation=`unknown`. Типизированный input fixture/runner пока подготовлены для следующей работы, но не проверены и не объявлены реализованным runtime-контрактом.
+Полный Python/CTest повторно не запускался; **736/736**, helper-case 1/1 и **39/39** ниже относятся к базовой dev.99. Live dev.101 проверяет конкретный name-fixture и reload receipt; она не доказывает компиляцию конкретного source SHA, поэтому `compiled=false`, `exact_source_compiled=false`, correlation=`unknown`. На момент dev.101 типизированный input fixture/runner ещё не были проверены; их последующая приёмка описана в разделе dev.102 выше.
 
 ## Исторические затронутые локальные проверки dev.100 — 04.11.2026
 

@@ -19,6 +19,7 @@
 #include "g1r_mcp/parameter_direction.hpp"
 #include "g1r_mcp/scalar_outputs.hpp"
 #include "g1r_mcp/scalar_struct_values.hpp"
+#include "g1r_mcp/scalar_struct_arguments.hpp"
 #include "g1r_mcp/rotator_arguments.hpp"
 #include "g1r_mcp/aligned_parameter_buffer.hpp"
 #include "g1r_mcp/transform_layout.hpp"
@@ -649,7 +650,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.101"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.102"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -1567,8 +1568,9 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                 captured["aux"]={{"rotator",scalar_struct_snapshot_json(rotator)}};
                 rotator_public=scalar_struct_snapshot_json(rotator,false);supported=true;
             } else {
-                if(!returned || (flags&(kConstParm|kReferenceParm)))
-                    throw HandlerError("unsupported_signature","Scalar DTO is supported only as a return by value");
+                if((returned && (flags&(kConstParm|kReferenceParm)))
+                   || (!returned && (flags&(kConstParm|kReferenceParm|0x100))))
+                    throw HandlerError("unsupported_signature","Scalar DTO requires input or return by value");
                 const auto scalar_struct=capture_scalar_struct(field,size,array_dim);
                 if(offset%scalar_struct.layout.min_alignment)
                     throw HandlerError("unsupported_scalar_struct_layout","The DTO offset does not match its reflected alignment");
@@ -1597,6 +1599,9 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                 } else if(field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);})=="ObjectProperty") {
                     const auto array=capture_object_array_parameter(field,size,array_dim,flags);
                     captured["aux"]={{"object_array",array}};array_public=array.at("public");supported=true;
+                } else if(field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);})=="IntProperty") {
+                    const auto array=capture_int32_array_parameter(field,size,array_dim,flags);
+                    captured["aux"]={{"scalar_array",array}};array_public=array.at("public");supported=true;
                 } else {
                     const auto array=capture_enum_array_parameter(field,size,array_dim,flags);
                     captured["aux"]={{"enum_array",array}};array_public=array.at("public");supported=true;
@@ -1680,14 +1685,14 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         if(!array_public.is_null()) {
             public_parameter["array"]=array_public;public_parameter["direction"]=returned?"return":"input";public_parameter["passing"]=returned?"value":"const_reference";
             if(!returned) {
-                const bool enum_array=captured["aux"].contains("enum_array");
+                const bool value_array=captured["aux"].contains("enum_array") || captured["aux"].contains("scalar_array");
                 if(captured["aux"].contains("object_array_output")) {
                     public_parameter["direction"]="output";public_parameter.erase("passing");
                     public_parameter["argument_marker"]={{"out",true}};
                 } else {
-                    if(enum_array)public_parameter["passing"]="value";
+                    if(value_array)public_parameter["passing"]=(flags&kConstParm)?"const_reference":"value";
                     public_parameter["argument_constraints"]={{"max_elements",std::numeric_limits<int32_t>::max()},
-                        {"element_form",enum_array?"integer":"null_or_handle"},{"ownership",enum_array?"engine_owned_copy":"engine_owned_pointer_copy"}};
+                        {"element_form",value_array?"integer":"null_or_handle"},{"ownership",value_array?"engine_owned_copy":"engine_owned_pointer_copy"}};
                 }
             }
         }
@@ -1695,7 +1700,7 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
             public_parameter["struct"]=color_public;public_parameter["direction"]=returned?"return":"input";public_parameter["passing"]="value";
         }
         if(!scalar_struct_public.is_null()) {
-            public_parameter["struct"]=scalar_struct_public;public_parameter["direction"]="return";public_parameter["passing"]="value";
+            public_parameter["struct"]=scalar_struct_public;public_parameter["direction"]=returned?"return":"input";public_parameter["passing"]="value";
         }
         parameters.push_back(std::move(public_parameter));
         return captured;
@@ -1774,6 +1779,9 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                 if(auxiliary.contains("object_array_output")) {
                     if(capture_object_array_return(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>(),true)!=auxiliary.at("object_array_output"))
                         throw HandlerError("signature_changed","The object array output metadata changed while reading the signature");
+                } else if(auxiliary.contains("scalar_array")) {
+                    if(capture_int32_array_parameter(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>(),captured.at("flags").get<uint64_t>())!=auxiliary.at("scalar_array"))
+                        throw HandlerError("signature_changed","The int32 array metadata changed while reading the signature");
                 } else if(auxiliary.contains("enum_array")) {
                     if(capture_enum_array_parameter(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>(),captured.at("flags").get<uint64_t>())!=auxiliary.at("enum_array"))
                         throw HandlerError("signature_changed","The enum array metadata changed while reading the signature");
@@ -2082,7 +2090,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         }
     }
     struct ArrayElement {std::string handle;ObjectSerialIdentity identity{};uintptr_t pointer{};};
-struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::string key;json metadata;std::vector<ArrayElement> elements;ArrayHeader header{};std::vector<uintptr_t> pointers;std::vector<std::byte> enum_bytes;size_t stride{8};};
+    struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::string key;json metadata;std::vector<ArrayElement> elements;ArrayHeader header{};std::vector<uintptr_t> pointers;std::vector<std::byte> scalar_bytes;size_t stride{8};};
     std::vector<ObjectArrayInput> array_inputs;
     struct ObjectArrayOutput {uintptr_t field{};int offset{};json metadata;std::string key;};
     std::vector<ObjectArrayOutput> array_outputs;
@@ -2112,7 +2120,9 @@ struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::st
         for(const auto field:parameter_fields) {
             const auto flags=read<uint64_t>(field+0x38);
             if((flags&0x400) || ((flags&0x100) && !(flags&0x2)) || field_type(field,[this](auto value){return name(value);})!="ArrayProperty")continue;
-            const auto metadata=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);})=="ObjectProperty"?capture_object_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags)
+            const auto inner_type=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);});
+            const auto metadata=inner_type=="ObjectProperty"?capture_object_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags)
+                :inner_type=="IntProperty"?capture_int32_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags)
                 :capture_enum_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags);
             const auto key=name(read<uint64_t>(field+0x20));
             if(!arguments.contains(key))throw HandlerError("missing_argument","Object array argument is missing: "+key);
@@ -2120,13 +2130,21 @@ struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::st
             if(!values.is_array())
                 throw HandlerError("invalid_argument","Object array requires a JSON array");
             const bool enum_array=metadata.contains("enum");
-            budget.add(values.size(),enum_array?1:8);
+            const bool scalar_array=metadata.contains("scalar_type");
+            budget.add(values.size(),enum_array?1:scalar_array?4:8);
             ObjectArrayInput input{field,read<int32_t>(field+0x44),flags,key,metadata,{},{},{}};
-            if(enum_array) {
-                input.stride=1;input.enum_bytes.reserve(values.size());
+            if(enum_array || scalar_array) {
+                input.stride=enum_array?1:4;input.scalar_bytes.resize(values.size()*input.stride);
+                size_t index{};
                 for(const auto& value:values) {
-                    const auto encoded=enum_arguments::encode_integer("ByteProperty",1,value);
-                    input.enum_bytes.push_back(encoded.bytes[0]);
+                    if(enum_array) {
+                        const auto encoded=enum_arguments::encode_integer("ByteProperty",1,value);
+                        input.scalar_bytes[index]=encoded.bytes[0];
+                    } else {
+                        const auto encoded=int32_argument(value);
+                        std::memcpy(input.scalar_bytes.data()+index*input.stride,&encoded,sizeof(encoded));
+                    }
+                    ++index;
                 }
                 array_inputs.push_back(std::move(input));continue;
             }
@@ -2150,7 +2168,7 @@ struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::st
     }
     auto validate_array_elements=[&] {
         for(const auto& input:array_inputs) {
-            if(input.stride==1)continue;
+            if(input.metadata.contains("enum") || input.metadata.contains("scalar_type"))continue;
             const auto declared=reinterpret_cast<void*>(input.metadata.at("property_class").get<uintptr_t>());
             for(const auto& element:input.elements)if(!element.handle.empty()) {
                 auto current=resolve(element.handle);
@@ -2170,11 +2188,11 @@ struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::st
                 throw HandlerError("array_lifetime_unknown","The Object array header is unavailable");
             }
             array_ledger.validate_unchanged_input(index,current);
-            if(input.stride==1) {
-                std::vector<std::byte> copied(input.enum_bytes.size());
-                if((current.count && !copy_memory(copied.data(),reinterpret_cast<void*>(current.data),copied.size())) || copied!=input.enum_bytes) {
+            if(input.metadata.contains("enum") || input.metadata.contains("scalar_type")) {
+                std::vector<std::byte> copied(input.scalar_bytes.size());
+                if((current.count && !copy_memory(copied.data(),reinterpret_cast<void*>(current.data),copied.size())) || copied!=input.scalar_bytes) {
                     array_ledger.mark_uncertain();array_quarantine_cause=3;
-                    throw HandlerError("array_lifetime_unknown","The enum array values changed during the call");
+                    throw HandlerError("array_lifetime_unknown","The scalar array values changed during the call");
                 }
                 continue;
             }
@@ -2434,8 +2452,20 @@ struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::st
                 std::memcpy(buffer+offset,encoded.bytes.data(),static_cast<size_t>(encoded.size));
                 ++input_count;continue;
             }
-            if(structure_path!="/Script/CoreUObject.Vector")
-                throw HandlerError("unsupported_signature","Scalar DTO is supported only as a return by value");
+            if(structure_path!="/Script/CoreUObject.Vector") {
+                if(!contains_scalar_struct)throw HandlerError("signature_changed","The scalar DTO appeared after reading the complete signature");
+                if(flags&(kConstParm|kReferenceParm|0x100))
+                    throw HandlerError("unsupported_signature","Scalar DTO requires input by value");
+                const auto key=name(read<uint64_t>(field+0x20));
+                if(!arguments.contains(key))throw HandlerError("missing_argument","Scalar DTO argument is missing: "+key);
+                const auto scalar_struct=capture_scalar_struct(field,size,read<int32_t>(field+0x30));
+                if(offset%scalar_struct.layout.min_alignment
+                   || reinterpret_cast<uintptr_t>(buffer+offset)%static_cast<uintptr_t>(scalar_struct.layout.min_alignment))
+                    throw HandlerError("unsupported_scalar_struct_layout","The DTO buffer does not match its reflected alignment");
+                const auto encoded=scalar_struct_arguments::encode(scalar_struct.layout,arguments.at(key));
+                std::memcpy(buffer+offset,encoded.data(),encoded.size());
+                ++input_count;continue;
+            }
             if(!contains_vector)throw HandlerError("signature_changed","The FVector parameter appeared after reading the complete signature");
             const auto direction=vector_parameter_direction::classify(flags);
             const auto key=name(read<uint64_t>(field+0x20));
@@ -2603,7 +2633,8 @@ struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::st
         const auto allocator_contract=capture_function_contract(object,function_owner,function,target_handle);
         require_same_function_contract(pod_function_contract,allocator_contract);
         if(expected_token)require_same_function_contract(expected_contract,allocator_contract);
-    const auto input_count=input.stride==1?input.enum_bytes.size():input.elements.size();
+        const auto input_count=(input.metadata.contains("enum") || input.metadata.contains("scalar_type"))?
+            input.scalar_bytes.size()/input.stride:input.elements.size();
     const auto count=static_cast<int32_t>(input_count);ArrayHeader header{};
         if(count) {
         void* memory{};const auto allocation_bytes=static_cast<size_t>(count)*input.stride;
@@ -2618,9 +2649,9 @@ struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::st
     array_quarantine_cause=4;array_ledger.add_input(header,input_count,input.stride);
         extra_array_count=extra_array_bytes=0;array_quarantine_cause=0;input.header=header;
         if(count) {
-        if(input.stride==1) {
-            if(!copy_memory(reinterpret_cast<void*>(header.data),input.enum_bytes.data(),input.enum_bytes.size()))
-                throw HandlerError("invalid_memory","The engine enum array buffer is unavailable for writing");
+        if(input.metadata.contains("enum") || input.metadata.contains("scalar_type")) {
+            if(!copy_memory(reinterpret_cast<void*>(header.data),input.scalar_bytes.data(),input.scalar_bytes.size()))
+                throw HandlerError("invalid_memory","The engine scalar array buffer is unavailable for writing");
         } else {
             for(size_t index=0;index<input.elements.size();++index)input.pointers[index]=input.elements[index].pointer;
             if(!copy_memory(reinterpret_cast<void*>(header.data),input.pointers.data(),static_cast<size_t>(count)*sizeof(uintptr_t)))

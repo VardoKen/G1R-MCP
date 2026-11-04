@@ -1,4 +1,5 @@
 #include <g1r_mcp/scalar_struct_values.hpp>
+#include <g1r_mcp/scalar_struct_arguments.hpp>
 
 #include <algorithm>
 #include <array>
@@ -152,6 +153,22 @@ int main() {
         require(serialized.at("Signed64").get<std::int64_t>()==-9007199254740993LL &&
             serialized.at("Unsigned64").get<std::uint64_t>()==std::numeric_limits<std::uint64_t>::max(),"JSON roundtrip сохраняет большие целые DTO");
         require(storage==before,"Невыровненная копия, padding и соседние байты не изменяются");
+        {auto layout=mixed();layout.components.back().layout.byte_mask=1;
+            const json input{{"Signed32",std::numeric_limits<std::int32_t>::min()},
+                {"BitOne",true},{"BitSeven",true},{"Unsigned32",std::numeric_limits<std::uint32_t>::max()},
+                {"Signed64",std::numeric_limits<std::int64_t>::min()},{"Unsigned64",std::numeric_limits<std::uint64_t>::max()},
+                {"Float",-3.75},{"Double",1.0+std::numeric_limits<double>::epsilon()},{"NativeBool",true}};
+            const auto encoded=scalar_struct_arguments::encode(layout,input);
+            std::array<std::byte,64> expected{};auto bytes=std::span(expected);
+            put(bytes,0,std::numeric_limits<std::int32_t>::min());put(bytes,4,std::uint8_t{0x81});
+            put(bytes,8,std::numeric_limits<std::uint32_t>::max());put(bytes,16,std::numeric_limits<std::int64_t>::min());
+            put(bytes,24,std::numeric_limits<std::uint64_t>::max());put(bytes,32,-3.75F);
+            put(bytes,40,1.0+std::numeric_limits<double>::epsilon());put(bytes,48,std::uint8_t{1});
+            require(encoded.size()==expected.size() && std::equal(encoded.begin(),encoded.end(),expected.begin()),
+                    "Encoder сохраняет граничные signed/unsigned и float/double, объединяет bitfields в 81, пишет native bool как 01 и обнуляет padding");
+            require(scalar_struct_values::decode(layout,encoded)==input,
+                    "Mixed DTO encode/decode возвращает точные входные значения без потери 64-bit границ и общего bool-байта");}
+
         {auto reverse=reflected;std::reverse(reverse.components.begin(),reverse.components.end());
             require(scalar_struct_values::decode(reverse,body)==decoded,"Порядок цепочки свойств не меняет именованные значения DTO");}
         {const Layout noncanonical{4,4,false,{numeric("Ordinary",0,"IntProperty",4)}};

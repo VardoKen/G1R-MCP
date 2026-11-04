@@ -262,7 +262,7 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                         "passing": "value", "own_fields_only": True,
                         "lifecycle": "plain_default_copy", "custom_lifecycle_supported": False,
                         "source_contract_required": True,
-                        "input_supported": False, "reference_return_supported": False,
+                        "input_supported": True, "reference_return_supported": False,
                         "nested_fields_supported": False, "string_fields_supported": False})
                     self.assertIn("session", bootstrap["ownership"])
                     self.assertIn("find_objects_again", bootstrap["reconnect"])

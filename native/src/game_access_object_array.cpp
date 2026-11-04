@@ -1,6 +1,7 @@
 #include "g1r_mcp/game_access.hpp"
 #include "g1r_mcp/game_memory.hpp"
 #include "g1r_mcp/object_array_parameter_layout.hpp"
+#include "g1r_mcp/vector_parameter_direction.hpp"
 
 namespace g1r_mcp {
 
@@ -20,6 +21,40 @@ nlohmann::json GameAccess::capture_object_array_parameter(std::uintptr_t field,i
     return before;
 }
 
+nlohmann::json GameAccess::capture_int32_array_parameter(std::uintptr_t field,int size,int dim,std::uint64_t flags) const {
+    using json=nlohmann::json;
+    using game_memory::read;
+    const auto capture=[&]() {
+        const auto field_snapshot=[&](std::uintptr_t pointer) {
+            const auto field_class=read<std::uintptr_t>(pointer+8);
+            const auto type_name=read<std::uint64_t>(field_class);
+            return json{{"pointer",pointer},{"next",read<std::uintptr_t>(pointer+0x18)},
+                {"owner",read<std::uint64_t>(pointer+0x10)},{"field_class",field_class},{"type_name",type_name},{"type",name(type_name)},
+                {"name",read<std::uint64_t>(pointer+0x20)},{"field_flags",read<std::uint32_t>(pointer+0x28)},
+                {"element_size",read<std::int32_t>(pointer+0x34)},{"array_dim",read<std::int32_t>(pointer+0x30)},
+                {"offset",read<std::int32_t>(pointer+0x44)},{"flags",read<std::uint64_t>(pointer+0x38)}};
+        };
+        auto outer=field_snapshot(field);
+        const auto offset=outer.at("offset").get<std::int32_t>();
+        if(outer.at("type")!="ArrayProperty" || size!=16 || dim!=1 || outer.at("element_size")!=size || outer.at("array_dim")!=dim
+           || offset<0 || offset%8 || outer.at("flags")!=flags)
+            throw HandlerError("unsupported_signature","Int32 arrays require a 16-byte input layout");
+        if(vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
+            throw HandlerError("unsupported_signature","Int32 arrays require value or const reference input");
+        outer["array_flags"]=read<std::uint8_t>(field+0x70);
+        const auto inner_pointer=read<std::uintptr_t>(field+0x78);
+        outer["inner"]=inner_pointer;
+        auto inner=field_snapshot(inner_pointer);
+        if(inner.at("type")!="IntProperty" || inner.at("element_size")!=4 || inner.at("array_dim")!=1 || inner.at("offset")!=0)
+            throw HandlerError("unsupported_signature","The int32 array requires four-byte IntProperty elements");
+        return json{{"outer",std::move(outer)},{"inner",std::move(inner)},{"scalar_type","IntProperty"},
+            {"public",{{"container_type","ArrayProperty"},{"element",{{"type","IntProperty"},
+                {"element_size",4},{"array_dim",1},{"offset",0}}}}}};
+    };
+    const auto before=capture();
+    if(before!=capture())throw HandlerError("int32_array_metadata_changed","Reflected int32 array metadata changed during validation");
+    return before;
+}
 nlohmann::json GameAccess::capture_enum_array_parameter(std::uintptr_t field,int size,int dim,std::uint64_t flags) const {
     using json=nlohmann::json;
     using game_memory::read;

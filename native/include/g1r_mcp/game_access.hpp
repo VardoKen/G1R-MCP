@@ -162,6 +162,7 @@ private:
     transform_layout::Snapshot capture_transform_parameter(std::uintptr_t field,int size,int dim) const;
     nlohmann::json capture_object_array_parameter(std::uintptr_t field,int size,int dim,std::uint64_t flags) const;
     nlohmann::json capture_enum_array_parameter(std::uintptr_t field,int size,int dim,std::uint64_t flags) const;
+    nlohmann::json capture_int32_array_parameter(std::uintptr_t field,int size,int dim,std::uint64_t flags) const;
     linear_color_layout::Snapshot capture_linear_color_parameter(std::uintptr_t field,int size,int dim) const;
     scalar_struct_values::Snapshot capture_gameplay_tag_parameter(std::uintptr_t field,int size,int dim) const;
     struct EnumLayout {std::string underlying_type;int size;void* object;};
