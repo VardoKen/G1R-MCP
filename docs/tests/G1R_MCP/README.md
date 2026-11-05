@@ -1,5 +1,11 @@
 # Проверки G1R MCP: локальные инструменты и нативный маршрут
 
+## Текущие проверки dev.106 — 05.11.2026
+
+[Общий live-цикл](../../../artifacts/dev106-typed-input-live-complete.json): accepted=true, **18/18 typed-вызовов**, **9/9 проверок**. Scalar DTO array returns: `[]` и два объекта с крайними int32, Number ±2.75 и Flag true/false. Reflection fixture `StructProperty24`, alignment 8, собственные Integer/Number/Flag; полная копия значений и освобождение return-буфера подтверждены. Прежние int32/FName/enum-сценарии, marker 71→72→72→71 и успешный/неудачный reload сохранены; source/staging восстановлены, игра закрыта, заявка освобождена.
+
+[DLL-сборка](../../../artifacts/native-build-dev106.txt) прошла; [bootstrap](../../../artifacts/python-bootstrap-dev106.txt) — **3/3, 8,662 с**. Полный новый Python/CTest-прогон не выполнялся. [Runtime-комплект](../../../artifacts/bridge-bundle-dev106/manifest.json): 79 payload-файлов, проверка manifest прошла. [Wheel](../../../artifacts/wheel-dev106/g1r_mcp-1.0.0.dev106-py3-none-any.whl) подготавливается; consumer-сеанс не повторяется. Nested/string/custom lifecycle, input DTO-массивы и произвольные типы этим результатом не подтверждены.
+
 ## Текущие проверки dev.105 — 05.11.2026
 
 [Общий live-цикл](../../../artifacts/dev105-typed-input-live-complete.json): accepted=true, **16/16 typed-вызовов**, **9/9 проверок**. FName: `[]` и `[Entry, None, Entry]`; enum: `[]` и `[0, 7, 0]`. Reflection `NameProperty8`/`EnumProperty1` с `ByteProperty1`, enum metadata и освобождение return-буферов подтверждены. Прежние int32/input/scalar-сценарии сохранены; marker 71→72→72→71, успешный/неудачный reload, source/staging восстановлены, игра закрыта и заявка освобождена.

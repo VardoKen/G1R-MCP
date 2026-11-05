@@ -72,6 +72,28 @@ class UG1RMCPTypedInputProbe : UObject
         return Result;
     }
 
+    // Fresh own scalar DTOs; int boundaries, signed fractions and both bool values.
+    UFUNCTION(BlueprintCallable)
+    TArray<FG1RMCPScalarInput> ReturnScalarArray(bool WithValues)
+    {
+        TArray<FG1RMCPScalarInput> Result;
+        if (WithValues)
+        {
+            FG1RMCPScalarInput First;
+            First.Integer = 2147483647;
+            First.Number = 2.75;
+            First.Flag = true;
+            Result.Add(First);
+
+            FG1RMCPScalarInput Second;
+            Second.Integer = -2147483647 - 1;
+            Second.Number = -2.75;
+            Second.Flag = false;
+            Result.Add(Second);
+        }
+        return Result;
+    }
+
     // [] -> 0; [Entry, miss, Entry] -> 304; [None, Entry] -> 211.
     // Read-only marker checks the array length and FName equality; no world access.
     UFUNCTION(BlueprintCallable)

@@ -1,11 +1,11 @@
 # Активные планы G1R MCP
 
 
-Dev.105: возвраты `TArray<FName>` и `TArray<enum>` по значению приняты: `[]`/`[Entry, None, Entry]` и `[]`/`[0, 7, 0]`. Reflection — `NameProperty8`, `EnumProperty1` с `ByteProperty1`; enum metadata соответствует значениям, return-буферы освобождены. Общий цикл — 16/16 typed-вызовов и 9/9 проверок. [Подтверждения](../../../../artifacts/dev105-typed-input-live-complete.json).
+Dev.106: by-value возврат массива собственной scalar DTO принят: `[]` и два объекта `{Integer: MAX, Number: 2.75, Flag: true}` / `{Integer: MIN, Number: -2.75, Flag: false}`. Reflection fixture — `StructProperty24`, alignment 8; размер элементов определяется reflection. Значения скопированы, return-буфер освобождён. Общий цикл — 18/18 typed-вызовов и 9/9 проверок. [Подтверждения](../../../../artifacts/dev106-typed-input-live-complete.json).
 
 | Номер | Документ | Состояние |
 | --- | --- | --- |
-| PLAN-001 | [Активный план реализации](PLAN-001-active-implementation.md) | R18; состояние на 05.11.2026: source/canonical/shared runtime dev.105, 51 инструмент, Steam build 26394867. Возвраты FName/enum и прежние int32/input/scalar-сценарии приняты: 16/16 typed-вызовов, 9/9 live-проверок; игра закрыта, заявка освобождена. DLL-сборки/bootstrap прошли; runtime-комплект dev.105 проверен, wheel подготавливается. Следующий шаг — scalar DTO array returns; полный план, Э8/Э9 и Steam-автозагрузка DLL не завершены |
+| PLAN-001 | [Активный план реализации](PLAN-001-active-implementation.md) | R18; состояние на 05.11.2026: source/canonical/shared runtime dev.106, 51 инструмент, Steam build 26394867. Scalar DTO array return и прежние int32/FName/enum-сценарии приняты: 18/18 typed-вызовов, 9/9 live-проверок; игра закрыта, заявка освобождена. DLL-сборка/bootstrap прошли; runtime-комплект dev.106 проверен, wheel подготавливается. Следующий шаг — input scalar DTO arrays; полный план, Э8/Э9 и Steam-автозагрузка DLL не завершены |
 
 Последний зарегистрированный номер: **PLAN-001**. Основной документ содержит текущую последовательность, развилки, статусы и краткую историю существенных редакций. Новые результаты уточняют его, а не создают конкурирующие копии плана.
 

@@ -76,28 +76,6 @@ json scalar_output_metadata(const scalar_outputs::Layout& layout) {
         {"byte_mask",layout.byte_mask},{"field_mask",layout.field_mask}};
     return result;
 }
-json scalar_struct_snapshot_json(const scalar_struct_values::Snapshot& value,bool raw=true) {
-    json components=json::array();
-    for(const auto& child:value.components) {
-        auto item=scalar_output_metadata(child.component.layout);
-        item["name"]=child.component.name;item["offset"]=child.component.offset;
-        if(raw)item.update({{"pointer",child.pointer},{"next",child.next},{"field_class",child.field_class},
-            {"owner",child.owner},{"field_name",child.name},{"type_name",child.type_name},{"flags",child.flags}});
-        components.push_back(std::move(item));
-    }
-    json result={{"struct_path",value.path},{"struct_name",value.struct_name},{"properties_size",value.layout.properties_size},
-        {"min_alignment",value.layout.min_alignment},{"components",std::move(components)}};
-    if(raw) {
-        const auto& identity=value.identity;
-        result.update({{"field",value.field},{"next",value.next},{"field_class",value.field_class},{"field_owner",value.owner},
-            {"field_name",value.name},{"field_type_name",value.type_name},{"flags",value.flags},{"offset",value.offset},
-            {"structure",value.structure},{"head",value.head},{"super",value.super},{"element_size",value.element_size},
-            {"array_dim",value.array_dim},{"identity",{{"object",identity.object},{"object_class",identity.object_class},
-                {"index",identity.index},{"name",identity.name},{"serial",identity.serial},{"class_index",identity.class_index},
-                {"class_name",identity.class_name},{"class_serial",identity.class_serial}}}});
-    }
-    return result;
-}
 json vector_snapshot_json(const vector_layout::Snapshot& value,bool raw=true) {
     json components=json::array();
     for(const auto& child:value.components) {
@@ -650,7 +628,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.105"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.106"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -1421,6 +1399,36 @@ json GameAccess::snapshot(const json& targets) {
     }
     return result;
 }
+scalar_struct_values::Snapshot GameAccess::capture_scalar_struct_parameter(uintptr_t field,int size,int dim) const {
+    return scalar_struct_values::capture(field,size,dim,
+        []<class Value>(uintptr_t address){return read<Value>(address);},
+        [this](uint64_t value){return name(value);},
+        [this](uintptr_t value){return serial_identity(validate_object(reinterpret_cast<void*>(value)));},
+        [this](uintptr_t value){validate_class(reinterpret_cast<void*>(value));},
+        [this](uintptr_t value){return object_path(reinterpret_cast<void*>(value));});
+}
+json GameAccess::scalar_struct_snapshot_json(const scalar_struct_values::Snapshot& value,bool raw) {
+    json components=json::array();
+    for(const auto& child:value.components) {
+        auto item=scalar_output_metadata(child.component.layout);
+        item["name"]=child.component.name;item["offset"]=child.component.offset;
+        if(raw)item.update({{"pointer",child.pointer},{"next",child.next},{"field_class",child.field_class},
+            {"owner",child.owner},{"field_name",child.name},{"type_name",child.type_name},{"flags",child.flags}});
+        components.push_back(std::move(item));
+    }
+    json result={{"struct_path",value.path},{"struct_name",value.struct_name},{"properties_size",value.layout.properties_size},
+        {"min_alignment",value.layout.min_alignment},{"components",std::move(components)}};
+    if(raw) {
+        const auto& identity=value.identity;
+        result.update({{"field",value.field},{"next",value.next},{"field_class",value.field_class},{"field_owner",value.owner},
+            {"field_name",value.name},{"field_type_name",value.type_name},{"flags",value.flags},{"offset",value.offset},
+            {"structure",value.structure},{"head",value.head},{"super",value.super},{"element_size",value.element_size},
+            {"array_dim",value.array_dim},{"identity",{{"object",identity.object},{"object_class",identity.object_class},
+                {"index",identity.index},{"name",identity.name},{"serial",identity.serial},{"class_index",identity.class_index},
+                {"class_name",identity.class_name},{"class_serial",identity.class_serial}}}});
+    }
+    return result;
+}
 scalar_struct_values::Snapshot GameAccess::capture_gameplay_tag_parameter(uintptr_t field,int size,int dim) const {
     scalar_struct_values::Snapshot result;
     result.field=field;result.next=read<uintptr_t>(field+0x18);result.field_class=read<uintptr_t>(field+8);
@@ -1454,14 +1462,6 @@ scalar_struct_values::Snapshot GameAccess::capture_gameplay_tag_parameter(uintpt
     return result;
 }
 json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_t function,const std::string& target_handle) {
-    auto capture_scalar_struct=[this](uintptr_t field,int size,int dim) {
-        return scalar_struct_values::capture(field,size,dim,
-            []<class Value>(uintptr_t address){return read<Value>(address);},
-            [this](uint64_t value){return name(value);},
-            [this](uintptr_t value){return serial_identity(validate_object(reinterpret_cast<void*>(value)));},
-            [this](uintptr_t value){validate_class(reinterpret_cast<void*>(value));},
-            [this](uintptr_t value){return object_path(reinterpret_cast<void*>(value));});
-    };
     auto identity=[](const Handle& value) {
         const auto observed=serial_identity(value);
         return json{{"object",observed.object},{"object_class",observed.object_class},
@@ -1561,7 +1561,7 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                         throw HandlerError("unsupported_signature","Const or reference FRotator returns are unsupported");
                 } else if(vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
                     throw HandlerError("unsupported_signature","FRotator requires input by value or const reference; mutable Out is unsupported");
-                const auto rotator=capture_scalar_struct(field,size,array_dim);
+                const auto rotator=capture_scalar_struct_parameter(field,size,array_dim);
                 rotator_arguments::validate(rotator);
                 if(offset%rotator.layout.min_alignment)
                     throw HandlerError("unsupported_rotator_layout","The FRotator offset does not match its reflected alignment");
@@ -1571,7 +1571,7 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                 if((returned && (flags&(kConstParm|kReferenceParm)))
                    || (!returned && (flags&(kConstParm|kReferenceParm|0x100))))
                     throw HandlerError("unsupported_signature","Scalar DTO requires input or return by value");
-                const auto scalar_struct=capture_scalar_struct(field,size,array_dim);
+                const auto scalar_struct=capture_scalar_struct_parameter(field,size,array_dim);
                 if(offset%scalar_struct.layout.min_alignment)
                     throw HandlerError("unsupported_scalar_struct_layout","The DTO offset does not match its reflected alignment");
                 captured["aux"]={{"scalar_struct",scalar_struct_snapshot_json(scalar_struct)}};
@@ -1591,7 +1591,7 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         else if(type=="ArrayProperty") {
             if(returned) {
                 const auto inner_type=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);});
-                const bool scalar_array=inner_type=="IntProperty" || inner_type=="NameProperty" || inner_type=="EnumProperty" || inner_type=="ByteProperty";
+                const bool scalar_array=inner_type=="IntProperty" || inner_type=="NameProperty" || inner_type=="EnumProperty" || inner_type=="ByteProperty" || inner_type=="StructProperty";
                 const auto array=scalar_array?capture_scalar_array_return(field,size,array_dim):capture_object_array_return(field,size,array_dim);
                 captured["aux"]={{scalar_array?"scalar_array_return":"object_array_return",array}};array_public=array.at("public");supported=true;
             } else {
@@ -1748,14 +1748,14 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                 continue;
             }
             if(auxiliary.contains("rotator")) {
-                const auto current=capture_scalar_struct(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>());
+                const auto current=capture_scalar_struct_parameter(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>());
                 rotator_arguments::validate(current);
                 if(scalar_struct_snapshot_json(current)!=auxiliary.at("rotator"))
                     throw HandlerError("signature_changed","The nested FRotator reflection changed while reading the signature");
                 continue;
             }
             if(auxiliary.contains("scalar_struct")) {
-                const auto current=capture_scalar_struct(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>());
+                const auto current=capture_scalar_struct_parameter(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>());
                 if(scalar_struct_snapshot_json(current)!=auxiliary.at("scalar_struct"))
                     throw HandlerError("signature_changed","The scalar DTO changed while reading the signature");
             } else if(auxiliary.contains("linear_color")) {
@@ -1899,14 +1899,6 @@ json GameAccess::functions(void* object,std::size_t limit,const std::string& que
 json GameAccess::invoke(void* object,const std::string& function_name,const json& arguments,
                         const std::string& target_handle,const json* expected_token) {
     const auto invocation_identity=validate_object(object);
-    auto capture_scalar_struct=[this](uintptr_t field,int size,int dim) {
-        return scalar_struct_values::capture(field,size,dim,
-            []<class Value>(uintptr_t address){return read<Value>(address);},
-            [this](uint64_t value){return name(value);},
-            [this](uintptr_t value){return serial_identity(validate_object(reinterpret_cast<void*>(value)));},
-            [this](uintptr_t value){validate_class(reinterpret_cast<void*>(value));},
-            [this](uintptr_t value){return object_path(reinterpret_cast<void*>(value));});
-    };
     json expected_contract=nullptr;
     if(expected_token)expected_contract=checked_function_contract(signature_contracts_,*expected_token,handle_session_,target_handle,function_name);
     auto klass=read<uintptr_t>(reinterpret_cast<uintptr_t>(object)+0x10);uintptr_t function=0,function_owner=0;
@@ -2373,7 +2365,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                 } else if(structure_path=="/Script/CoreUObject.Rotator") {
                     if(!contains_rotator)throw HandlerError("signature_changed","The FRotator return appeared after reading the complete signature");
                     if(flags&(kConstParm|kReferenceParm))throw HandlerError("unsupported_signature","Const or reference FRotator returns are unsupported");
-                    auto rotator=capture_scalar_struct(field,size,read<int32_t>(field+0x30));
+                    auto rotator=capture_scalar_struct_parameter(field,size,read<int32_t>(field+0x30));
                     rotator_arguments::validate(rotator);
                     if(offset%rotator.layout.min_alignment
                        || reinterpret_cast<uintptr_t>(buffer+offset)%static_cast<uintptr_t>(rotator.layout.min_alignment))
@@ -2382,7 +2374,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                 } else {
                     if(!contains_scalar_struct)throw HandlerError("signature_changed","The scalar DTO return appeared after reading the complete signature");
                     if(flags&(kConstParm|kReferenceParm))throw HandlerError("unsupported_signature","Const or reference DTO returns are unsupported");
-                    auto scalar_struct=capture_scalar_struct(field,size,read<int32_t>(field+0x30));
+                    auto scalar_struct=capture_scalar_struct_parameter(field,size,read<int32_t>(field+0x30));
                     if(offset%scalar_struct.layout.min_alignment
                        || reinterpret_cast<uintptr_t>(buffer+offset)%static_cast<uintptr_t>(scalar_struct.layout.min_alignment))
                         throw HandlerError("unsupported_scalar_struct_layout","The DTO buffer does not match its reflected alignment");
@@ -2396,7 +2388,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             }
             if(type=="ArrayProperty") {
                 const auto inner_type=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);});
-                const bool scalar_array=inner_type=="IntProperty" || inner_type=="NameProperty" || inner_type=="EnumProperty" || inner_type=="ByteProperty";
+                const bool scalar_array=inner_type=="IntProperty" || inner_type=="NameProperty" || inner_type=="EnumProperty" || inner_type=="ByteProperty" || inner_type=="StructProperty";
                 array_return_metadata=scalar_array
                     ?capture_scalar_array_return(field,size,read<int32_t>(field+0x30))
                     :capture_object_array_return(field,size,read<int32_t>(field+0x30));
@@ -2434,7 +2426,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                 if(!contains_rotator)throw HandlerError("signature_changed","The FRotator parameter appeared after reading the complete signature");
                 if(vector_parameter_direction::classify(flags)!=vector_parameter_direction::Direction::input)
                     throw HandlerError("unsupported_signature","FRotator requires input by value or const reference; mutable Out is unsupported");
-                const auto rotator=capture_scalar_struct(field,size,read<int32_t>(field+0x30));
+                const auto rotator=capture_scalar_struct_parameter(field,size,read<int32_t>(field+0x30));
                 rotator_arguments::validate(rotator);
                 if(offset%rotator.layout.min_alignment
                    || reinterpret_cast<uintptr_t>(buffer+offset)%static_cast<uintptr_t>(rotator.layout.min_alignment))
@@ -2476,7 +2468,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                     throw HandlerError("unsupported_signature","Scalar DTO requires input by value");
                 const auto key=name(read<uint64_t>(field+0x20));
                 if(!arguments.contains(key))throw HandlerError("missing_argument","Scalar DTO argument is missing: "+key);
-                const auto scalar_struct=capture_scalar_struct(field,size,read<int32_t>(field+0x30));
+                const auto scalar_struct=capture_scalar_struct_parameter(field,size,read<int32_t>(field+0x30));
                 if(offset%scalar_struct.layout.min_alignment
                    || reinterpret_cast<uintptr_t>(buffer+offset)%static_cast<uintptr_t>(scalar_struct.layout.min_alignment))
                     throw HandlerError("unsupported_scalar_struct_layout","The DTO buffer does not match its reflected alignment");
@@ -2846,14 +2838,14 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         const auto& saved=*scalar_struct_return;
         if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(validate_object(object))))
             throw HandlerError("stale_handle","The target changed while obtaining the DTO result");
-        const auto before=capture_scalar_struct(saved.field,saved.element_size,saved.array_dim);
+        const auto before=capture_scalar_struct_parameter(saved.field,saved.element_size,saved.array_dim);
         if(!(before==saved))throw HandlerError("signature_changed","The DTO return changed after the call");
         std::vector<std::byte> copied(static_cast<size_t>(saved.element_size));
         if(!copy_memory(copied.data(),buffer+saved.offset,copied.size()))
             throw HandlerError("invalid_struct_copy","The DTO result could not be copied");
         const auto value=saved.path=="/Script/CoreUObject.Rotator"?
             rotator_arguments::decode(saved.layout,copied):scalar_struct_values::decode(saved.layout,copied);
-        if(!(capture_scalar_struct(saved.field,saved.element_size,saved.array_dim)==saved))
+        if(!(capture_scalar_struct_parameter(saved.field,saved.element_size,saved.array_dim)==saved))
             throw HandlerError("signature_changed","DTO metadata changed while copying the result");
         result=value;result_metadata=scalar_struct_snapshot_json(saved,false);
     };

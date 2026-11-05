@@ -166,6 +166,8 @@ private:
     nlohmann::json capture_enum_array_parameter(std::uintptr_t field,int size,int dim,std::uint64_t flags) const;
     nlohmann::json capture_scalar_array_parameter(std::uintptr_t field,int size,int dim,std::uint64_t flags) const;
     linear_color_layout::Snapshot capture_linear_color_parameter(std::uintptr_t field,int size,int dim) const;
+    scalar_struct_values::Snapshot capture_scalar_struct_parameter(std::uintptr_t field,int size,int dim) const;
+    static nlohmann::json scalar_struct_snapshot_json(const scalar_struct_values::Snapshot& value,bool raw=true);
     scalar_struct_values::Snapshot capture_gameplay_tag_parameter(std::uintptr_t field,int size,int dim) const;
     struct EnumLayout {std::string underlying_type;int size;void* object;};
     struct EnumTable {Handle identity;std::string path;std::vector<g1r::enum_values::Entry> entries;};

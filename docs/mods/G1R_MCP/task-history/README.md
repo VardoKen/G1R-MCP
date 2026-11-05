@@ -1,5 +1,9 @@
 # История задач G1R MCP
 
+## 05.11.2026 — dev.106: возврат массива scalar DTO
+
+Добавлен by-value возврат массива собственной numeric/bool DTO с отражённым stride/alignment, копией значений и существующей очисткой контейнера. [Live-приёмка](../../../../artifacts/dev106-typed-input-live-complete.json): 18/18 typed-вызовов, 9/9 проверок; пустой массив и два объекта Integer/Number/Flag приняты, прежние int32/FName/enum-сценарии сохранены. Marker/reload/восстановление, закрытие своей игры и освобождение заявки подтверждены. DLL-сборка и bootstrap 3/3 прошли; runtime-комплект dev.106 проверен, wheel подготавливается. PLAN-001 R18 продолжается; следующий шаг — input-массивы scalar DTO.
+
 ## 05.11.2026 — dev.105: возвраты FName/enum-массивов
 
 Добавлены by-value возвраты FName8 и однобайтового enum с копией значений, enum metadata и существующей очисткой контейнера. [Live-приёмка](../../../../artifacts/dev105-typed-input-live-complete.json): 16/16 typed-вызовов, 9/9 проверок; Name `[]`/[Entry,None,Entry], enum `[]`/[0,7,0], прежние int32/input/scalar-сценарии сохранены. Marker/reload/восстановление, закрытие своей игры и освобождение заявки подтверждены. DLL-сборки и bootstrap 3/3 прошли; runtime-комплект dev.105 проверен, wheel подготавливается. PLAN-001 R18 продолжается; следующий шаг — возвраты массивов scalar DTO.

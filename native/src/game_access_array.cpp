@@ -67,11 +67,17 @@ json GameAccess::capture_scalar_array_return(uintptr_t field,int size,int dim) c
         const auto type=inner.at("type").get<std::string>();
         const auto stride=inner.at("element_size").get<int>();
         const bool enumeration=type=="EnumProperty" || type=="ByteProperty";
-        if(!((type=="IntProperty" && stride==4) || (type=="NameProperty" && stride==8) || (enumeration && stride==1))
+        if(!((type=="IntProperty" && stride==4) || (type=="NameProperty" && stride==8) || (enumeration && stride==1)
+             || (type=="StructProperty" && stride>0))
            || inner.at("array_dim")!=1 || inner.at("offset")!=0)
-            throw HandlerError("unsupported_signature","The returned scalar array requires IntProperty4, NameProperty8, or byte enum elements");
+            throw HandlerError("unsupported_signature","The returned array requires int32, FName, byte enum, or own scalar DTO elements");
         json element={{"type",type},{"element_size",stride},{"array_dim",1},{"offset",0}};
         json captured={{"outer",std::move(outer)},{"inner",std::move(inner)},{"scalar_type",type}};
+        if(type=="StructProperty") {
+            const auto structure=capture_scalar_struct_parameter(inner_pointer,stride,1);
+            captured["struct"]=scalar_struct_snapshot_json(structure);
+            element["struct"]=scalar_struct_snapshot_json(structure,false);
+        }
         if(enumeration) {
             const auto layout=enum_layout(type,stride,inner_pointer);
             if(layout.underlying_type!="ByteProperty")
@@ -111,6 +117,12 @@ json GameAccess::read_scalar_array_return(uintptr_t field,uintptr_t address,cons
     const auto header=read<ArrayHeader>(address);
     const auto stride=metadata.at("inner").at("element_size").get<int>();
     const auto type=metadata.at("scalar_type").get<std::string>();
+    std::optional<scalar_struct_values::Snapshot> structure;
+    if(type=="StructProperty") {
+        structure=capture_scalar_struct_parameter(metadata.at("inner").at("pointer").get<uintptr_t>(),stride,1);
+        if(scalar_struct_snapshot_json(*structure)!=metadata.at("struct"))
+            throw HandlerError("signature_changed","The returned DTO array structure changed after the call");
+    }
     const auto page=array_page(header,stride,1,0,std::numeric_limits<size_t>::max());
     std::vector<std::byte> copied(page.bytes);
     if(page.bytes && !game_memory::copy(copied.data(),reinterpret_cast<void*>(page.begin),page.bytes))
@@ -123,6 +135,8 @@ json GameAccess::read_scalar_array_return(uintptr_t field,uintptr_t address,cons
             int32_t value{};std::memcpy(&value,bytes,sizeof(value));item["value"]=value;
         } else if(type=="NameProperty") {
             uint64_t value{};std::memcpy(&value,bytes,sizeof(value));item["value"]=name(value);
+        } else if(type=="StructProperty") {
+            item["value"]=scalar_struct_values::decode(structure->layout,std::span<const std::byte>(bytes,static_cast<size_t>(stride)));
         } else {
             uint8_t value{};std::memcpy(&value,bytes,sizeof(value));item["value"]=value;
             if(metadata.contains("enum"))item["enum"]=enum_metadata(reinterpret_cast<void*>(metadata.at("inner").at("enum").get<uintptr_t>()),item["value"],"ByteProperty");
