@@ -26,6 +26,7 @@
 namespace g1r_mcp {
 namespace scalar_struct_values {struct Snapshot;}
 struct ArrayHeader;
+struct StringHeader;
 class GameAccess {
 public:
     bool start();
@@ -156,6 +157,7 @@ private:
     nlohmann::json read_object_array_return(std::uintptr_t field,std::uintptr_t address,const nlohmann::json& metadata);
     nlohmann::json capture_scalar_array_return(std::uintptr_t field,int size,int dim,bool output=false) const;
     nlohmann::json read_scalar_array_return(std::uintptr_t field,std::uintptr_t address,const nlohmann::json& metadata);
+    std::string read_copied_string(const StringHeader& header) const;
     nlohmann::json read_struct(void* object, const std::string& handle, const std::string& property_name);
     nlohmann::json capture_read_value(std::uintptr_t field,int size,int dim) const;
     nlohmann::json capture_pod_struct_parameter(std::uintptr_t field,int size,int dim) const;

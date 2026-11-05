@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -81,6 +82,21 @@ public:
         validate_owned_header(header);
         if (header.data) add_allocation(header, true);
         return_added_ = true;
+    }
+    void add_owned_range(std::span<const StringHeader> headers) {
+        if (uncertain_) throw_unknown();
+        if (release_started_) fail("string_lifetime_unknown", "FString payloads cannot be registered after cleanup starts");
+        if (headers.size() > allocations_.max_size() - allocation_count_)
+            fail("string_lifetime_unknown", "FString ownership tracking exceeds its representable range");
+        const auto required = allocation_count_ + headers.size();
+        if (required > allocations_.size()) {
+            try {allocations_.resize(required);}
+            catch (...) {uncertain_ = true;throw;}
+        }
+        for (const auto& header : headers) {
+            validate_owned_header(header);
+            if (header.data) add_allocation(header, true);
+        }
     }
 
     void validate_unchanged_input(std::size_t index, const StringHeader& current) {

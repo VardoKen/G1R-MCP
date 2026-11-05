@@ -49,7 +49,7 @@ nlohmann::json GameAccess::capture_scalar_array_parameter(std::uintptr_t field,i
         const auto scalar_type=inner.at("type").get<std::string>();
         const bool numeric=scalar_type=="BoolProperty" || scalar_type=="IntProperty" || scalar_type=="Int64Property"
             || scalar_type=="UInt32Property" || scalar_type=="UInt64Property" || scalar_type=="FloatProperty" || scalar_type=="DoubleProperty";
-        const auto element_size=(numeric || scalar_type=="StructProperty")?inner.at("element_size").get<int>():scalar_type=="NameProperty"?8:0;
+        const auto element_size=(numeric || scalar_type=="StructProperty")?inner.at("element_size").get<int>():scalar_type=="NameProperty"?8:scalar_type=="StrProperty"?16:0;
         scalar_outputs::Layout scalar_layout{scalar_type,element_size,1};
         if(numeric) {
             if(scalar_type=="BoolProperty") {

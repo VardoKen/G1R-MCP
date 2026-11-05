@@ -139,6 +139,41 @@ class UG1RMCPTypedInputProbe : UObject
     }
 
     UFUNCTION(BlueprintCallable)
+    TArray<FString> EchoStringArray(TArray<FString> Values)
+    {
+        TArray<FString> Result;
+        for (int Index = 0; Index < Values.Num(); Index++)
+        {
+            Result.Add(Values[Index]);
+        }
+        return Result;
+    }
+
+    UFUNCTION(BlueprintCallable)
+    void WriteStringArray(bool WithValues, TArray<FString>&out Values)
+    {
+        Values.Empty();
+        if (WithValues)
+        {
+            Values.Add("");
+            Values.Add("Entry");
+            Values.Add("Line\nnext");
+            Values.Add("Name_42");
+            Values.Add("Ω");
+            Values.Add("Entry");
+        }
+    }
+
+    UFUNCTION(BlueprintCallable)
+    FString WriteAndReturnStringArray(TArray<FString>&out Values)
+    {
+        Values.Empty();
+        Values.Add("Entry");
+        Values.Add("");
+        return "Entry";
+    }
+
+    UFUNCTION(BlueprintCallable)
     TArray<int64> EchoInt64Array(TArray<int64> Values)
     {
         TArray<int64> Result;

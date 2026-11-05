@@ -4,6 +4,7 @@
 #include "g1r_mcp/scalar_arguments.hpp"
 #include "g1r_mcp/scalar_struct_values.hpp"
 #include "g1r_mcp/object_array_parameter_layout.hpp"
+#include "g1r_mcp/string_return.hpp"
 #include <array>
 #include <cstring>
 #include <limits>
@@ -80,7 +81,7 @@ json GameAccess::capture_scalar_array_return(uintptr_t field,int size,int dim,bo
             }
             scalar_outputs::validate_layout(scalar_layout);
         }
-        if(!(numeric || (type=="NameProperty" && stride==8) || (enumeration && stride==1)
+        if(!(numeric || (type=="NameProperty" && stride==8) || (type=="StrProperty" && stride==16) || (enumeration && stride==1)
              || (type=="StructProperty" && stride>0))
            || inner.at("array_dim")!=1 || inner.at("offset")!=0)
             throw HandlerError("unsupported_signature","The returned array requires int32, FName, byte enum, or own scalar DTO elements");
@@ -158,6 +159,8 @@ json GameAccess::read_scalar_array_return(uintptr_t field,uintptr_t address,cons
             item["value"]=scalar_outputs::decode(scalar_layout,std::span<const std::byte>(bytes,static_cast<size_t>(stride)));
         } else if(type=="NameProperty") {
             uint64_t value{};std::memcpy(&value,bytes,sizeof(value));item["value"]=name(value);
+        } else if(type=="StrProperty") {
+            StringHeader value{};std::memcpy(&value,bytes,sizeof(value));item["value"]=read_copied_string(value);
         } else if(type=="StructProperty") {
             item["value"]=decode_pod_struct(structure,std::span<const std::byte>(bytes,static_cast<size_t>(stride)));
         } else {

@@ -628,7 +628,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.110"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.111"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -1417,6 +1417,7 @@ uint64_t GameAccess::encode_name_text(const json& value) const {
                 throw HandlerError("name_constructor_fault","The FName constructor raised a native exception");
             return packed;
 }
+std::string GameAccess::read_copied_string(const StringHeader& header) const {return copied_string(header);}
 scalar_struct_values::Snapshot GameAccess::capture_scalar_struct_parameter(uintptr_t field,int size,int dim) const {
     return scalar_struct_values::capture(field,size,dim,
         []<class Value>(uintptr_t address){return read<Value>(address);},
@@ -1611,19 +1612,19 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         else if(type=="ArrayProperty") {
             if(returned) {
                 const auto inner_type=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);});
-                const bool scalar_array=supported_scalar_output_type(inner_type) || inner_type=="NameProperty" || inner_type=="EnumProperty" || inner_type=="ByteProperty" || inner_type=="StructProperty";
+                const bool scalar_array=supported_scalar_output_type(inner_type) || inner_type=="NameProperty" || inner_type=="StrProperty" || inner_type=="EnumProperty" || inner_type=="ByteProperty" || inner_type=="StructProperty";
                 const auto array=scalar_array?capture_scalar_array_return(field,size,array_dim):capture_object_array_return(field,size,array_dim);
                 captured["aux"]={{scalar_array?"scalar_array_return":"object_array_return",array}};array_public=array.at("public");supported=true;
             } else {
                 if((flags&0x100) && !(flags&kConstParm)) {
                     const auto inner_type=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);});
-                    const bool scalar_array=supported_scalar_output_type(inner_type) || inner_type=="NameProperty" || inner_type=="EnumProperty" || inner_type=="ByteProperty" || inner_type=="StructProperty";
+                    const bool scalar_array=supported_scalar_output_type(inner_type) || inner_type=="NameProperty" || inner_type=="StrProperty" || inner_type=="EnumProperty" || inner_type=="ByteProperty" || inner_type=="StructProperty";
                     const auto array=scalar_array?capture_scalar_array_return(field,size,array_dim,true):capture_object_array_return(field,size,array_dim,true);
                     captured["aux"]={{scalar_array?"scalar_array_output":"object_array_output",array}};array_public=array.at("public");supported=true;
                 } else if(field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);})=="ObjectProperty") {
                     const auto array=capture_object_array_parameter(field,size,array_dim,flags);
                     captured["aux"]={{"object_array",array}};array_public=array.at("public");supported=true;
-                } else if(const auto inner_type=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);});supported_scalar_output_type(inner_type) || inner_type=="NameProperty" || inner_type=="StructProperty") {
+                } else if(const auto inner_type=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);});supported_scalar_output_type(inner_type) || inner_type=="NameProperty" || inner_type=="StrProperty" || inner_type=="StructProperty") {
                     const auto array=capture_scalar_array_parameter(field,size,array_dim,flags);
                     captured["aux"]={{"scalar_array",array}};array_public=array.at("public");supported=true;
                 } else {
@@ -2106,7 +2107,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         }
     }
     struct ArrayElement {std::string handle;ObjectSerialIdentity identity{};uintptr_t pointer{};};
-    struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::string key;json metadata;std::vector<ArrayElement> elements;ArrayHeader header{};std::vector<uintptr_t> pointers;std::vector<std::byte> scalar_bytes;size_t stride{8};};
+    struct ObjectArrayInput {uintptr_t field{};int offset{};uint64_t flags{};std::string key;json metadata;std::vector<ArrayElement> elements;ArrayHeader header{};std::vector<uintptr_t> pointers;std::vector<std::byte> scalar_bytes;size_t stride{8};std::vector<std::u16string> string_sources;std::vector<size_t> string_indices;};
     std::vector<ObjectArrayInput> array_inputs;
     struct ObjectArrayOutput {uintptr_t field{};int offset{};json metadata;std::string key;};
     std::vector<ObjectArrayOutput> array_outputs;
@@ -2138,7 +2139,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             if((flags&0x400) || ((flags&0x100) && !(flags&0x2)) || field_type(field,[this](auto value){return name(value);})!="ArrayProperty")continue;
             const auto inner_type=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);});
             const auto metadata=inner_type=="ObjectProperty"?capture_object_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags)
-                :(supported_scalar_output_type(inner_type) || inner_type=="NameProperty" || inner_type=="StructProperty")?capture_scalar_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags)
+                :(supported_scalar_output_type(inner_type) || inner_type=="NameProperty" || inner_type=="StrProperty" || inner_type=="StructProperty")?capture_scalar_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags)
                 :capture_enum_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags);
             const auto key=name(read<uint64_t>(field+0x20));
             if(!arguments.contains(key))throw HandlerError("missing_argument","Object array argument is missing: "+key);
@@ -2160,7 +2161,9 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                 }
                 size_t index{};
                 for(const auto& value:values) {
-                    if(enum_array) {
+                    if(scalar_array && metadata.at("scalar_type")=="StrProperty") {
+                        input.string_sources.push_back(string_arguments::encode(value));
+                    } else if(enum_array) {
                         const auto encoded=enum_arguments::encode_integer("ByteProperty",1,value);
                         input.scalar_bytes[index]=encoded.bytes[0];
                     } else if(metadata.at("scalar_type")=="NameProperty") {
@@ -2253,11 +2256,36 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     string_input_lifetime::Ledger string_ledger;
     as_exception_capture::State script_errors;
     bool string_event_started=false,string_event_completed=false,string_return_registered=false,string_cleanup_done=false;
+    std::function<void()> validate_string_inputs;
+    const bool contains_string_array_input=std::any_of(array_inputs.begin(),array_inputs.end(),[](const auto& input){return input.metadata.value("scalar_type",std::string{})=="StrProperty";});
+    bool string_array_results_registered=false;
+    auto register_string_array_results=[&]() {
+        if(string_array_results_registered)return;
+        auto collect=[&](int offset,const json& metadata) {
+            if(metadata.value("scalar_type",std::string{})!="StrProperty")return;
+            const auto header=read<ArrayHeader>(reinterpret_cast<uintptr_t>(buffer+offset));
+            const auto page=array_page(header,16,1,0,std::numeric_limits<size_t>::max());
+            std::vector<StringHeader> strings(static_cast<size_t>(page.count));
+            if(page.bytes && !copy_memory(strings.data(),reinterpret_cast<void*>(page.begin),page.bytes))
+                throw HandlerError("invalid_memory","The returned FString array headers are unavailable");
+            string_ledger.add_owned_range(strings);
+        };
+        if(contains_array_return)collect(return_offset,array_return_metadata);
+        for(const auto& output:array_outputs)collect(output.offset,output.metadata);
+        string_array_results_registered=true;
+    };
     bool container_return_cleanup_done=false,container_return_cleanup_confirmed=false;
     auto release_containers=[&]() {
         if(!contains_owned_containers)return true;
         if(container_return_cleanup_done)return container_return_cleanup_confirmed;
         container_return_cleanup_done=true;
+        try {
+            if(validate_string_inputs)validate_string_inputs();
+            register_string_array_results();
+            const auto strings=string_ledger.release([this](uintptr_t memory){return free_string(base_+kFree,reinterpret_cast<void*>(memory));});
+            if(!strings.confirmed){container_return_cleanup_confirmed=false;return false;}
+            string_cleanup_done=true;
+        } catch(...) {string_ledger.mark_uncertain();container_return_cleanup_confirmed=false;return false;}
         std::set<uintptr_t> allocations;
         bool confirmed=true;
         auto collect=[&](int offset,bool set_return) {
@@ -2320,12 +2348,14 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             auto source=string_arguments::encode(arguments.at(key));budget.add(source.size());
             string_inputs.push_back({field,offset,flags,key,std::move(source),{}});
         }
-        string_ledger.prepare(string_inputs.size());
         require_same_function_contract(pod_function_contract,capture_function_contract(object,function_owner,function,target_handle));
     }
-    if(!contains_string_input && contains_object_array && has_string_return)string_ledger.prepare(0);
-    auto validate_string_inputs=[&] {
-        if(!contains_string_input)return;
+    size_t prepared_string_count=string_inputs.size();
+    for(const auto& input:array_inputs)prepared_string_count+=input.string_sources.size();
+    string_ledger.prepare(prepared_string_count);
+    validate_string_inputs=[&] {
+        if(string_cleanup_done)return;
+        if(!contains_string_input && !contains_string_array_input)return;
         for(size_t index=0;index<string_inputs.size();++index) {
             const auto& input=string_inputs[index];StringHeader current{};
             if(!copy_memory(&current,buffer+input.offset,sizeof(current))) {
@@ -2340,11 +2370,19 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                 throw HandlerError("string_lifetime_unknown","Const FString input bytes changed or are unavailable");
             }
         }
+        for(const auto& input:array_inputs) {
+            for(size_t index=0;index<input.string_sources.size();++index) {
+                StringHeader header{};std::memcpy(&header,input.scalar_bytes.data()+index*16,sizeof(header));
+                string_ledger.validate_unchanged_input(input.string_indices[index],header);
+                if(read_copied_string(header)!=utf8(reinterpret_cast<const wchar_t*>(input.string_sources[index].data()),static_cast<int>(input.string_sources[index].size())))
+                    throw HandlerError("string_lifetime_unknown","The input FString array text changed during the call");
+            }
+        }
         require_same_function_contract(pod_function_contract,capture_function_contract(object,function_owner,function,target_handle));
     };
     auto release_mixed_strings=[&](json& details) {
-        if(!contains_string_input && !has_string_return)return;
-        if(string_event_completed && contains_string_input && !string_cleanup_done && !string_ledger.uncertain()) {
+        if(!contains_string_input && !contains_string_array_input && !has_string_return)return;
+        if(string_event_completed && (contains_string_input || contains_string_array_input) && !string_cleanup_done && !string_ledger.uncertain()) {
             try{validate_string_inputs();}catch(...) {string_ledger.mark_uncertain();string_quarantine_cause=3;}
         }
         if(!script_errors.exception_count && string_event_completed && has_string_return && !string_cleanup_done && !string_return_registered && !string_ledger.uncertain()) {
@@ -2423,7 +2461,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             }
             if(type=="ArrayProperty") {
                 const auto inner_type=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);});
-                const bool scalar_array=supported_scalar_output_type(inner_type) || inner_type=="NameProperty" || inner_type=="EnumProperty" || inner_type=="ByteProperty" || inner_type=="StructProperty";
+                const bool scalar_array=supported_scalar_output_type(inner_type) || inner_type=="NameProperty" || inner_type=="StrProperty" || inner_type=="EnumProperty" || inner_type=="ByteProperty" || inner_type=="StructProperty";
                 array_return_metadata=scalar_array
                     ?capture_scalar_array_return(field,size,read<int32_t>(field+0x30))
                     :capture_object_array_return(field,size,read<int32_t>(field+0x30));
@@ -2545,7 +2583,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             if((flags&0x100) && !(flags&0x2)) {
                 if(!contains_array_output)throw HandlerError("signature_changed","The array output appeared after reading the complete signature");
                 const auto inner_type=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);});
-                const bool scalar_array=supported_scalar_output_type(inner_type) || inner_type=="NameProperty" || inner_type=="EnumProperty" || inner_type=="ByteProperty" || inner_type=="StructProperty";
+                const bool scalar_array=supported_scalar_output_type(inner_type) || inner_type=="NameProperty" || inner_type=="StrProperty" || inner_type=="EnumProperty" || inner_type=="ByteProperty" || inner_type=="StructProperty";
                 const auto metadata=scalar_array?capture_scalar_array_return(field,size,read<int32_t>(field+0x30),true)
                     :capture_object_array_return(field,size,read<int32_t>(field+0x30),true);
                 const auto key=name(read<uint64_t>(field+0x20));
@@ -2682,6 +2720,19 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         if(expected_token)require_same_function_contract(expected_contract,allocator_contract);
         const auto input_count=(input.metadata.contains("enum") || input.metadata.contains("scalar_type"))?
             input.scalar_bytes.size()/input.stride:input.elements.size();
+        if(input.metadata.value("scalar_type",std::string{})=="StrProperty") {
+            input.string_indices.reserve(input.string_sources.size());
+            for(size_t index=0;index<input.string_sources.size();++index) {
+                const auto& source=input.string_sources[index];StringHeader string{};
+                if(!construct_string(base_+kStringConstruct,&string,source.c_str(),static_cast<int>(source.size()))) {
+                    string_ledger.mark_uncertain();
+                    throw HandlerError("string_constructor_fault","An array FString constructor raised a native exception");
+                }
+                input.string_indices.push_back(string_ledger.input_count());
+                string_ledger.add_input(string,source.size());
+                std::memcpy(input.scalar_bytes.data()+index*16,&string,sizeof(string));
+            }
+        }
     const auto count=static_cast<int32_t>(input_count);ArrayHeader header{};
         if(count) {
         void* memory{};const auto allocation_bytes=static_cast<size_t>(count)*input.stride;
@@ -2694,7 +2745,8 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             extra_array_count=memory?1:0;extra_array_bytes=allocation_bytes;
         }
     array_quarantine_cause=4;array_ledger.add_input(header,input_count,input.stride,
-        input.metadata.contains("struct")?input.metadata.at("struct").at("min_alignment").get<size_t>():input.stride);
+        input.metadata.contains("struct")?input.metadata.at("struct").at("min_alignment").get<size_t>():
+        input.metadata.value("scalar_type",std::string{})=="StrProperty"?size_t{8}:input.stride);
         extra_array_count=extra_array_bytes=0;array_quarantine_cause=0;input.header=header;
         if(count) {
         if(input.metadata.contains("enum") || input.metadata.contains("scalar_type")) {
@@ -2752,7 +2804,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         event_returned=call_event(reinterpret_cast<void*>(process_event_),object,reinterpret_cast<void*>(function),buffer,&native_fault);
     }
     if(!event_returned) {
-        if(contains_string_input || (contains_object_array && has_string_return)){string_ledger.mark_uncertain();string_quarantine_cause=2;}
+        if(contains_string_input || contains_string_array_input || (contains_object_array && has_string_return)){string_ledger.mark_uncertain();string_quarantine_cause=2;}
         if(contains_object_array){array_ledger.mark_uncertain();array_quarantine_cause=2;}
         json details={{"executed",false},{"may_have_executed",true},{"do_not_retry",true},
             {"native_exception",native_exception::describe(native_fault)}};
@@ -2953,10 +3005,11 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         if(!copy_memory(&header,buffer+return_offset,sizeof(header)))
             throw HandlerError("game_result_error","The call executed but FString could not be read; cleanup is unconfirmed",
                                string_cleanup_details(false,false,"invalid_string_storage"));
-        if(contains_string_input || contains_object_array) {
+        if(contains_string_input || contains_object_array || contains_owned_containers) {
             string_ledger.add_return(header);string_return_registered=true;
             result=copied_string(header);
             decode_pod_outputs();validate_string_inputs();
+            register_string_array_results();
             const auto cleanup=release_strings();
             if(!cleanup.confirmed)throw HandlerError("game_result_error","FString release is unconfirmed; do not repeat the request");
             json response={{"function",function_name},{"return_type",return_type},{"result",result},{"executed",true},
@@ -3017,10 +3070,11 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     json response={{"function",function_name},{"return_type",return_type},{"result",result},{"executed",true},{"thread_id",GetCurrentThreadId()}};
     record_container_cleanup(response);
     if(!return_enum.is_null())response["return_enum"]=return_enum;
-    if(contains_string_input) {
+    if(contains_string_input || contains_string_array_input) {
         validate_string_inputs();const auto cleanup=release_strings();
         if(!cleanup.confirmed)throw HandlerError("game_result_error","FString input release is unconfirmed; do not repeat the request");
         response["cleanup_confirmed"]=true;response["input_cleanup_confirmed"]=true;
+        if(contains_string_array_input)response["string_array_cleanup_confirmed"]=true;
     }
     if(contains_object_array) {
         validate_array_inputs();const auto cleanup=release_arrays();

@@ -1,11 +1,11 @@
 # Активные планы G1R MCP
 
 
-Dev.110: собственные DTO с вложенным Inner, FName Label и однобайтовым enum Mode приняты: single input/return/output и array input/return/пустой/заполненный output. Рекурсивная metadata и cleanup подтверждены; FName внутри DTO принимает `{name:string}`. Ранний `game_thread_busy` заменён обычным ожиданием очереди. Общий цикл — 42/42 typed-вызовов и 9/9 проверок. [Подтверждения](../../../../artifacts/dev110-typed-input-live-complete.json).
+Dev.111: FString-массивы input/return/pure output приняты для пустых строк, Unicode, newline и дубликатов; внутренние строки и внешний массив освобождены. Mixed scalar return/output и прежние сценарии сохранены: 46/46 typed-вызовов, 9/9 проверок. Debugger listener новой сборки ответил version(type31) и debug data(type2); полная база не получена из-за прежнего лимита probe256 сообщений. [Подтверждения](../../../../artifacts/dev111-typed-input-live-complete.json).
 
 | Номер | Документ | Состояние |
 | --- | --- | --- |
-| PLAN-001 | [Активный план реализации](PLAN-001-active-implementation.md) | R18; состояние на 05.11.2026: source/canonical/shared runtime dev.110, 51 инструмент, Steam build 26394867. Собственные nested DTO с FName/byte enum и прежние сценарии приняты: 42/42 typed-вызовов, 9/9 live-проверок; игра закрыта, заявка освобождена. DLL-сборки/bootstrap прошли; runtime-комплект dev.110 проверен, wheel подготавливается. Следующий шаг — оставшиеся подтверждённые сигнатуры и критерии PLAN; полный план, Э8/Э9 и Steam-автозагрузка DLL не завершены |
+| PLAN-001 | [Активный план реализации](PLAN-001-active-implementation.md) | R18; состояние на 05.11.2026: source/canonical/shared runtime dev.111, 51 инструмент, Steam build 26394867. FString-массивы и прежние сценарии приняты: 46/46 typed-вызовов, 9/9 live-проверок; игра закрыта, заявка освобождена. DLL/bootstrap/затронутые CTest прошли; runtime-комплект dev.111 проверен, wheel подготавливается. Debugger listener отвечает version/debug data; полная база не завершена из-за лимита probe. Следующий шаг — debug database MCP; полный план, Э8/Э9 и Steam-автозагрузка DLL не завершены |
 
 Последний зарегистрированный номер: **PLAN-001**. Основной документ содержит текущую последовательность, развилки, статусы и краткую историю существенных редакций. Новые результаты уточняют его, а не создают конкурирующие копии плана.
 

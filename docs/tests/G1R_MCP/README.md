@@ -1,5 +1,11 @@
 # Проверки G1R MCP: локальные инструменты и нативный маршрут
 
+## Текущие проверки dev.111 — 05.11.2026
+
+[Финальный live-цикл](../../../artifacts/dev111-typed-input-live-complete.json): accepted=true, **46/46 typed-вызовов**, **9/9 проверок**. FString echo/output: пустые строки, Unicode, newline и дубликаты; mixed scalar return/output и прежние сценарии приняты, очистка внутренних строк/внешнего массива подтверждена. Marker 71→72→72→71, successful/failed reload, source/staging восстановлены, игра закрыта, заявка освобождена.
+
+[DLL-сборка](../../../artifacts/native-build-dev111-complete.txt) прошла; [bootstrap](../../../artifacts/python-bootstrap-dev111.txt) — **3/3, 6,229 с**; [затронутые CTest](../../../artifacts/native-checks-dev111.txt) — **2/2, 0,19 с**. Debugger endpoint новой сборки ответил version(type31) и многочисленными debug data(type2); probe завершился `limit_exceeded` на прежних 256 сообщениях. Listener подтверждён, полная debug database не завершена; это не `endpoint_unavailable`. Полный новый Python/CTest-прогон не выполнялся. [Runtime-комплект](../../../artifacts/bridge-bundle-dev111/manifest.json): 79 payload-файлов, manifest проверен. [Wheel](../../../artifacts/wheel-dev111/g1r_mcp-1.0.0.dev111-py3-none-any.whl) подготавливается; consumer-сеанс не повторяется. Nested DTO FString/custom lifecycle и полный debugger API не подтверждены.
+
 ## Текущие проверки dev.110 — 05.11.2026
 
 [Финальный live-цикл](../../../artifacts/dev110-typed-input-live-complete.json): accepted=true, **42/42 typed-вызовов**, **9/9 проверок**. DTO с nested Inner/FName Label/byte enum Mode: single input/return/pure output, array input/return и пустой/заполненный output приняты; рекурсивная metadata, значения и cleanup подтверждены. Прежние 37 сценариев сохранены. Marker 71→72→72→71, successful/failed reload, source/staging восстановлены, игра закрыта, заявка освобождена.

@@ -1,5 +1,9 @@
 # История задач G1R MCP
 
+## 05.11.2026 — dev.111: FString-массивы и debugger listener
+
+Добавлены FString-массивы input/return/pure output с владением внутренними строками и внешним массивом. [Live-приёмка](../../../../artifacts/dev111-typed-input-live-complete.json): 46/46 typed-вызовов, 9/9 проверок; пустые/Unicode/newline/дублирующиеся строки, mixed scalar return/output и cleanup приняты. Прежние сценарии, marker/reload/восстановление, закрытие игры и освобождение заявки сохранены. Debugger listener ответил version(type31)/debug data(type2); полная база остановилась на прежнем лимите probe256, не объявлена готовой. DLL-сборка, bootstrap 3/3 и затронутые CTest 2/2 прошли; runtime-комплект dev.111 проверен, wheel подготавливается. PLAN-001 R18 продолжается; следующий шаг — полная debug database и MCP-интеграция.
+
 ## 05.11.2026 — dev.110: собственные вложенные DTO
 
 Расширены существующие scalar_* контракты: own numeric/bool/FName/byte enum и вложенные own Struct для single input/return/output и array input/return/pure output. FName внутри DTO принимает `{name:string}`, custom lifecycle/FString не добавлены. Ранний `game_thread_busy` заменён обычным ожиданием очереди. [Финальная приёмка](../../../../artifacts/dev110-typed-input-live-complete.json): 42/42 typed-вызовов, 9/9 проверок; nested metadata/значения/cleanup и прежние 37 сценариев приняты. Marker/reload/восстановление, закрытие своей игры и освобождение заявки подтверждены. DLL-сборки и финальный bootstrap 3/3 прошли; runtime-комплект dev.110 проверен, wheel подготавливается. PLAN-001 R18 продолжается; следующий шаг — оставшиеся подтверждённые сигнатуры и критерии плана.
