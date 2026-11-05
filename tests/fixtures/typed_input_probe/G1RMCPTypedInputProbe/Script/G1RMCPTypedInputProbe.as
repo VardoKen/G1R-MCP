@@ -138,6 +138,108 @@ class UG1RMCPTypedInputProbe : UObject
         }
     }
 
+    UFUNCTION(BlueprintCallable)
+    TArray<int64> EchoInt64Array(TArray<int64> Values)
+    {
+        TArray<int64> Result;
+        for (int Index = 0; Index < Values.Num(); Index++)
+        {
+            Result.Add(Values[Index]);
+        }
+        return Result;
+    }
+
+    UFUNCTION(BlueprintCallable)
+    TArray<uint32> EchoUInt32Array(TArray<uint32> Values)
+    {
+        TArray<uint32> Result;
+        for (int Index = 0; Index < Values.Num(); Index++)
+        {
+            Result.Add(Values[Index]);
+        }
+        return Result;
+    }
+
+    UFUNCTION(BlueprintCallable)
+    TArray<uint64> EchoUInt64Array(TArray<uint64> Values)
+    {
+        TArray<uint64> Result;
+        for (int Index = 0; Index < Values.Num(); Index++)
+        {
+            Result.Add(Values[Index]);
+        }
+        return Result;
+    }
+
+    UFUNCTION(BlueprintCallable)
+    TArray<float32> EchoFloat32Array(TArray<float32> Values)
+    {
+        TArray<float32> Result;
+        for (int Index = 0; Index < Values.Num(); Index++)
+        {
+            Result.Add(Values[Index]);
+        }
+        return Result;
+    }
+
+    UFUNCTION(BlueprintCallable)
+    TArray<float64> EchoFloat64Array(TArray<float64> Values)
+    {
+        TArray<float64> Result;
+        for (int Index = 0; Index < Values.Num(); Index++)
+        {
+            Result.Add(Values[Index]);
+        }
+        return Result;
+    }
+
+    UFUNCTION(BlueprintCallable)
+    TArray<bool> EchoBoolArray(TArray<bool> Values)
+    {
+        TArray<bool> Result;
+        for (int Index = 0; Index < Values.Num(); Index++)
+        {
+            Result.Add(Values[Index]);
+        }
+        return Result;
+    }
+
+    // Six pure-output arrays are filled in one call; false checks the empty batch.
+    UFUNCTION(BlueprintCallable)
+    void WriteNumericArrays(bool WithValues,
+                            TArray<int64>&out Int64Values,
+                            TArray<uint32>&out UInt32Values,
+                            TArray<uint64>&out UInt64Values,
+                            TArray<float32>&out Float32Values,
+                            TArray<float64>&out Float64Values,
+                            TArray<bool>&out BoolValues)
+    {
+        Int64Values.Empty();
+        UInt32Values.Empty();
+        UInt64Values.Empty();
+        Float32Values.Empty();
+        Float64Values.Empty();
+        BoolValues.Empty();
+        if (WithValues)
+        {
+            Int64Values.Add(int64(-9223372036854775807 - 1));
+            Int64Values.Add(int64(9223372036854775807));
+            UInt32Values.Add(uint32(0));
+            UInt32Values.Add(uint32(4294967295));
+            UInt64Values.Add(uint64(0));
+            UInt64Values.Add(uint64(18446744073709551615));
+            Float32Values.Add(-2.5f);
+            Float32Values.Add(0.0f);
+            Float32Values.Add(1.25f);
+            Float64Values.Add(-2.5);
+            Float64Values.Add(0.0);
+            Float64Values.Add(1.25);
+            BoolValues.Add(true);
+            BoolValues.Add(false);
+            BoolValues.Add(true);
+        }
+    }
+
     // [] -> 0; [Entry, miss, Entry] -> 304; [None, Entry] -> 211.
     // Read-only marker checks the array length and FName equality; no world access.
     UFUNCTION(BlueprintCallable)

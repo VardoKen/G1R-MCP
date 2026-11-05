@@ -628,7 +628,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.108"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.109"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -1591,19 +1591,19 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         else if(type=="ArrayProperty") {
             if(returned) {
                 const auto inner_type=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);});
-                const bool scalar_array=inner_type=="IntProperty" || inner_type=="NameProperty" || inner_type=="EnumProperty" || inner_type=="ByteProperty" || inner_type=="StructProperty";
+                const bool scalar_array=supported_scalar_output_type(inner_type) || inner_type=="NameProperty" || inner_type=="EnumProperty" || inner_type=="ByteProperty" || inner_type=="StructProperty";
                 const auto array=scalar_array?capture_scalar_array_return(field,size,array_dim):capture_object_array_return(field,size,array_dim);
                 captured["aux"]={{scalar_array?"scalar_array_return":"object_array_return",array}};array_public=array.at("public");supported=true;
             } else {
                 if((flags&0x100) && !(flags&kConstParm)) {
                     const auto inner_type=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);});
-                    const bool scalar_array=inner_type=="IntProperty" || inner_type=="NameProperty" || inner_type=="EnumProperty" || inner_type=="ByteProperty" || inner_type=="StructProperty";
+                    const bool scalar_array=supported_scalar_output_type(inner_type) || inner_type=="NameProperty" || inner_type=="EnumProperty" || inner_type=="ByteProperty" || inner_type=="StructProperty";
                     const auto array=scalar_array?capture_scalar_array_return(field,size,array_dim,true):capture_object_array_return(field,size,array_dim,true);
                     captured["aux"]={{scalar_array?"scalar_array_output":"object_array_output",array}};array_public=array.at("public");supported=true;
                 } else if(field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);})=="ObjectProperty") {
                     const auto array=capture_object_array_parameter(field,size,array_dim,flags);
                     captured["aux"]={{"object_array",array}};array_public=array.at("public");supported=true;
-                } else if(const auto inner_type=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);});inner_type=="IntProperty" || inner_type=="NameProperty" || inner_type=="StructProperty") {
+                } else if(const auto inner_type=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);});supported_scalar_output_type(inner_type) || inner_type=="NameProperty" || inner_type=="StructProperty") {
                     const auto array=capture_scalar_array_parameter(field,size,array_dim,flags);
                     captured["aux"]={{"scalar_array",array}};array_public=array.at("public");supported=true;
                 } else {
@@ -2129,7 +2129,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             if((flags&0x400) || ((flags&0x100) && !(flags&0x2)) || field_type(field,[this](auto value){return name(value);})!="ArrayProperty")continue;
             const auto inner_type=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);});
             const auto metadata=inner_type=="ObjectProperty"?capture_object_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags)
-                :(inner_type=="IntProperty" || inner_type=="NameProperty" || inner_type=="StructProperty")?capture_scalar_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags)
+                :(supported_scalar_output_type(inner_type) || inner_type=="NameProperty" || inner_type=="StructProperty")?capture_scalar_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags)
                 :capture_enum_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags);
             const auto key=name(read<uint64_t>(field+0x20));
             if(!arguments.contains(key))throw HandlerError("missing_argument","Object array argument is missing: "+key);
@@ -2161,8 +2161,20 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                         const auto encoded=scalar_struct_arguments::encode(structure->layout,value);
                         std::memcpy(input.scalar_bytes.data()+index*input.stride,encoded.data(),encoded.size());
                     } else {
-                        const auto encoded=int32_argument(value);
-                        std::memcpy(input.scalar_bytes.data()+index*input.stride,&encoded,sizeof(encoded));
+                        const auto& scalar_type=metadata.at("scalar_type");
+                        const auto write=[&](auto encoded) {
+                            std::memcpy(input.scalar_bytes.data()+index*input.stride,&encoded,sizeof(encoded));
+                        };
+                        if(scalar_type=="BoolProperty") {
+                            if(!value.is_boolean())throw HandlerError("invalid_argument","A boolean array element is required");
+                            const auto mask=metadata.at("inner").at("bool_layout").at("byte_mask").get<uint8_t>();
+                            write(value.get<bool>()?mask:uint8_t{});
+                        } else if(scalar_type=="Int64Property")write(int64_argument(value));
+                        else if(scalar_type=="UInt32Property")write(uint32_argument(value));
+                        else if(scalar_type=="UInt64Property")write(uint64_argument(value));
+                        else if(scalar_type=="FloatProperty")write(float_argument(value));
+                        else if(scalar_type=="DoubleProperty")write(double_argument(value));
+                        else write(int32_argument(value));
                     }
                     ++index;
                 }
@@ -2402,7 +2414,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             }
             if(type=="ArrayProperty") {
                 const auto inner_type=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);});
-                const bool scalar_array=inner_type=="IntProperty" || inner_type=="NameProperty" || inner_type=="EnumProperty" || inner_type=="ByteProperty" || inner_type=="StructProperty";
+                const bool scalar_array=supported_scalar_output_type(inner_type) || inner_type=="NameProperty" || inner_type=="EnumProperty" || inner_type=="ByteProperty" || inner_type=="StructProperty";
                 array_return_metadata=scalar_array
                     ?capture_scalar_array_return(field,size,read<int32_t>(field+0x30))
                     :capture_object_array_return(field,size,read<int32_t>(field+0x30));
@@ -2517,7 +2529,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             if((flags&0x100) && !(flags&0x2)) {
                 if(!contains_array_output)throw HandlerError("signature_changed","The array output appeared after reading the complete signature");
                 const auto inner_type=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);});
-                const bool scalar_array=inner_type=="IntProperty" || inner_type=="NameProperty" || inner_type=="EnumProperty" || inner_type=="ByteProperty" || inner_type=="StructProperty";
+                const bool scalar_array=supported_scalar_output_type(inner_type) || inner_type=="NameProperty" || inner_type=="EnumProperty" || inner_type=="ByteProperty" || inner_type=="StructProperty";
                 const auto metadata=scalar_array?capture_scalar_array_return(field,size,read<int32_t>(field+0x30),true)
                     :capture_object_array_return(field,size,read<int32_t>(field+0x30),true);
                 const auto key=name(read<uint64_t>(field+0x20));

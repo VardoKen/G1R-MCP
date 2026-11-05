@@ -1,5 +1,11 @@
 # Проверки G1R MCP: локальные инструменты и нативный маршрут
 
+## Текущие проверки dev.109 — 05.11.2026
+
+[Общий live-цикл](../../../artifacts/dev109-typed-input-live-complete.json): accepted=true, **37/37 typed-вызовов**, **9/9 проверок**. Шесть новых scalar roundtrip-типов Bool/Int64/UInt32/UInt64/Float/Double и шесть заполненных pure output-типов с пустым output-контролем приняты; Int32 сохранён. Reflection, bool field masks, числовые диапазоны (включая UInt64 MAX), значения и cleanup подтверждены. Прежние FName/enum/DTO-сценарии, marker 71→72→72→71 и successful/failed reload сохранены; source/staging восстановлены, игра закрыта, заявка освобождена.
+
+[DLL-сборка](../../../artifacts/native-build-dev109.txt) прошла; [bootstrap](../../../artifacts/python-bootstrap-dev109.txt) — **3/3, 7,407 с**. Полный новый Python/CTest-прогон не выполнялся. [Runtime-комплект](../../../artifacts/bridge-bundle-dev109/manifest.json): 79 payload-файлов, manifest проверен. [Wheel](../../../artifacts/wheel-dev109/g1r_mcp-1.0.0.dev109-py3-none-any.whl) подготавливается; consumer-сеанс не повторяется. Inout, произвольный контейнер и полный игровой API этим результатом не подтверждены.
+
 ## Текущие проверки dev.108 — 05.11.2026
 
 [Общий live-цикл](../../../artifacts/dev108-typed-input-live-complete.json): accepted=true, **29/29 typed-вызовов**, **9/9 проверок**. Восемь новых pure output-сценариев для int32/FName/enum/scalar DTO: пустые и заполненные массивы, точные reflection-флаги, metadata, значения и освобождение output-буферов подтверждены. Прежние input/return-сценарии сохранены; marker 71→72→72→71, успешный/неудачный reload, source/staging восстановлены, игра закрыта и заявка освобождена.

@@ -1,11 +1,11 @@
 # Активные планы G1R MCP
 
 
-Dev.108: чистые output-массивы int32/FName/enum/scalar DTO приняты в восьми пустых/заполненных сценариях. Отражённые флаги, metadata, значения и освобождение output-буферов подтверждены; inout не поддержан. Ответы идут в `out_parameters`, metadata — в `out_parameter_metadata`. Общий цикл — 29/29 typed-вызовов и 9/9 проверок. [Подтверждения](../../../../artifacts/dev108-typed-input-live-complete.json).
+Dev.109: базовые scalar-массивы Bool/Int32/Int64/UInt32/UInt64/Float/Double поддержаны в input/return/pure output. Шесть новых roundtrip-типов и заполненные/пустые output-контроли приняты; reflected bool masks и числовые диапазоны, включая UInt64 MAX, подтверждены. Cleanup сохранён. Общий цикл — 37/37 typed-вызовов и 9/9 проверок. [Подтверждения](../../../../artifacts/dev109-typed-input-live-complete.json).
 
 | Номер | Документ | Состояние |
 | --- | --- | --- |
-| PLAN-001 | [Активный план реализации](PLAN-001-active-implementation.md) | R18; состояние на 05.11.2026: source/canonical/shared runtime dev.108, 51 инструмент, Steam build 26394867. Int32/FName/enum/scalar DTO input/return и чистые output-массивы приняты: 29/29 typed-вызовов, 9/9 live-проверок; игра закрыта, заявка освобождена. DLL-сборка/bootstrap прошли; runtime-комплект dev.108 проверен, wheel подготавливается. Следующий шаг — оставшиеся подтверждённые сигнатуры и критерии PLAN; полный план, Э8/Э9 и Steam-автозагрузка DLL не завершены |
+| PLAN-001 | [Активный план реализации](PLAN-001-active-implementation.md) | R18; состояние на 05.11.2026: source/canonical/shared runtime dev.109, 51 инструмент, Steam build 26394867. Базовые scalar/FName/enum/DTO input/return/pure output-массивы приняты: 37/37 typed-вызовов, 9/9 live-проверок; игра закрыта, заявка освобождена. DLL-сборка/bootstrap прошли; runtime-комплект dev.109 проверен, wheel подготавливается. Следующий шаг — оставшиеся подтверждённые сигнатуры и критерии PLAN; полный план, Э8/Э9 и Steam-автозагрузка DLL не завершены |
 
 Последний зарегистрированный номер: **PLAN-001**. Основной документ содержит текущую последовательность, развилки, статусы и краткую историю существенных редакций. Новые результаты уточняют его, а не создают конкурирующие копии плана.
 

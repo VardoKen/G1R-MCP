@@ -47,13 +47,25 @@ nlohmann::json GameAccess::capture_scalar_array_parameter(std::uintptr_t field,i
         outer["inner"]=inner_pointer;
         auto inner=field_snapshot(inner_pointer);
         const auto scalar_type=inner.at("type").get<std::string>();
-        const auto element_size=scalar_type=="IntProperty"?4:scalar_type=="NameProperty"?8:
-            scalar_type=="StructProperty"?inner.at("element_size").get<int>():0;
+        const bool numeric=scalar_type=="BoolProperty" || scalar_type=="IntProperty" || scalar_type=="Int64Property"
+            || scalar_type=="UInt32Property" || scalar_type=="UInt64Property" || scalar_type=="FloatProperty" || scalar_type=="DoubleProperty";
+        const auto element_size=(numeric || scalar_type=="StructProperty")?inner.at("element_size").get<int>():scalar_type=="NameProperty"?8:0;
+        scalar_outputs::Layout scalar_layout{scalar_type,element_size,1};
+        if(numeric) {
+            if(scalar_type=="BoolProperty") {
+                scalar_layout.field_size=read<uint8_t>(inner_pointer+0x70);scalar_layout.byte_offset=read<uint8_t>(inner_pointer+0x71);
+                scalar_layout.byte_mask=read<uint8_t>(inner_pointer+0x72);scalar_layout.field_mask=read<uint8_t>(inner_pointer+0x73);
+                inner["bool_layout"]={{"field_size",scalar_layout.field_size},{"byte_offset",scalar_layout.byte_offset},
+                    {"byte_mask",scalar_layout.byte_mask},{"field_mask",scalar_layout.field_mask}};
+            }
+            scalar_outputs::validate_layout(scalar_layout);
+        }
         if(element_size<1 || inner.at("element_size")!=element_size || inner.at("array_dim")!=1 || inner.at("offset")!=0)
             throw HandlerError("unsupported_signature","Scalar arrays require int32, FName, or own scalar DTO elements");
         json captured={{"outer",std::move(outer)},{"inner",std::move(inner)},{"scalar_type",scalar_type},
             {"public",{{"container_type","ArrayProperty"},{"element",{{"type",scalar_type},
                 {"element_size",element_size},{"array_dim",1},{"offset",0}}}}}};
+        if(scalar_type=="BoolProperty")captured["public"]["element"]["bool_layout"]=captured.at("inner").at("bool_layout");
         if(scalar_type=="StructProperty") {
             const auto structure=capture_scalar_struct_parameter(inner_pointer,element_size,1);
             captured["struct"]=scalar_struct_snapshot_json(structure);

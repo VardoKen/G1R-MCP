@@ -68,11 +68,24 @@ json GameAccess::capture_scalar_array_return(uintptr_t field,int size,int dim,bo
         const auto type=inner.at("type").get<std::string>();
         const auto stride=inner.at("element_size").get<int>();
         const bool enumeration=type=="EnumProperty" || type=="ByteProperty";
-        if(!((type=="IntProperty" && stride==4) || (type=="NameProperty" && stride==8) || (enumeration && stride==1)
+        const bool numeric=type=="BoolProperty" || type=="IntProperty" || type=="Int64Property" || type=="UInt32Property"
+            || type=="UInt64Property" || type=="FloatProperty" || type=="DoubleProperty";
+        scalar_outputs::Layout scalar_layout{type,stride,1};
+        if(numeric) {
+            if(type=="BoolProperty") {
+                scalar_layout.field_size=read<uint8_t>(inner_pointer+0x70);scalar_layout.byte_offset=read<uint8_t>(inner_pointer+0x71);
+                scalar_layout.byte_mask=read<uint8_t>(inner_pointer+0x72);scalar_layout.field_mask=read<uint8_t>(inner_pointer+0x73);
+                inner["bool_layout"]={{"field_size",scalar_layout.field_size},{"byte_offset",scalar_layout.byte_offset},
+                    {"byte_mask",scalar_layout.byte_mask},{"field_mask",scalar_layout.field_mask}};
+            }
+            scalar_outputs::validate_layout(scalar_layout);
+        }
+        if(!(numeric || (type=="NameProperty" && stride==8) || (enumeration && stride==1)
              || (type=="StructProperty" && stride>0))
            || inner.at("array_dim")!=1 || inner.at("offset")!=0)
             throw HandlerError("unsupported_signature","The returned array requires int32, FName, byte enum, or own scalar DTO elements");
         json element={{"type",type},{"element_size",stride},{"array_dim",1},{"offset",0}};
+        if(type=="BoolProperty")element["bool_layout"]=inner.at("bool_layout");
         json captured={{"outer",std::move(outer)},{"inner",std::move(inner)},{"scalar_type",type}};
         if(type=="StructProperty") {
             const auto structure=capture_scalar_struct_parameter(inner_pointer,stride,1);
@@ -119,6 +132,14 @@ json GameAccess::read_scalar_array_return(uintptr_t field,uintptr_t address,cons
     const auto header=read<ArrayHeader>(address);
     const auto stride=metadata.at("inner").at("element_size").get<int>();
     const auto type=metadata.at("scalar_type").get<std::string>();
+    const bool numeric=type=="BoolProperty" || type=="IntProperty" || type=="Int64Property" || type=="UInt32Property"
+        || type=="UInt64Property" || type=="FloatProperty" || type=="DoubleProperty";
+    scalar_outputs::Layout scalar_layout{type,stride,1};
+    if(type=="BoolProperty") {
+        const auto& boolean=metadata.at("inner").at("bool_layout");
+        scalar_layout.field_size=boolean.at("field_size").get<uint8_t>();scalar_layout.byte_offset=boolean.at("byte_offset").get<uint8_t>();
+        scalar_layout.byte_mask=boolean.at("byte_mask").get<uint8_t>();scalar_layout.field_mask=boolean.at("field_mask").get<uint8_t>();
+    }
     std::optional<scalar_struct_values::Snapshot> structure;
     if(type=="StructProperty") {
         structure=capture_scalar_struct_parameter(metadata.at("inner").at("pointer").get<uintptr_t>(),stride,1);
@@ -133,8 +154,8 @@ json GameAccess::read_scalar_array_return(uintptr_t field,uintptr_t address,cons
     for(int32_t index=0;index<page.count;++index) {
         const auto bytes=copied.data()+static_cast<size_t>(index)*stride;
         json item={{"index",index},{"supported",true}};
-        if(type=="IntProperty") {
-            int32_t value{};std::memcpy(&value,bytes,sizeof(value));item["value"]=value;
+        if(numeric) {
+            item["value"]=scalar_outputs::decode(scalar_layout,std::span<const std::byte>(bytes,static_cast<size_t>(stride)));
         } else if(type=="NameProperty") {
             uint64_t value{};std::memcpy(&value,bytes,sizeof(value));item["value"]=name(value);
         } else if(type=="StructProperty") {
