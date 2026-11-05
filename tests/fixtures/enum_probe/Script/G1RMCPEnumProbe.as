@@ -21,6 +21,20 @@ class UG1RMCPEnumProbe : UObject
         return 81;
     }
 
+    // Fresh local enum array; numeric values are First=0, Third=7; duplicates retained.
+    UFUNCTION(BlueprintCallable)
+    TArray<EG1RMCPEnumProbeMode> ReturnEnumArray(bool WithValues)
+    {
+        TArray<EG1RMCPEnumProbeMode> Result;
+        if (WithValues)
+        {
+            Result.Add(EG1RMCPEnumProbeMode::First);
+            Result.Add(EG1RMCPEnumProbeMode::Third);
+            Result.Add(EG1RMCPEnumProbeMode::First);
+        }
+        return Result;
+    }
+
     UFUNCTION(BlueprintCallable)
     EG1RMCPEnumProbeMode ReadMode()
     {

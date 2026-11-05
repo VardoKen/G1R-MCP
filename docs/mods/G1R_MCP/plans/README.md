@@ -1,11 +1,11 @@
 # Активные планы G1R MCP
 
 
-Dev.104: возврат `TArray<int>` по значению принят в игре: `[]` и `[2147483647, -2147483648]`, элементы `IntProperty4`, результат `{items, total_count, partial}` и подтверждённое освобождение return-буфера. Общий цикл — 12/12 typed-вызовов и 9/9 проверок. [Подтверждения](../../../../artifacts/dev104-typed-input-live-complete.json).
+Dev.105: возвраты `TArray<FName>` и `TArray<enum>` по значению приняты: `[]`/`[Entry, None, Entry]` и `[]`/`[0, 7, 0]`. Reflection — `NameProperty8`, `EnumProperty1` с `ByteProperty1`; enum metadata соответствует значениям, return-буферы освобождены. Общий цикл — 16/16 typed-вызовов и 9/9 проверок. [Подтверждения](../../../../artifacts/dev105-typed-input-live-complete.json).
 
 | Номер | Документ | Состояние |
 | --- | --- | --- |
-| PLAN-001 | [Активный план реализации](PLAN-001-active-implementation.md) | R18; состояние на 05.11.2026: исходники/canonical DLL/shared runtime dev.104, 51 инструмент, Steam build 26394867. FName input-массивы, текстовый FName Number=0 и прежние int32/scalar-сценарии приняты: 12/12 typed-вызовов, 9/9 итоговых live-проверок, игра закрыта. DLL-сборки/bootstrap прошли; runtime-комплект и wheel dev.104 подготовлены. Полный план, Э8/Э9 и Steam-автозагрузка DLL не завершены |
+| PLAN-001 | [Активный план реализации](PLAN-001-active-implementation.md) | R18; состояние на 05.11.2026: source/canonical/shared runtime dev.105, 51 инструмент, Steam build 26394867. Возвраты FName/enum и прежние int32/input/scalar-сценарии приняты: 16/16 typed-вызовов, 9/9 live-проверок; игра закрыта, заявка освобождена. DLL-сборки/bootstrap прошли; runtime-комплект dev.105 проверен, wheel подготавливается. Следующий шаг — scalar DTO array returns; полный план, Э8/Э9 и Steam-автозагрузка DLL не завершены |
 
 Последний зарегистрированный номер: **PLAN-001**. Основной документ содержит текущую последовательность, развилки, статусы и краткую историю существенных редакций. Новые результаты уточняют его, а не создают конкурирующие копии плана.
 

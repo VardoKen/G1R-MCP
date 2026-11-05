@@ -1,15 +1,15 @@
-# Локальные MCP-инструменты — 1.0.0-dev.104
+# Локальные MCP-инструменты — 1.0.0-dev.105
 
 Дата сверки: **04.11.2026**. Документ описывает текущую реализацию в `src/g1r_mcp/` и `native/src/`. Сервер использует официальный Python SDK `mcp==2.3.0`; в `server.py` зарегистрирован **51 инструмент**. Схемы аргументов задаёт регистрация MCP, а `g1r_capabilities` дополняет их происхождением данных, доступностью, форматами и ограничениями. Ответы и ошибки моста — на английском языке; проектная документация — на русском.
 
 Назначение G1R MCP — полноценное исследование, разработка и отладка официальных модов, а перенос пользовательских модов с UE4SS — промежуточный рубеж. Рабочие пакеты — официальные `GothicMod.json` и AngelScript. Каталог ниже описывает реализованные инструменты, а не завершение всей цели. Игровой маршрут, включая загрузку DLL и выполнение через Tick, описан в [native-route.md](native-route.md); сводка готового и неготового — в [README.md](README.md), доказательства — в [описании проверок](../../tests/G1R_MCP/README.md).
 
-Dev.104: возврат `TArray<int>` по значению принят в игре: `[]` и `[2147483647, -2147483648]`, элементы `IntProperty4`, результат `{items, total_count, partial}` и подтверждённое освобождение return-буфера. Общий цикл — 12/12 typed-вызовов и 9/9 проверок. [Подтверждения](../../../artifacts/dev104-typed-input-live-complete.json).
+Dev.105: возвраты `TArray<FName>` и `TArray<enum>` по значению приняты: `[]`/`[Entry, None, Entry]` и `[]`/`[0, 7, 0]`. Reflection — `NameProperty8`, `EnumProperty1` с `ByteProperty1`; enum metadata соответствует значениям, return-буферы освобождены. Общий цикл — 16/16 typed-вызовов и 9/9 проверок. [Подтверждения](../../../artifacts/dev105-typed-input-live-complete.json).
 
 
 ## Каталог 51 инструмента
 
-Рабочий runtime — **1.0.0-dev.104**, 51 инструмент. FName input-массивы и создание текстового FName с Number=0 приняты в одном live-цикле: 12/12 typed-вызовов, 9/9 итоговых проверок; прежние int32/scalar-сценарии сохранены. [Результат dev.104](../../../artifacts/dev104-typed-input-live-complete.json).
+Рабочий runtime — **1.0.0-dev.105**, 51 инструмент. FName/enum-возвраты и прежние int32 input/return, FName input и scalar-сценарии приняты в одном live-цикле: 16/16 typed-вызовов, 9/9 итоговых проверок. [Результат dev.105](../../../artifacts/dev105-typed-input-live-complete.json).
 
 Dev.103: int32/FName input-массивы и собственные простые структуры с числовыми/bool-полями копируются в принадлежащий вызову буфер по повторно проверенной reflection-раскладке и identity. Направление input и передача value/const_reference определяются фактическими флагами: const reference с CPF_OutParm нормализуется как input. Поддержка чтения произвольного DTO не означает поддержку его как аргумента; FName-элемент принимает {name:string} или {name_from:{handle,property_name}}; текстовый FName создаётся с Number=0, источник name_from повторно проверяется. Другие элементы массива и вложенные структуры этой приёмкой не подтверждены.
 
@@ -147,7 +147,7 @@ Object/Class значения включают тип и session descriptor; Wea
 - FString — JSON string, by-value/const-reference input и возврат; выделенные engine buffers имеют отдельный учёт владения/очистки.
 - UObject/Class — `null` или `{"handle":"…"}`, с проверкой declared type/meta class.
 - FVector — input/const-reference, pure output и by-value return; FRotator/FTransform — input/const-reference и by-value return. FLinearColor — by-value input/return. FGameplayTag — input с единственным TagName через существующий FName, by-value/const-reference.
-- TArray<UObject> — const-reference input, by-value return и отдельный pure output; массив однобайтового enum — подтверждённый input. TSet<UObject> — by-value return. Контейнеры копируют pointers, не владеют самими UObject.
+- TArray<int32>/TArray<FName>/однобайтовый enum — input и by-value return в подтверждённом layout; возврат `{items, total_count, partial}` копирует значения с проверкой metadata и очисткой контейнера. TArray<UObject> — const-reference input, by-value return и отдельный pure output; массив однобайтового enum — подтверждённый input. TSet<UObject> — by-value return. Контейнеры копируют pointers, не владеют самими UObject.
 - Scalar DTO — только by-value return с собственными отражёнными scalar-полями; это более узкий контракт, чем вложенное чтение состояния. Generic nested Struct/Array<Struct> invoke, Map, Weak/Soft/Optional и delegate-аргументы не добавлены.
 - Pure scalar output и TArray<UObject>/FVector output запрашиваются `{"out":true}` по отражённому имени. Inout, произвольный mutable reference и неподтверждённые out-типы отвергаются.
 

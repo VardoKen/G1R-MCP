@@ -58,6 +58,20 @@ class UG1RMCPTypedInputProbe : UObject
         return Result;
     }
 
+    // Fresh local FName array; false -> []; true -> [Entry, None, Entry].
+    UFUNCTION(BlueprintCallable)
+    TArray<FName> ReturnNameArray(bool WithValues)
+    {
+        TArray<FName> Result;
+        if (WithValues)
+        {
+            Result.Add(n"Entry");
+            Result.Add(n"");
+            Result.Add(n"Entry");
+        }
+        return Result;
+    }
+
     // [] -> 0; [Entry, miss, Entry] -> 304; [None, Entry] -> 211.
     // Read-only marker checks the array length and FName equality; no world access.
     UFUNCTION(BlueprintCallable)

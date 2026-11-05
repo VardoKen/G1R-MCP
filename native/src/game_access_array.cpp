@@ -3,6 +3,7 @@
 #include "g1r_mcp/array_page.hpp"
 #include "g1r_mcp/scalar_arguments.hpp"
 #include "g1r_mcp/scalar_struct_values.hpp"
+#include "g1r_mcp/object_array_parameter_layout.hpp"
 #include <array>
 #include <cstring>
 #include <limits>
@@ -41,7 +42,7 @@ json GameAccess::capture_object_array_return(uintptr_t field,int size,int dim,bo
         {"public",public_metadata}};
 }
 
-json GameAccess::capture_int32_array_return(uintptr_t field,int size,int dim) const {
+json GameAccess::capture_scalar_array_return(uintptr_t field,int size,int dim) const {
     const auto capture=[&]() {
         const auto snapshot=[&](uintptr_t pointer) {
             const auto klass=read<uintptr_t>(pointer+8);
@@ -58,37 +59,78 @@ json GameAccess::capture_int32_array_return(uintptr_t field,int size,int dim) co
         if(outer.at("type")!="ArrayProperty" || size!=16 || dim!=1 || outer.at("element_size")!=size
            || outer.at("array_dim")!=dim || offset<0 || offset%8 || !(flags&0x80) || !(flags&0x400)
            || (flags&(uint64_t{0x2}|uint64_t{0x08000000})))
-            throw HandlerError("unsupported_signature","Int32 arrays require a 16-byte return by value");
+            throw HandlerError("unsupported_signature","Scalar arrays require a 16-byte return by value");
         outer["array_flags"]=read<uint8_t>(field+0x70);
         const auto inner_pointer=read<uintptr_t>(field+0x78);
         outer["inner"]=inner_pointer;
         auto inner=snapshot(inner_pointer);
-        if(inner.at("type")!="IntProperty" || inner.at("element_size")!=4 || inner.at("array_dim")!=1 || inner.at("offset")!=0)
-            throw HandlerError("unsupported_signature","The returned int32 array requires four-byte IntProperty elements");
-        return json{{"outer",std::move(outer)},{"inner",std::move(inner)},{"scalar_type","IntProperty"},
-            {"public",{{"container_type","ArrayProperty"},{"element",{{"type","IntProperty"},{"element_size",4},
-                {"array_dim",1},{"offset",0}}}}}};
+        const auto type=inner.at("type").get<std::string>();
+        const auto stride=inner.at("element_size").get<int>();
+        const bool enumeration=type=="EnumProperty" || type=="ByteProperty";
+        if(!((type=="IntProperty" && stride==4) || (type=="NameProperty" && stride==8) || (enumeration && stride==1))
+           || inner.at("array_dim")!=1 || inner.at("offset")!=0)
+            throw HandlerError("unsupported_signature","The returned scalar array requires IntProperty4, NameProperty8, or byte enum elements");
+        json element={{"type",type},{"element_size",stride},{"array_dim",1},{"offset",0}};
+        json captured={{"outer",std::move(outer)},{"inner",std::move(inner)},{"scalar_type",type}};
+        if(enumeration) {
+            const auto layout=enum_layout(type,stride,inner_pointer);
+            if(layout.underlying_type!="ByteProperty")
+                throw HandlerError("unsupported_enum_underlying_layout","The returned enum array requires ByteProperty underlying values");
+            captured["inner"]["enum"]=reinterpret_cast<uintptr_t>(layout.object);
+            captured["underlying_type"]=layout.underlying_type;
+            if(type=="EnumProperty") {
+                const auto pointer=read<uintptr_t>(inner_pointer+0x70);
+                captured["inner"]["underlying"]=pointer;
+                captured["underlying"]=snapshot(pointer);
+            }
+            if(type=="EnumProperty" || layout.object) {
+                const auto table=enum_table(layout.object);
+                json entries=json::array(),public_entries=json::array();
+                for(const auto& entry:table.entries) {
+                    const auto label=name(entry.name);
+                    entries.push_back({{"name",entry.name},{"label",label},{"value",entry.value}});
+                    public_entries.push_back({{"name",label},{"value",entry.value}});
+                }
+                const auto address=reinterpret_cast<uintptr_t>(layout.object);
+                captured["enum"]={{"identity",object_array_parameter_layout::identity_json(serial_identity(table.identity))},
+                    {"path",table.path},{"entries",std::move(entries)},{"data",read<uintptr_t>(address+0x40)},
+                    {"count",read<int32_t>(address+0x48)},{"capacity",read<int32_t>(address+0x4c)}};
+                element["enum"]={{"path",table.path},{"underlying_type",layout.underlying_type},{"entries",std::move(public_entries)}};
+            }
+        }
+        captured["public"]={{"container_type","ArrayProperty"},{"element",std::move(element)}};
+        return captured;
     };
     const auto before=capture();
-    if(before!=capture())throw HandlerError("int32_array_metadata_changed","Reflected int32 return metadata changed during capture");
+    if(before!=capture())throw HandlerError("scalar_array_metadata_changed","Reflected scalar return metadata changed during capture");
     return before;
 }
-json GameAccess::read_int32_array_return(uintptr_t field,uintptr_t address,const json& metadata) {
-    if(capture_int32_array_return(field,16,1)!=metadata)
-        throw HandlerError("signature_changed","The returned int32 array metadata changed after the call");
+json GameAccess::read_scalar_array_return(uintptr_t field,uintptr_t address,const json& metadata) {
+    if(capture_scalar_array_return(field,16,1)!=metadata)
+        throw HandlerError("signature_changed","The returned scalar array metadata changed after the call");
     const auto header=read<ArrayHeader>(address);
-    const auto page=array_page(header,4,1,0,std::numeric_limits<size_t>::max());
+    const auto stride=metadata.at("inner").at("element_size").get<int>();
+    const auto type=metadata.at("scalar_type").get<std::string>();
+    const auto page=array_page(header,stride,1,0,std::numeric_limits<size_t>::max());
     std::vector<std::byte> copied(page.bytes);
     if(page.bytes && !game_memory::copy(copied.data(),reinterpret_cast<void*>(page.begin),page.bytes))
-        throw HandlerError("invalid_memory","The returned int32 array elements are unavailable");
+        throw HandlerError("invalid_memory","The returned scalar array elements are unavailable");
     json items=json::array();
     for(int32_t index=0;index<page.count;++index) {
-        int32_t value{};
-        std::memcpy(&value,copied.data()+static_cast<size_t>(index)*sizeof(value),sizeof(value));
-        items.push_back({{"index",index},{"supported",true},{"value",value}});
+        const auto bytes=copied.data()+static_cast<size_t>(index)*stride;
+        json item={{"index",index},{"supported",true}};
+        if(type=="IntProperty") {
+            int32_t value{};std::memcpy(&value,bytes,sizeof(value));item["value"]=value;
+        } else if(type=="NameProperty") {
+            uint64_t value{};std::memcpy(&value,bytes,sizeof(value));item["value"]=name(value);
+        } else {
+            uint8_t value{};std::memcpy(&value,bytes,sizeof(value));item["value"]=value;
+            if(metadata.contains("enum"))item["enum"]=enum_metadata(reinterpret_cast<void*>(metadata.at("inner").at("enum").get<uintptr_t>()),item["value"],"ByteProperty");
+        }
+        items.push_back(std::move(item));
     }
-    if(capture_int32_array_return(field,16,1)!=metadata || !same_array_header(header,read<ArrayHeader>(address)))
-        throw HandlerError("array_changed","The returned int32 array metadata or header changed during read");
+    if(capture_scalar_array_return(field,16,1)!=metadata || !same_array_header(header,read<ArrayHeader>(address)))
+        throw HandlerError("array_changed","The returned scalar array metadata or header changed during read");
     return {{"items",std::move(items)},{"total_count",header.count},{"partial",false}};
 }
 json GameAccess::read_object_array_return(uintptr_t field,uintptr_t address,const json& metadata) {

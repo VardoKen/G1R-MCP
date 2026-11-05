@@ -1,5 +1,11 @@
 # Проверки G1R MCP: локальные инструменты и нативный маршрут
 
+## Текущие проверки dev.105 — 05.11.2026
+
+[Общий live-цикл](../../../artifacts/dev105-typed-input-live-complete.json): accepted=true, **16/16 typed-вызовов**, **9/9 проверок**. FName: `[]` и `[Entry, None, Entry]`; enum: `[]` и `[0, 7, 0]`. Reflection `NameProperty8`/`EnumProperty1` с `ByteProperty1`, enum metadata и освобождение return-буферов подтверждены. Прежние int32/input/scalar-сценарии сохранены; marker 71→72→72→71, успешный/неудачный reload, source/staging восстановлены, игра закрыта и заявка освобождена.
+
+[DLL-сборка](../../../artifacts/native-build-dev105.txt) и [финальная сборка](../../../artifacts/native-build-dev105-final.txt) прошли; [bootstrap](../../../artifacts/python-bootstrap-dev105.txt) — **3/3, 19,610 с**. Полный новый Python/CTest-прогон не выполнялся. [Runtime-комплект](../../../artifacts/bridge-bundle-dev105/manifest.json): 79 payload-файлов, проверка manifest прошла. [Wheel](../../../artifacts/wheel-dev105/g1r_mcp-1.0.0.dev105-py3-none-any.whl) подготавливается; consumer-сеанс не повторяется. ByteProperty fallback и произвольные массивы этим live-результатом не подтверждены.
+
 ## Текущие проверки dev.104 — 05.11.2026
 
 [Общий live-цикл](../../../artifacts/dev104-typed-input-live-complete.json): accepted=true, **12/12 типизированных вызовов**, **9/9 проверок**. Возврат `TArray<int>`: пустой массив и `[2147483647, -2147483648]`; reflection `ArrayProperty16`/`IntProperty4`, полная копия значений и `return_cleanup_confirmed=true`. Сохранены прежние int32/FName/scalar-входы, marker 71→72→72→71, реальные successful/failed reload, точные пути; source/staging восстановлены, игра закрыта, сессия освобождена.
