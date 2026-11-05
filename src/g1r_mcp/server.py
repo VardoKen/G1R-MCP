@@ -22,6 +22,9 @@ from .packages import PackageError, validate_package
 from .sources import SourceCatalog, SourceError
 from .native_client import NativeClient, NativeError
 from .debug_database import DebugDatabaseCatalog
+from .debug_session import DebugSession
+from .save_loading import SaveLoading, SaveLoadingError
+from . import modlist_dialog
 from .tool_catalog import build_tool_contracts
 from pydantic import StrictBool, StrictInt, StrictStr
 from .workspace import PackageWorkspace, WorkspaceError, _parts, _checked
@@ -38,6 +41,18 @@ LOCAL_TOOLS = (
     ("g1r_status", "Server status and game-channel boundary"),
     ("g1r_capabilities", "Catalog of implemented and unavailable groups"),
     ("g1r_debug_database", "AngelScript debug database from the game's listener or the shared cache"),
+    ("g1r_debug_attach", "Attach the shared AngelScript debugger session"),
+    ("g1r_debug_detach", "Detach the shared AngelScript debugger session"),
+    ("g1r_debug_status", "Shared debugger connection and stopped state"),
+    ("g1r_debug_breakpoints", "Replace breakpoints for one script/module"),
+    ("g1r_debug_control", "Pause, continue or step AngelScript execution"),
+    ("g1r_debug_stack", "Current stopped AngelScript call stack"),
+    ("g1r_debug_variables", "Variables for an explicit debugger expression"),
+    ("g1r_debug_evaluate", "Evaluate an expression in an explicit stopped frame"),
+    ("g1r_save_list", "Select a profile and list its saved games"),
+    ("g1r_save_load", "Load a saved game and handle a mod-list mismatch"),
+    ("g1r_save_status", "Read the last shared save-loading result"),
+    ("g1r_modlist_dialog", "Read or continue the native mod-list mismatch dialog"),
     ("g1r_source_identity", "Current Modkit Git HEAD and comparison with the revision label"),
     ("g1r_verify_source_game", "Compare Modkit script bytes with the installed game"),
     ("g1r_find_source_files", "Find Modkit or selected workspace-package source files"),
@@ -130,6 +145,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     workspace_root = workspace_root.resolve(strict=True)
     sources = SourceCatalog(modkit_root, revision=source_revision)
     debug_database = DebugDatabaseCatalog()
+    debug_session = DebugSession()
     patch_builder = ScriptPatchBuilder(modkit_root, revision=source_revision)
     workspace = PackageWorkspace(workspace_root, protected_roots=[modkit_root])
     native = NativeClient(port=native_port)
@@ -183,6 +199,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             try:
                 current_native.close()
             finally:
+                debug_session.detach()
                 if current_development is not None:
                     current_development.close()
     server = MCPServer(
@@ -199,6 +216,10 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             "For an already running bridge, start with native_status, then g1r_find_objects and "
             "g1r_object_functions before an explicit g1r_invoke; end your session with g1r_development_stop. "
             "One TCP client owns handles and observations; find objects again after reconnecting. "
+            "Load an existing save from the main menu with g1r_save_list(profile_id), then "
+            "g1r_save_load(slot_name, profile_id); inspect g1r_save_status after a timeout. "
+            "The load tool handles the native mod-list mismatch dialog and waits for a gameplay-ready player. "
+            "Use g1r_modlist_dialog outside Tick for a dialog created by a separate load call. "
             "Edit complete bytes through g1r_read_source_exact/g1r_read_package_file_exact and SHA-256; "
             "line-based reads normalize text. Search and valid_structure do not constitute compilation. "
             "ScriptPatches are created as diffs without applying them; official-runtime application to base Script sources was confirmed by an isolated probe. Each package still requires runtime verification. "
@@ -208,6 +229,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
         ),
     )
     read_only = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
+    debug_action = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
 
     @server.tool(annotations=read_only)
     def g1r_status() -> dict[str, Any]:
@@ -935,6 +957,46 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             ],
         }
 
+    @server.tool(annotations=debug_action)
+    async def g1r_debug_attach(timeout: float = 5.0) -> dict[str, Any]:
+        """Attach one shared debugger connection to the current game's listener."""
+        return await asyncio.to_thread(debug_session.attach, timeout)
+
+    @server.tool(annotations=debug_action)
+    async def g1r_debug_detach() -> dict[str, Any]:
+        """Stop debugging and close the shared debugger connection."""
+        return await asyncio.to_thread(debug_session.detach)
+
+    @server.tool(annotations=read_only)
+    def g1r_debug_status() -> dict[str, Any]:
+        """Read the shared debugger connection, execution state and last event."""
+        return debug_session.status()
+
+    @server.tool(annotations=debug_action)
+    async def g1r_debug_breakpoints(path: str, lines: list[int], module: str = "", timeout: float = 5.0) -> dict[str, Any]:
+        """Replace breakpoints for one explicit script path and module."""
+        return await asyncio.to_thread(debug_session.breakpoints, path, lines, module, timeout)
+
+    @server.tool(annotations=debug_action)
+    async def g1r_debug_control(action: str, timeout: float = 5.0) -> dict[str, Any]:
+        """Pause, continue or step execution using pause, continue, step_over, step_in or step_out."""
+        return await asyncio.to_thread(debug_session.control, action, timeout)
+
+    @server.tool(annotations=read_only)
+    async def g1r_debug_stack(timeout: float = 5.0) -> dict[str, Any]:
+        """Read the AngelScript stack from the shared debugger session."""
+        return await asyncio.to_thread(debug_session.stack, timeout)
+
+    @server.tool(annotations=read_only)
+    async def g1r_debug_variables(expression: str, timeout: float = 5.0) -> dict[str, Any]:
+        """Read variables for a debugger path such as 0:%local%, 0:%this% or a child expression."""
+        return await asyncio.to_thread(debug_session.variables, expression, timeout)
+
+    @server.tool(annotations=debug_action)
+    async def g1r_debug_evaluate(expression: str, frame_id: int, timeout: float = 5.0) -> dict[str, Any]:
+        """Evaluate an AngelScript expression in an explicit debugger frame."""
+        return await asyncio.to_thread(debug_session.evaluate, expression, frame_id, timeout)
+
     @server.tool(annotations=read_only)
     async def g1r_debug_database(query: str = "", limit: int = 100, offset: int = 0,
                                  refresh: StrictBool = False, timeout: float = 30.0) -> dict[str, Any]:
@@ -1434,6 +1496,55 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                               "expected_session_id": expected_session_id,
                               "expected_client_owner": expected_client_owner,
                               "client_owner": watch_owner(ctx)}, timeout_seconds)
+
+    save_loading = SaveLoading(native_request)
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
+    async def g1r_save_list(profile_id: int = 2) -> dict[str, Any]:
+        """Select a profile in the existing game menu and list saves without writing save files."""
+        try:
+            return await asyncio.to_thread(save_loading.list_saves, profile_id)
+        except SaveLoadingError as error:
+            raise ToolError(json.dumps({"code": error.code, "message": str(error), "details": error.details})) from None
+        except OSError as error:
+            raise ToolError(f"Save listing file operation failed (errno={error.errno}, winerror={getattr(error, 'winerror', None)})") from None
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
+    async def g1r_save_load(slot_name: str, profile_id: int = 2,
+                            accept_mod_mismatch: bool = True, timeout: float = 120.0) -> dict[str, Any]:
+        """Load a save from g1r_save_list; continue a mod mismatch and confirm a live player."""
+        try:
+            return await save_loading.load(profile_id, slot_name, accept_mod_mismatch, timeout)
+        except SaveLoadingError as error:
+            raise ToolError(json.dumps({"code": error.code, "message": str(error), "details": error.details})) from None
+        except OSError as error:
+            raise ToolError(f"Save loading file operation failed (errno={error.errno}, winerror={getattr(error, 'winerror', None)})") from None
+
+    @server.tool(annotations=read_only)
+    async def g1r_save_status() -> dict[str, Any]:
+        """Read the last load; after it returns, refresh current world readiness without loading again."""
+        return await asyncio.to_thread(save_loading.status)
+
+    @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
+    async def g1r_modlist_dialog(action: str = "status", process_id: int | None = None) -> dict[str, Any]:
+        """Read the native mod-list dialog outside Tick; action=continue publishes Continue anyway."""
+        if process_id is None:
+            state = await asyncio.to_thread(development_request, "process_state")
+            processes = [item for item in state["processes"]
+                         if "\\binaries\\win64\\" in item["executable"].replace("/", "\\").lower()]
+            if len(processes) != 1:
+                raise ToolError("One running game process is required to read the mod-list dialog")
+            process_id = processes[0]["pid"]
+        try:
+            if action == "status":
+                return await asyncio.to_thread(modlist_dialog.status, process_id)
+            if action == "continue":
+                return await asyncio.to_thread(modlist_dialog.accept_continue, process_id)
+        except modlist_dialog.ModlistDialogError as error:
+            raise ToolError(json.dumps({"code": error.code, "message": str(error), "details": error.details})) from None
+        except OSError as error:
+            raise ToolError(f"Mod-list dialog file operation failed (errno={error.errno}, winerror={getattr(error, 'winerror', None)})") from None
+        raise ToolError("Unknown mod-list dialog action")
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
     def g1r_invoke(handle: str, function: str, arguments: dict[str, Any] | None = None,

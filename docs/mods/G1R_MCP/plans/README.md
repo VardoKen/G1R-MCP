@@ -5,7 +5,7 @@ Dev.112: `g1r_debug_database` получил полную runtime-базу: 5 26
 
 | Номер | Документ | Состояние |
 | --- | --- | --- |
-| PLAN-001 | [Активный план реализации](PLAN-001-active-implementation.md) | R18; состояние на 05.11.2026: Python/shared server dev.112, native DLL dev.111, 52 инструмента, build 26394867. Полная debugger database: 5 262 chunks/20 151 types/119 789 flat entries, 9 470 492 bytes; shared cache после закрытия игры. Live 46/46 typed, 9/9 checks; игра закрыта, заявка освобождена. Python 18/18 и упаковочные 9/9 прошли; runtime-комплект dev.112 проверен, wheel подготавливается. Следующий шаг — breakpoint/step debugger research; полный план/Э8/Э9/Steam-автозагрузка DLL не завершены |
+| PLAN-001 | [Активный план реализации](PLAN-001-active-implementation.md) | R18; 05.11.2026: разработка Python dev.113, native DLL dev.111, 64 инструмента, build 26394867. Добавлены shared debugger и загрузка сохранения из главного меню. Подтверждены breakpoint/stack/variables/continue, список 14 слотов и публикация Continue с возвратом StartLoadingSave; полный loaded, evaluate this и step требуют приёмки. Последняя полная typed-проверка — dev.112: 46/46 вызовов, 9/9 checks. PLAN-001 и публичный выпуск остаются открыты |
 
 Последний зарегистрированный номер: **PLAN-001**. Основной документ содержит текущую последовательность, развилки, статусы и краткую историю существенных редакций. Новые результаты уточняют его, а не создают конкурирующие копии плана.
 

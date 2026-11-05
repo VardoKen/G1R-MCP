@@ -21,6 +21,18 @@ def _entry(target: str, requires: tuple[str, ...], implementation: str,
 
 
 _CONTRACTS = {
+    "g1r_save_list": _entry("game_profile_saved_games", ("live_game_menu",), "src/g1r_mcp/save_loading.py:SaveLoading.list_saves", ("profile_id", "items", "total_count", "profile_selected"), dynamic=True),
+    "g1r_save_load": _entry("game_save_loading", ("live_game_menu",), "src/g1r_mcp/save_loading.py:SaveLoading.load", ("state", "profile_id", "slot_name", "world_loaded", "warnings"), dynamic=True),
+    "g1r_save_status": _entry("shared_save_loading_result", (), "src/g1r_mcp/save_loading.py:SaveLoading.status", ("state", "load_requested"), dynamic=True),
+    "g1r_modlist_dialog": _entry("native_slate_modlist_dialog", ("game_process",), "src/g1r_mcp/modlist_dialog.py", ("status", "active", "sent", "confirmed"), dynamic=True),
+    "g1r_debug_attach": _entry("angelscript_debugger_session", ("live_debugger_listener",), "src/g1r_mcp/debug_session.py:DebugSession.attach", ("connected", "paused", "last_event"), dynamic=True),
+    "g1r_debug_detach": _entry("angelscript_debugger_session", (), "src/g1r_mcp/debug_session.py:DebugSession.detach", ("connected", "resume_requested"), dynamic=True),
+    "g1r_debug_status": _entry("angelscript_debugger_metadata", (), "src/g1r_mcp/debug_session.py:DebugSession.status", ("connected", "paused", "last_event"), dynamic=True),
+    "g1r_debug_breakpoints": _entry("angelscript_breakpoints", ("debugger_session",), "src/g1r_mcp/debug_session.py:DebugSession.breakpoints", ("path", "module", "breakpoints"), dynamic=True),
+    "g1r_debug_control": _entry("angelscript_debugger_execution", ("debugger_session",), "src/g1r_mcp/debug_session.py:DebugSession.control", ("action", "sent", "confirmed", "status"), dynamic=True),
+    "g1r_debug_stack": _entry("angelscript_call_stack", ("debugger_session",), "src/g1r_mcp/debug_session.py:DebugSession.stack", ("frames", "total_count"), dynamic=True),
+    "g1r_debug_variables": _entry("angelscript_frame_variables", ("debugger_session",), "src/g1r_mcp/debug_session.py:DebugSession.variables", ("expression", "variables"), dynamic=True),
+    "g1r_debug_evaluate": _entry("angelscript_frame_expression", ("debugger_session",), "src/g1r_mcp/debug_session.py:DebugSession.evaluate", ("expression", "frame_id", "name", "value", "type", "has_members"), dynamic=True),
     "g1r_debug_database": _entry("angelscript_debug_database", ("cached_database_or_live_debugger_listener",),
                                     "src/g1r_mcp/debug_database.py:DebugDatabaseCatalog",
                                     ("complete", "items", "total_matches", "offset", "next_offset", "source"),

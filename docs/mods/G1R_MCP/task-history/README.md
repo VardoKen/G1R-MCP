@@ -1,5 +1,11 @@
 # История задач G1R MCP
 
+## 05.11.2026 — dev.113: загрузка сохранений и shared debugger
+
+Добавлены `g1r_save_list/load/status` и `g1r_modlist_dialog`: выбор профиля и слота из главного меню, прохождение нативного диалога несовпадения модов вне Tick, ожидание MoviePlayer и готового персонажа. Статус после тайм-аута повторно проверяет мир без повторной загрузки. Исправлены общий срок lookup/invoke и удержание блокировки при отмене подготовки меню. Добавлены восемь команд единого debugger-сеанса; breakpoint/stack/variables/continue подтверждены, evaluate `this` и step остаются открыты.
+
+[Проверки и границы](../../../tests/G1R_MCP/README.md): 14 слотов и публикация Continue с возвратом StartLoadingSave подтверждены; полный `loaded` ещё не принят. Финальные локальные bootstrap/codec — 18/18, упаковочные — 9/9; узкие проверки отмены и позднего статуса прошли. Runtime-комплект dev.113 содержит 84 файла, wheel — 23 Python-модуля с точным совпадением исходников; native DLL dev.111 не менялась. Игровую приёмку прерывал внешний guard приоритетного цикла MEGA Spawner. Пустые файлы проверок и заменённый комплект помещены в `.trash/G1R MCP/artifacts`. PLAN-001 продолжается.
+
 ## 05.11.2026 — dev.112: debugger database MCP
 
 Добавлен `g1r_debug_database`: explicit refresh получает полную raw runtime-базу, query читает общий серверный cache без нового TCP, включая после закрытия игры. [Live](../../../../artifacts/dev112-debug-database-live-complete.json): complete=true, 5 262 chunks/20 151 types/119 789 flat entries/9 470 492 bytes; прежние 46/46 typed и 9/9 checks приняты, игра закрыта, заявка освобождена. Python/shared server dev.112/52 tools, native DLL dev.111 сохранена; packager поддерживает явную native-version. Python 18/18 и упаковочные 9/9 прошли; runtime-комплект dev.112 проверен, wheel подготавливается. Raw база не доказывает UFunction или полный собственный AS-каталог. PLAN-001 R18 продолжается; следующий шаг — breakpoint/step debugger research.

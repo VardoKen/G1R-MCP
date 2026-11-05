@@ -24,6 +24,20 @@ class MessageType(IntEnum):
     REQUEST_DEBUG_DATABASE = 1
     DEBUG_DATABASE = 2
     START_DEBUGGING = 3
+    STOP_DEBUGGING = 4
+    PAUSE = 5
+    CONTINUE = 6
+    REQUEST_CALLSTACK = 7
+    CALLSTACK = 8
+    CLEAR_BREAKPOINTS = 9
+    SET_BREAKPOINT = 10
+    HAS_STOPPED = 11
+    CONTINUED = 12
+    STEP_OVER = 13
+    STEP_IN = 14
+    STEP_OUT = 15
+    REQUEST_VARIABLES = 17
+    VARIABLES = 18
     REQUEST_EVALUATE = 19
     EVALUATE = 20
     DISCONNECT = 25
@@ -61,13 +75,23 @@ def encode_ascii_string(value: str) -> bytes:
     return struct.pack("<i", len(encoded) + 1) + encoded + b"\0"
 
 
+def encode_string(value: str) -> bytes:
+    """Encode a protocol FString, preserving Unicode with UTF-16 units."""
+    if "\0" in value:
+        raise ProtocolError("Outgoing string contains an embedded NUL")
+    if value.isascii():
+        return encode_ascii_string(value)
+    encoded = value.encode("utf-16le")
+    return struct.pack("<i", -(len(encoded) // 2 + 1)) + encoded + b"\0\0"
+
+
 def encode_evaluate(expression: str, frame_id: int) -> bytes:
     """Build one Evaluate request; frame_id has no confirmed default."""
     if not -0x80000000 <= frame_id <= 0x7FFFFFFF:
         raise ProtocolError("frame_id must fit in int32")
     return encode_client_frame(
         MessageType.REQUEST_EVALUATE,
-        encode_ascii_string(expression) + struct.pack("<i", frame_id),
+        encode_string(expression) + struct.pack("<i", frame_id),
     )
 
 
@@ -156,8 +180,13 @@ def decode_server_version(payload: bytes) -> int:
     return version
 
 
-def decode_evaluate(payload: bytes) -> dict:
-    """The response has no request_id; ownership is determined by the single request."""
+def decode_evaluate(payload: bytes, *, allow_trailing: bool = False) -> dict:
+    """Read the adapter's evaluation prefix; preserve optional server extensions.
+
+    The official adapter's receiveEvaluate reads three strings and a bool, then
+    ignores the remaining frame payload. Extension bytes have no confirmed
+    semantics and are returned verbatim when that compatibility is requested.
+    """
     reader = PayloadReader(payload)
     result = {
         "name": reader.read_string(),
@@ -165,5 +194,8 @@ def decode_evaluate(payload: bytes) -> dict:
         "type": reader.read_string(),
         "has_members": reader.read_int() != 0,
     }
-    reader.finish()
+    if allow_trailing and reader.offset < len(payload):
+        result["additional_payload_hex"] = payload[reader.offset:].hex()
+    else:
+        reader.finish()
     return result

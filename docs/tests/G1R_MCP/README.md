@@ -1,6 +1,18 @@
 # Проверки G1R MCP: локальные инструменты и нативный маршрут
 
-## Текущие проверки dev.112 — 05.11.2026
+## Частичная приёмка dev.113 — 05.11.2026
+
+Текущие Python-исходники содержат 64 MCP-инструмента. [Debugger live](../../../artifacts/dev113-debugger-live-complete-v3.json) подтвердил breakpoint в `ReadMarker`, stack, ответ variables (`0:%local%`, пустой список) и continue. Evaluate `this`, step и полный debugger-цикл ещё не приняты. Пустой ответ evaluate на `1+2` в следующем цикле не доказывает исполнение арифметики.
+
+[Загрузка сохранения](../../../artifacts/dev113-save-debugger-live-complete-v7.json): 14 слотов третьего профиля (`profile_id=2`), обнаружение нативного окна, два успешных store Continue и возврат `StartLoadingSave` подтверждены. `world_loaded=false`, полный `loaded` с готовым персонажем не принят: наблюдение прервалось на `native_timeout`. Закрытие игры ответственным `finally` не является доказательством её падения. Последующие исправления ожидания native/MoviePlayer и `IsGameplayReady` требуют приёмки; полная игровая приёмка dev.113 не завершена. Последняя принятая типизированная приёмка и bundle относятся к dev.112/native dev.111.
+
+Текущий save-маршрут начинается из главного меню; загрузка из gameplay без этих страниц не проверена. Узкая локальная проверка отмены подтвердила удержание блокировки до завершения worker подготовки и её последующее освобождение. Проверка поздней готовности подтвердила переход `loading_timeout` → `loaded` через `g1r_save_status` без повторного StartLoadingSave; использованы изолированные ответы, живую загрузку этот результат не подтверждает.
+
+Финальные локальные bootstrap/codec-проверки — **18/18**, упаковочные — **9/9**. [Runtime-комплект dev.113](../../../artifacts/bridge-bundle-dev113/manifest.json) проверен: **84 payload-файла**, Python dev.113/native dev.111. [Wheel dev.113](../../../artifacts/wheels/dev113/g1r_mcp-1.0.0.dev113-py3-none-any.whl) содержит **23 Python-модуля**, их байты совпадают с исходниками. Проверка упаковки не подтверждает полный live-цикл.
+
+Приёмка через игру прерывалась внешним `priority-guard.ps1` приоритетного цикла MEGA Spawner, который завершал проверочный runner и HTTP-сервер. Это установлено по коду guard и его квитанциям; раннее завершение этих процессов не является доказательством падения игры или моста. Финальная загрузка до готового мира и evaluate/step остаются открыты.
+
+## Принятые проверки dev.112 — 05.11.2026
 
 [Live-приёмка](../../../artifacts/dev112-debug-database-live-complete.json): accepted=true, **46/46 typed-вызовов**, **9/9 проверок**; Python server dev.112/52 tools, native DLL dev.111. `g1r_debug_database`: complete=true, 5 262 chunks, 20 151 types, 119 789 flat entries, 9 470 492 bytes, elapsed 1,393694 с; settings type31/version5/float64=true, отдельного type33 не было. Shared cache query работает после закрытия игры: GothicCharacter 331, SetVisibility 15, Transform 2 486. Собственный G1RMCPNestedDTO дал 0; полный собственный AS-каталог и UFunction-доступность этим не подтверждены. Marker/reload/source/staging восстановлены, игра закрыта и заявка освобождена.
 
