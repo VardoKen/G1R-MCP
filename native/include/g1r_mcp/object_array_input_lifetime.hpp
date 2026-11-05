@@ -51,11 +51,11 @@ public:
     }
 
     void add_input(const ArrayHeader& header, std::size_t expected_count,
-                   std::size_t stride = element_size) {
+                   std::size_t stride = element_size, std::size_t alignment = 0) {
         if (uncertain_) throw_unknown();
         if (release_started_)
             fail("array_lifetime_unknown", "An array cannot be registered after cleanup starts");
-        validate_header(header, expected_count, stride);
+        validate_header(header, expected_count, stride, alignment ? alignment : stride);
         if (header.data) add_allocation(header, stride);
         inputs_.push_back(header);
     }
@@ -119,13 +119,13 @@ private:
         return static_cast<std::size_t>(header.capacity) * stride;
     }
 
-    void validate_header(const ArrayHeader& header, std::size_t expected_count, std::size_t stride) {
+    void validate_header(const ArrayHeader& header, std::size_t expected_count, std::size_t stride, std::size_t alignment) {
         if (expected_count > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
             fail("invalid_array_header", "The object array length is not representable by int32 TArray");
         const auto count = static_cast<std::int32_t>(expected_count);
         if (header.count != count || header.capacity != count
             || (!count && header.data) || (count && !header.data)
-            || (header.data && header.data % stride))
+            || (header.data && header.data % alignment))
             fail("invalid_array_header", "An object array requires exact count/capacity and an aligned engine buffer");
         const auto bytes = expected_count * stride;
         if (header.data > std::numeric_limits<std::uintptr_t>::max() - bytes)

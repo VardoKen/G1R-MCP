@@ -114,6 +114,19 @@ class UG1RMCPTypedInputProbe : UObject
         return Marker;
     }
 
+    // Empty -> 0; signed mixed DTOs -> 1000; duplicate negative DTOs -> -18.
+    // Reuse the existing scalar checksum; acceptance values avoid integer overflow.
+    UFUNCTION(BlueprintCallable)
+    int SumScalarArray(TArray<FG1RMCPScalarInput> Values)
+    {
+        int Marker = 0;
+        for (int Index = 0; Index < Values.Num(); Index++)
+        {
+            Marker += ScalarStructMarker(Values[Index]);
+        }
+        return Marker;
+    }
+
     // {Integer:7, Number:2.75, Flag:true} -> 1009;
     // {Integer:-7, Number:-2.75, Flag:false} -> -9; zero fields -> 0.
     UFUNCTION(BlueprintCallable)

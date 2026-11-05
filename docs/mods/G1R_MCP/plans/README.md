@@ -1,11 +1,11 @@
 # Активные планы G1R MCP
 
 
-Dev.106: by-value возврат массива собственной scalar DTO принят: `[]` и два объекта `{Integer: MAX, Number: 2.75, Flag: true}` / `{Integer: MIN, Number: -2.75, Flag: false}`. Reflection fixture — `StructProperty24`, alignment 8; размер элементов определяется reflection. Значения скопированы, return-буфер освобождён. Общий цикл — 18/18 typed-вызовов и 9/9 проверок. [Подтверждения](../../../../artifacts/dev106-typed-input-live-complete.json).
+Dev.107: input-массивы собственных scalar DTO приняты: пустой массив → 0, смешанные элементы → 1000, дубликаты → −18. Reflection fixture — stride 24, alignment 8; проверка адреса использует alignment, размер копии — stride. Значения кодируются с нулевым padding, cleanup подтверждён. Общий цикл — 21/21 typed-вызовов и 9/9 проверок. [Подтверждения](../../../../artifacts/dev107-typed-input-live-complete.json).
 
 | Номер | Документ | Состояние |
 | --- | --- | --- |
-| PLAN-001 | [Активный план реализации](PLAN-001-active-implementation.md) | R18; состояние на 05.11.2026: source/canonical/shared runtime dev.106, 51 инструмент, Steam build 26394867. Scalar DTO array return и прежние int32/FName/enum-сценарии приняты: 18/18 typed-вызовов, 9/9 live-проверок; игра закрыта, заявка освобождена. DLL-сборка/bootstrap прошли; runtime-комплект dev.106 проверен, wheel подготавливается. Следующий шаг — input scalar DTO arrays; полный план, Э8/Э9 и Steam-автозагрузка DLL не завершены |
+| PLAN-001 | [Активный план реализации](PLAN-001-active-implementation.md) | R18; состояние на 05.11.2026: source/canonical/shared runtime dev.107, 51 инструмент, Steam build 26394867. Scalar DTO array input/return и прежние int32/FName/enum-сценарии приняты: 21/21 typed-вызовов, 9/9 live-проверок; игра закрыта, заявка освобождена. DLL-сборки/bootstrap и затронутые CTest прошли; runtime-комплект dev.107 проверен, wheel подготавливается. Следующий шаг — оставшиеся подтверждённые сигнатуры и критерии PLAN; полный план, Э8/Э9 и Steam-автозагрузка DLL не завершены |
 
 Последний зарегистрированный номер: **PLAN-001**. Основной документ содержит текущую последовательность, развилки, статусы и краткую историю существенных редакций. Новые результаты уточняют его, а не создают конкурирующие копии плана.
 

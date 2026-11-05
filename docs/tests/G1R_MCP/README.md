@@ -1,5 +1,11 @@
 # Проверки G1R MCP: локальные инструменты и нативный маршрут
 
+## Текущие проверки dev.107 — 05.11.2026
+
+[Общий live-цикл](../../../artifacts/dev107-typed-input-live-complete.json): accepted=true, **21/21 typed-вызовов**, **9/9 проверок**. Scalar DTO array input: пустой → 0, смешанные элементы → 1000, дубликаты → −18; fixture stride 24/alignment 8, cleanup подтверждён. Прежние DTO/int32/FName/enum-возвраты и input-сценарии сохранены; marker 71→72→72→71, успешный/неудачный reload, source/staging восстановлены, игра закрыта и заявка освобождена.
+
+[Первичная DLL-сборка](../../../artifacts/native-build-dev107.txt) и [финальная](../../../artifacts/native-build-dev107-final.txt) прошли; [bootstrap](../../../artifacts/python-bootstrap-dev107.txt) — **3/3, 6,751 с**; [затронутые CTest](../../../artifacts/native-checks-dev107.txt) — **2/2, 0,30 с**. Live выявил ошибочную проверку адреса `%stride24`; до вызова она заменена проверкой alignment8 с сохранением stride24 для размера копии. Финальный live принят. Полный новый Python/CTest-прогон не выполнялся. [Runtime-комплект](../../../artifacts/bridge-bundle-dev107/manifest.json): 79 payload-файлов, manifest проверен. [Wheel](../../../artifacts/wheel-dev107/g1r_mcp-1.0.0.dev107-py3-none-any.whl) подготавливается; consumer-сеанс не повторяется. Nested/string/custom lifecycle и произвольные типы этим результатом не подтверждены.
+
 ## Текущие проверки dev.106 — 05.11.2026
 
 [Общий live-цикл](../../../artifacts/dev106-typed-input-live-complete.json): accepted=true, **18/18 typed-вызовов**, **9/9 проверок**. Scalar DTO array returns: `[]` и два объекта с крайними int32, Number ±2.75 и Flag true/false. Reflection fixture `StructProperty24`, alignment 8, собственные Integer/Number/Flag; полная копия значений и освобождение return-буфера подтверждены. Прежние int32/FName/enum-сценарии, marker 71→72→72→71 и успешный/неудачный reload сохранены; source/staging восстановлены, игра закрыта, заявка освобождена.

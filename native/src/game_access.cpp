@@ -628,7 +628,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.106"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.107"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -1601,7 +1601,7 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                 } else if(field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);})=="ObjectProperty") {
                     const auto array=capture_object_array_parameter(field,size,array_dim,flags);
                     captured["aux"]={{"object_array",array}};array_public=array.at("public");supported=true;
-                } else if(const auto inner_type=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);});inner_type=="IntProperty" || inner_type=="NameProperty") {
+                } else if(const auto inner_type=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);});inner_type=="IntProperty" || inner_type=="NameProperty" || inner_type=="StructProperty") {
                     const auto array=capture_scalar_array_parameter(field,size,array_dim,flags);
                     captured["aux"]={{"scalar_array",array}};array_public=array.at("public");supported=true;
                 } else {
@@ -2124,7 +2124,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             if((flags&0x400) || ((flags&0x100) && !(flags&0x2)) || field_type(field,[this](auto value){return name(value);})!="ArrayProperty")continue;
             const auto inner_type=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);});
             const auto metadata=inner_type=="ObjectProperty"?capture_object_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags)
-                :(inner_type=="IntProperty" || inner_type=="NameProperty")?capture_scalar_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags)
+                :(inner_type=="IntProperty" || inner_type=="NameProperty" || inner_type=="StructProperty")?capture_scalar_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags)
                 :capture_enum_array_parameter(field,read<int32_t>(field+0x34),read<int32_t>(field+0x30),flags);
             const auto key=name(read<uint64_t>(field+0x20));
             if(!arguments.contains(key))throw HandlerError("missing_argument","Object array argument is missing: "+key);
@@ -2138,6 +2138,12 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             ObjectArrayInput input{field,read<int32_t>(field+0x44),flags,key,metadata,{},{},{}};
             if(enum_array || scalar_array) {
                 input.stride=stride;input.scalar_bytes.resize(values.size()*input.stride);
+                std::optional<scalar_struct_values::Snapshot> structure;
+                if(scalar_array && metadata.at("scalar_type")=="StructProperty") {
+                    structure=capture_scalar_struct_parameter(metadata.at("inner").at("pointer").get<uintptr_t>(),static_cast<int>(stride),1);
+                    if(scalar_struct_snapshot_json(*structure)!=metadata.at("struct"))
+                        throw HandlerError("signature_changed","The input DTO array metadata changed while encoding its values");
+                }
                 size_t index{};
                 for(const auto& value:values) {
                     if(enum_array) {
@@ -2146,6 +2152,9 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                     } else if(metadata.at("scalar_type")=="NameProperty") {
                         const auto encoded=encode_name(metadata.at("inner").at("pointer").get<uintptr_t>(),0,0,value);
                         std::memcpy(input.scalar_bytes.data()+index*input.stride,&encoded,sizeof(encoded));
+                    } else if(structure) {
+                        const auto encoded=scalar_struct_arguments::encode(structure->layout,value);
+                        std::memcpy(input.scalar_bytes.data()+index*input.stride,encoded.data(),encoded.size());
                     } else {
                         const auto encoded=int32_argument(value);
                         std::memcpy(input.scalar_bytes.data()+index*input.stride,&encoded,sizeof(encoded));
@@ -2648,7 +2657,8 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             header={reinterpret_cast<uintptr_t>(memory),count,count};
             extra_array_count=memory?1:0;extra_array_bytes=allocation_bytes;
         }
-    array_quarantine_cause=4;array_ledger.add_input(header,input_count,input.stride);
+    array_quarantine_cause=4;array_ledger.add_input(header,input_count,input.stride,
+        input.metadata.contains("struct")?input.metadata.at("struct").at("min_alignment").get<size_t>():input.stride);
         extra_array_count=extra_array_bytes=0;array_quarantine_cause=0;input.header=header;
         if(count) {
         if(input.metadata.contains("enum") || input.metadata.contains("scalar_type")) {

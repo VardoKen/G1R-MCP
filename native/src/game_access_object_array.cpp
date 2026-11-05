@@ -2,6 +2,7 @@
 #include "g1r_mcp/game_memory.hpp"
 #include "g1r_mcp/object_array_parameter_layout.hpp"
 #include "g1r_mcp/vector_parameter_direction.hpp"
+#include "g1r_mcp/scalar_struct_values.hpp"
 
 namespace g1r_mcp {
 
@@ -46,12 +47,19 @@ nlohmann::json GameAccess::capture_scalar_array_parameter(std::uintptr_t field,i
         outer["inner"]=inner_pointer;
         auto inner=field_snapshot(inner_pointer);
         const auto scalar_type=inner.at("type").get<std::string>();
-        const auto element_size=scalar_type=="IntProperty"?4:scalar_type=="NameProperty"?8:0;
-        if(!element_size || inner.at("element_size")!=element_size || inner.at("array_dim")!=1 || inner.at("offset")!=0)
-            throw HandlerError("unsupported_signature","Scalar arrays require four-byte IntProperty or eight-byte NameProperty elements");
-        return json{{"outer",std::move(outer)},{"inner",std::move(inner)},{"scalar_type",scalar_type},
+        const auto element_size=scalar_type=="IntProperty"?4:scalar_type=="NameProperty"?8:
+            scalar_type=="StructProperty"?inner.at("element_size").get<int>():0;
+        if(element_size<1 || inner.at("element_size")!=element_size || inner.at("array_dim")!=1 || inner.at("offset")!=0)
+            throw HandlerError("unsupported_signature","Scalar arrays require int32, FName, or own scalar DTO elements");
+        json captured={{"outer",std::move(outer)},{"inner",std::move(inner)},{"scalar_type",scalar_type},
             {"public",{{"container_type","ArrayProperty"},{"element",{{"type",scalar_type},
                 {"element_size",element_size},{"array_dim",1},{"offset",0}}}}}};
+        if(scalar_type=="StructProperty") {
+            const auto structure=capture_scalar_struct_parameter(inner_pointer,element_size,1);
+            captured["struct"]=scalar_struct_snapshot_json(structure);
+            captured["public"]["element"]["struct"]=scalar_struct_snapshot_json(structure,false);
+        }
+        return captured;
     };
     const auto before=capture();
     if(before!=capture())throw HandlerError("scalar_array_metadata_changed","Reflected scalar array metadata changed during validation");
