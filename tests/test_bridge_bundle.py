@@ -132,6 +132,20 @@ class BridgeBundleTests(unittest.TestCase):
         with self.assertRaises(bundle.BundleError) as captured:
             self.prepare()
         self.assertEqual(captured.exception.code, "invalid_binary")
+        native_version = "1.0.0-dev.6"
+        self.write(bundle.BINARIES[1], fake_pe())
+        self.write(bundle.BINARIES[0], fake_pe(native_version.encode() + b"runtime_image_patterns"))
+        result = bundle.prepare_bundle(self.target, repository_root=self.repository, native_version=native_version)
+        self.assertEqual(result["version"], self.version)
+        self.assertEqual(result["native_version"], native_version)
+        self.assertEqual(bundle.verify_bundle(self.target)["native_version"], native_version)
+        manifest_path = self.target / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["compatibility"]["native_version_marker"] = self.version
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        with self.assertRaises(bundle.BundleError) as captured:
+            bundle.verify_bundle(self.target)
+        self.assertEqual(captured.exception.code, "native_version_mismatch")
 
     def test_verification_rejects_changed_added_and_escape_manifest(self):
         self.prepare()

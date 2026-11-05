@@ -1,5 +1,11 @@
 # Проверки G1R MCP: локальные инструменты и нативный маршрут
 
+## Текущие проверки dev.112 — 05.11.2026
+
+[Live-приёмка](../../../artifacts/dev112-debug-database-live-complete.json): accepted=true, **46/46 typed-вызовов**, **9/9 проверок**; Python server dev.112/52 tools, native DLL dev.111. `g1r_debug_database`: complete=true, 5 262 chunks, 20 151 types, 119 789 flat entries, 9 470 492 bytes, elapsed 1,393694 с; settings type31/version5/float64=true, отдельного type33 не было. Shared cache query работает после закрытия игры: GothicCharacter 331, SetVisibility 15, Transform 2 486. Собственный G1RMCPNestedDTO дал 0; полный собственный AS-каталог и UFunction-доступность этим не подтверждены. Marker/reload/source/staging восстановлены, игра закрыта и заявка освобождена.
+
+[Python bootstrap/codec](../../../artifacts/python-debug-database-dev112.txt): **18/18, 8,299 с**. Затронутые упаковочные проверки — **9/9, 27,554 с**, явная native-version поддерживает Python112/native111 и отвергает неверный DLL marker. Native-код не менялся, CMake не запускался; полный новый Python/CTest-прогон не выполнялся. [Runtime-комплект](../../../artifacts/bridge-bundle-dev112/manifest.json): 81 payload-файл, final manifest проверен. [Wheel](../../../artifacts/wheel-dev112/g1r_mcp-1.0.0.dev112-py3-none-any.whl) подготавливается; consumer-сеанс не повторяется. Raw база не является debugger breakpoint/step/locals.
+
 ## Текущие проверки dev.111 — 05.11.2026
 
 [Финальный live-цикл](../../../artifacts/dev111-typed-input-live-complete.json): accepted=true, **46/46 typed-вызовов**, **9/9 проверок**. FString echo/output: пустые строки, Unicode, newline и дубликаты; mixed scalar return/output и прежние сценарии приняты, очистка внутренних строк/внешнего массива подтверждена. Marker 71→72→72→71, successful/failed reload, source/staging восстановлены, игра закрыта, заявка освобождена.

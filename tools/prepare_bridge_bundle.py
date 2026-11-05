@@ -195,8 +195,10 @@ def _directory_set(root: Path) -> set[str]:
     return directories
 
 
-def _instructions(version: str) -> bytes:
+def _instructions(version: str, native_version: str | None = None) -> bytes:
     text = f"""# G1R MCP Internal Bundle {version}
+
+Python server version: {version}. Native DLL version: {native_version or version}.
 
 The bundle preserves the workspace layout; it is not an installer or a public release.
 Verification does not launch the game or load the DLL.
@@ -278,18 +280,21 @@ from the workspace with expected value 2 is not included in the bundle.
     return text.encode("utf-8")
 
 
-def prepare_bundle(destination: Path, *, repository_root: Path = ROOT) -> dict:
+def prepare_bundle(destination: Path, *, repository_root: Path = ROOT, native_version: str | None = None) -> dict:
     repository = _checked(repository_root, directory=True)
     target = _target(destination, repository)
     version = _version(repository)
+    native_version = version if native_version is None else native_version
+    if not isinstance(native_version, str) or not re.fullmatch(r"\d+\.\d+\.\d+-dev\.\d+", native_version):
+        raise BundleError("invalid_version", "The native version must be a complete development version")
     selected = _enumerate(repository)
     raw_files = {}
     for relative in selected:
         raw = _read(repository / relative, repository)
         raw_files[relative] = raw
-    compatibility = _compatibility(repository, version, raw_files[BINARIES[0]], raw_files[BINARIES[1]])
+    compatibility = _compatibility(repository, native_version, raw_files[BINARIES[0]], raw_files[BINARIES[1]])
     compatibility_source = _sha(_read(repository / "native/src/game_access.cpp", repository))
-    raw_files["README.md"] = _instructions(version)
+    raw_files["README.md"] = _instructions(version, native_version)
     raw_files["START.md"] = raw_files["README.md"]
     # Revalidate the source before writing; reject subsequent changes.
     if selected != _enumerate(repository) or any(_sha(_read(repository / path, repository)) != _sha(raw_files[path]) for path in selected if path != "README.md"):
@@ -352,7 +357,7 @@ def prepare_bundle(destination: Path, *, repository_root: Path = ROOT) -> dict:
                 raise BundleError("already_exists", "The bundle directory appeared before publication")
             stage.rename(target)
             stage = None
-            return {"destination": str(target), "version": version, "file_count": verified["file_count"],
+            return {"destination": str(target), "version": version, "native_version": native_version, "file_count": verified["file_count"],
                     "total_bytes": verified["total_bytes"], "manifest_sha256": _sha(raw_files["manifest.json"]),
                     "binding_method": compatibility["binding_method"],
                     "verified_files": True, "installed": False, "game_launched": False,
@@ -407,8 +412,9 @@ def verify_bundle(bundle_root: Path) -> dict:
         raise BundleError("incomplete_bundle", "The bundle is missing a required runtime file")
     version = _version(root)
     compatibility = manifest.get("compatibility")
+    native_version = compatibility.get("native_version_marker") if isinstance(compatibility, dict) else None
     if (manifest.get("version") != version or not isinstance(compatibility, dict)
-            or compatibility.get("native_version_marker") != version
+            or not isinstance(native_version, str) or not re.fullmatch(r"\d+\.\d+\.\d+-dev\.\d+", native_version)
             or compatibility.get("platform") != "Windows x64"):
         raise BundleError("invalid_manifest", "The bundle version or compatibility contract is invalid")
     dll = _read(root / BINARIES[0], root)
@@ -421,7 +427,7 @@ def verify_bundle(bundle_root: Path) -> dict:
         marker = compatibility["supported_game_exe_sha256"]
     else:
         raise BundleError("invalid_manifest", "The bundle compatibility binding method is invalid")
-    if version.encode("ascii") not in dll or marker.encode("ascii") not in dll:
+    if native_version.encode("ascii") not in dll or marker.encode("ascii") not in dll:
         raise BundleError("native_version_mismatch", "The DLL does not match the version or binding contract in the manifest")
     for content in (dll, loader):
         if len(content) < 64 or content[:2] != b"MZ":
@@ -429,7 +435,7 @@ def verify_bundle(bundle_root: Path) -> dict:
         offset = struct.unpack_from("<I", content, 60)[0]
         if offset < 64 or offset + 6 > len(content) or content[offset:offset + 4] != b"PE\0\0" or struct.unpack_from("<H", content, offset + 4)[0] != 0x8664:
             raise BundleError("invalid_binary", "The bundle binary is not a PE x64 binary")
-    return {"version": manifest.get("version"), "file_count": len(files), "total_bytes": total,
+    return {"version": manifest.get("version"), "native_version": native_version, "file_count": len(files), "total_bytes": total,
             "verified_files": True, "runtime_validation": "not_performed_by_packager"}
 
 
@@ -438,9 +444,12 @@ def main() -> int:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--destination", type=Path, help="A new directory within artifacts in the current Git workspace")
     group.add_argument("--verify-root", type=Path, help="Verify all unpacked bundle hashes without launching the game")
+    parser.add_argument("--native-version", help="Explicit DLL version when it differs from the Python package version")
     args = parser.parse_args()
     try:
-        result = prepare_bundle(args.destination) if args.destination else verify_bundle(args.verify_root)
+        if args.native_version is not None and args.destination is None:
+            parser.error("--native-version requires --destination; verification reads the manifest version")
+        result = prepare_bundle(args.destination, native_version=args.native_version) if args.destination else verify_bundle(args.verify_root)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     except (BundleError, WorkspaceError, OSError, UnicodeError, ValueError) as error:

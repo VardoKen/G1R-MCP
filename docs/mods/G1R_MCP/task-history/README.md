@@ -1,5 +1,9 @@
 # История задач G1R MCP
 
+## 05.11.2026 — dev.112: debugger database MCP
+
+Добавлен `g1r_debug_database`: explicit refresh получает полную raw runtime-базу, query читает общий серверный cache без нового TCP, включая после закрытия игры. [Live](../../../../artifacts/dev112-debug-database-live-complete.json): complete=true, 5 262 chunks/20 151 types/119 789 flat entries/9 470 492 bytes; прежние 46/46 typed и 9/9 checks приняты, игра закрыта, заявка освобождена. Python/shared server dev.112/52 tools, native DLL dev.111 сохранена; packager поддерживает явную native-version. Python 18/18 и упаковочные 9/9 прошли; runtime-комплект dev.112 проверен, wheel подготавливается. Raw база не доказывает UFunction или полный собственный AS-каталог. PLAN-001 R18 продолжается; следующий шаг — breakpoint/step debugger research.
+
 ## 05.11.2026 — dev.111: FString-массивы и debugger listener
 
 Добавлены FString-массивы input/return/pure output с владением внутренними строками и внешним массивом. [Live-приёмка](../../../../artifacts/dev111-typed-input-live-complete.json): 46/46 typed-вызовов, 9/9 проверок; пустые/Unicode/newline/дублирующиеся строки, mixed scalar return/output и cleanup приняты. Прежние сценарии, marker/reload/восстановление, закрытие игры и освобождение заявки сохранены. Debugger listener ответил version(type31)/debug data(type2); полная база остановилась на прежнем лимите probe256, не объявлена готовой. DLL-сборка, bootstrap 3/3 и затронутые CTest 2/2 прошли; runtime-комплект dev.111 проверен, wheel подготавливается. PLAN-001 R18 продолжается; следующий шаг — полная debug database и MCP-интеграция.

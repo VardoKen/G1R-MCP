@@ -1,11 +1,11 @@
 # Активные планы G1R MCP
 
 
-Dev.111: FString-массивы input/return/pure output приняты для пустых строк, Unicode, newline и дубликатов; внутренние строки и внешний массив освобождены. Mixed scalar return/output и прежние сценарии сохранены: 46/46 typed-вызовов, 9/9 проверок. Debugger listener новой сборки ответил version(type31) и debug data(type2); полная база не получена из-за прежнего лимита probe256 сообщений. [Подтверждения](../../../../artifacts/dev111-typed-input-live-complete.json).
+Dev.112: `g1r_debug_database` получил полную runtime-базу: 5 262 chunks, 20 151 types, 119 789 flat entries, 9 470 492 bytes, 1,394 с; settings type31/version5/float64=true, отдельного type33 не было. Общий cache принадлежит серверу; query не открывает TCP и работает после закрытия игры. Это raw debugger catalog, не доказательство UFunction-доступности или полного каталога собственных AS-пакетов. [Подтверждения](../../../../artifacts/dev112-debug-database-live-complete.json).
 
 | Номер | Документ | Состояние |
 | --- | --- | --- |
-| PLAN-001 | [Активный план реализации](PLAN-001-active-implementation.md) | R18; состояние на 05.11.2026: source/canonical/shared runtime dev.111, 51 инструмент, Steam build 26394867. FString-массивы и прежние сценарии приняты: 46/46 typed-вызовов, 9/9 live-проверок; игра закрыта, заявка освобождена. DLL/bootstrap/затронутые CTest прошли; runtime-комплект dev.111 проверен, wheel подготавливается. Debugger listener отвечает version/debug data; полная база не завершена из-за лимита probe. Следующий шаг — debug database MCP; полный план, Э8/Э9 и Steam-автозагрузка DLL не завершены |
+| PLAN-001 | [Активный план реализации](PLAN-001-active-implementation.md) | R18; состояние на 05.11.2026: Python/shared server dev.112, native DLL dev.111, 52 инструмента, build 26394867. Полная debugger database: 5 262 chunks/20 151 types/119 789 flat entries, 9 470 492 bytes; shared cache после закрытия игры. Live 46/46 typed, 9/9 checks; игра закрыта, заявка освобождена. Python 18/18 и упаковочные 9/9 прошли; runtime-комплект dev.112 проверен, wheel подготавливается. Следующий шаг — breakpoint/step debugger research; полный план/Э8/Э9/Steam-автозагрузка DLL не завершены |
 
 Последний зарегистрированный номер: **PLAN-001**. Основной документ содержит текущую последовательность, развилки, статусы и краткую историю существенных редакций. Новые результаты уточняют его, а не создают конкурирующие копии плана.
 

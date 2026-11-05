@@ -21,6 +21,10 @@ def _entry(target: str, requires: tuple[str, ...], implementation: str,
 
 
 _CONTRACTS = {
+    "g1r_debug_database": _entry("angelscript_debug_database", ("cached_database_or_live_debugger_listener",),
+                                    "src/g1r_mcp/debug_database.py:DebugDatabaseCatalog",
+                                    ("complete", "items", "total_matches", "offset", "next_offset", "source"),
+                                    dynamic=True, state_tools=("g1r_status",)),
     "g1r_status": _entry("server_metadata", (), "src/g1r_mcp/server.py:g1r_status",
                           ("server", "sources", "workspace", "game_session", "game")),
     "g1r_capabilities": _entry("registered_tool_metadata", (), "src/g1r_mcp/server.py:g1r_capabilities",

@@ -1,6 +1,7 @@
 """MCP server for static tools with an explicit game-channel boundary."""
 
 import argparse
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -20,6 +21,7 @@ from . import __version__
 from .packages import PackageError, validate_package
 from .sources import SourceCatalog, SourceError
 from .native_client import NativeClient, NativeError
+from .debug_database import DebugDatabaseCatalog
 from .tool_catalog import build_tool_contracts
 from pydantic import StrictBool, StrictInt, StrictStr
 from .workspace import PackageWorkspace, WorkspaceError, _parts, _checked
@@ -35,6 +37,7 @@ from .game_environment import InspectionError, verify_source_game
 LOCAL_TOOLS = (
     ("g1r_status", "Server status and game-channel boundary"),
     ("g1r_capabilities", "Catalog of implemented and unavailable groups"),
+    ("g1r_debug_database", "AngelScript debug database from the game's listener or the shared cache"),
     ("g1r_source_identity", "Current Modkit Git HEAD and comparison with the revision label"),
     ("g1r_verify_source_game", "Compare Modkit script bytes with the installed game"),
     ("g1r_find_source_files", "Find Modkit or selected workspace-package source files"),
@@ -126,6 +129,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             raise ValueError("Workspace directory contains a symlink or junction")
     workspace_root = workspace_root.resolve(strict=True)
     sources = SourceCatalog(modkit_root, revision=source_revision)
+    debug_database = DebugDatabaseCatalog()
     patch_builder = ScriptPatchBuilder(modkit_root, revision=source_revision)
     workspace = PackageWorkspace(workspace_root, protected_roots=[modkit_root])
     native = NativeClient(port=native_port)
@@ -930,6 +934,16 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                 "Package validation does not load the mod or check the loader's version-comparison algorithm",
             ],
         }
+
+    @server.tool(annotations=read_only)
+    async def g1r_debug_database(query: str = "", limit: int = 100, offset: int = 0,
+                                 refresh: StrictBool = False, timeout: float = 30.0) -> dict[str, Any]:
+        """Read the cached AngelScript debug database; refresh connects once to the current game's debugger listener."""
+        if refresh:
+            refreshed = await asyncio.to_thread(debug_database.refresh, timeout)
+            if not refreshed.get("complete"):
+                return refreshed
+        return debug_database.query(query, limit, offset)
 
     @server.tool(annotations=read_only)
     def g1r_source_identity() -> dict[str, Any]:
