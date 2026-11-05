@@ -94,6 +94,50 @@ class UG1RMCPTypedInputProbe : UObject
         return Result;
     }
 
+    // Pure output arrays start empty; only their owned parameter buffers change.
+    UFUNCTION(BlueprintCallable)
+    void WriteIntArray(bool WithValues, TArray<int>&out Values)
+    {
+        Values.Empty();
+        if (WithValues)
+        {
+            Values.Add(2147483647);
+            Values.Add(-2147483647 - 1);
+        }
+    }
+
+    UFUNCTION(BlueprintCallable)
+    void WriteNameArray(bool WithValues, TArray<FName>&out Values)
+    {
+        Values.Empty();
+        if (WithValues)
+        {
+            Values.Add(n"Entry");
+            Values.Add(n"");
+            Values.Add(n"Entry");
+        }
+    }
+
+    UFUNCTION(BlueprintCallable)
+    void WriteScalarArray(bool WithValues, TArray<FG1RMCPScalarInput>&out Values)
+    {
+        Values.Empty();
+        if (WithValues)
+        {
+            FG1RMCPScalarInput First;
+            First.Integer = 2147483647;
+            First.Number = 2.75;
+            First.Flag = true;
+            Values.Add(First);
+
+            FG1RMCPScalarInput Second;
+            Second.Integer = -2147483647 - 1;
+            Second.Number = -2.75;
+            Second.Flag = false;
+            Values.Add(Second);
+        }
+    }
+
     // [] -> 0; [Entry, miss, Entry] -> 304; [None, Entry] -> 211.
     // Read-only marker checks the array length and FName equality; no world access.
     UFUNCTION(BlueprintCallable)

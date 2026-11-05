@@ -35,6 +35,19 @@ class UG1RMCPEnumProbe : UObject
         return Result;
     }
 
+    // Pure output; duplicates and sparse numeric enum values are retained.
+    UFUNCTION(BlueprintCallable)
+    void WriteEnumArray(bool WithValues, TArray<EG1RMCPEnumProbeMode>&out Values)
+    {
+        Values.Empty();
+        if (WithValues)
+        {
+            Values.Add(EG1RMCPEnumProbeMode::First);
+            Values.Add(EG1RMCPEnumProbeMode::Third);
+            Values.Add(EG1RMCPEnumProbeMode::First);
+        }
+    }
+
     UFUNCTION(BlueprintCallable)
     EG1RMCPEnumProbeMode ReadMode()
     {

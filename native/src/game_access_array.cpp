@@ -42,7 +42,7 @@ json GameAccess::capture_object_array_return(uintptr_t field,int size,int dim,bo
         {"public",public_metadata}};
 }
 
-json GameAccess::capture_scalar_array_return(uintptr_t field,int size,int dim) const {
+json GameAccess::capture_scalar_array_return(uintptr_t field,int size,int dim,bool output) const {
     const auto capture=[&]() {
         const auto snapshot=[&](uintptr_t pointer) {
             const auto klass=read<uintptr_t>(pointer+8);
@@ -57,9 +57,10 @@ json GameAccess::capture_scalar_array_return(uintptr_t field,int size,int dim) c
         const auto flags=outer.at("flags").get<uint64_t>();
         const auto offset=outer.at("offset").get<int32_t>();
         if(outer.at("type")!="ArrayProperty" || size!=16 || dim!=1 || outer.at("element_size")!=size
-           || outer.at("array_dim")!=dim || offset<0 || offset%8 || !(flags&0x80) || !(flags&0x400)
+           || outer.at("array_dim")!=dim || offset<0 || offset%8 || !(flags&0x80)
+           || (output ? (!(flags&0x100) || (flags&0x400)) : !(flags&0x400))
            || (flags&(uint64_t{0x2}|uint64_t{0x08000000})))
-            throw HandlerError("unsupported_signature","Scalar arrays require a 16-byte return by value");
+            throw HandlerError("unsupported_signature",output ? "Scalar arrays require a 16-byte pure output parameter" : "Scalar arrays require a 16-byte return by value");
         outer["array_flags"]=read<uint8_t>(field+0x70);
         const auto inner_pointer=read<uintptr_t>(field+0x78);
         outer["inner"]=inner_pointer;
@@ -112,7 +113,8 @@ json GameAccess::capture_scalar_array_return(uintptr_t field,int size,int dim) c
     return before;
 }
 json GameAccess::read_scalar_array_return(uintptr_t field,uintptr_t address,const json& metadata) {
-    if(capture_scalar_array_return(field,16,1)!=metadata)
+    const bool output=!(metadata.at("outer").at("flags").get<uint64_t>()&0x400);
+    if(capture_scalar_array_return(field,16,1,output)!=metadata)
         throw HandlerError("signature_changed","The returned scalar array metadata changed after the call");
     const auto header=read<ArrayHeader>(address);
     const auto stride=metadata.at("inner").at("element_size").get<int>();
@@ -143,7 +145,7 @@ json GameAccess::read_scalar_array_return(uintptr_t field,uintptr_t address,cons
         }
         items.push_back(std::move(item));
     }
-    if(capture_scalar_array_return(field,16,1)!=metadata || !same_array_header(header,read<ArrayHeader>(address)))
+    if(capture_scalar_array_return(field,16,1,output)!=metadata || !same_array_header(header,read<ArrayHeader>(address)))
         throw HandlerError("array_changed","The returned scalar array metadata or header changed during read");
     return {{"items",std::move(items)},{"total_count",header.count},{"partial",false}};
 }

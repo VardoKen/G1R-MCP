@@ -1,15 +1,15 @@
-# Локальные MCP-инструменты — 1.0.0-dev.107
+# Локальные MCP-инструменты — 1.0.0-dev.108
 
 Дата сверки: **04.11.2026**. Документ описывает текущую реализацию в `src/g1r_mcp/` и `native/src/`. Сервер использует официальный Python SDK `mcp==2.3.0`; в `server.py` зарегистрирован **51 инструмент**. Схемы аргументов задаёт регистрация MCP, а `g1r_capabilities` дополняет их происхождением данных, доступностью, форматами и ограничениями. Ответы и ошибки моста — на английском языке; проектная документация — на русском.
 
 Назначение G1R MCP — полноценное исследование, разработка и отладка официальных модов, а перенос пользовательских модов с UE4SS — промежуточный рубеж. Рабочие пакеты — официальные `GothicMod.json` и AngelScript. Каталог ниже описывает реализованные инструменты, а не завершение всей цели. Игровой маршрут, включая загрузку DLL и выполнение через Tick, описан в [native-route.md](native-route.md); сводка готового и неготового — в [README.md](README.md), доказательства — в [описании проверок](../../tests/G1R_MCP/README.md).
 
-Dev.107: input-массивы собственных scalar DTO приняты: пустой массив → 0, смешанные элементы → 1000, дубликаты → −18. Reflection fixture — stride 24, alignment 8; проверка адреса использует alignment, размер копии — stride. Значения кодируются с нулевым padding, cleanup подтверждён. Общий цикл — 21/21 typed-вызовов и 9/9 проверок. [Подтверждения](../../../artifacts/dev107-typed-input-live-complete.json).
+Dev.108: чистые output-массивы int32/FName/enum/scalar DTO приняты в восьми пустых/заполненных сценариях. Отражённые флаги, metadata, значения и освобождение output-буферов подтверждены; inout не поддержан. Ответы идут в `out_parameters`, metadata — в `out_parameter_metadata`. Общий цикл — 29/29 typed-вызовов и 9/9 проверок. [Подтверждения](../../../artifacts/dev108-typed-input-live-complete.json).
 
 
 ## Каталог 51 инструмента
 
-Рабочий runtime — **1.0.0-dev.107**, 51 инструмент. Scalar DTO array input/return и прежние int32/FName/enum-сценарии приняты в одном live-цикле: 21/21 typed-вызовов, 9/9 итоговых проверок. [Результат dev.107](../../../artifacts/dev107-typed-input-live-complete.json).
+Рабочий runtime — **1.0.0-dev.108**, 51 инструмент. Чистые int32/FName/enum/scalar DTO output-массивы и прежние input/return-сценарии приняты в одном live-цикле: 29/29 typed-вызовов, 9/9 итоговых проверок. [Результат dev.108](../../../artifacts/dev108-typed-input-live-complete.json).
 
 Dev.103: int32/FName input-массивы и собственные простые структуры с числовыми/bool-полями копируются в принадлежащий вызову буфер по повторно проверенной reflection-раскладке и identity. Направление input и передача value/const_reference определяются фактическими флагами: const reference с CPF_OutParm нормализуется как input. Поддержка чтения произвольного DTO не означает поддержку его как аргумента; FName-элемент принимает {name:string} или {name_from:{handle,property_name}}; текстовый FName создаётся с Number=0, источник name_from повторно проверяется. Другие элементы массива и вложенные структуры этой приёмкой не подтверждены.
 
@@ -150,7 +150,7 @@ Object/Class значения включают тип и session descriptor; Wea
 - Массив собственной scalar DTO — value/const-reference input и by-value return с отражённым stride/alignment; own numeric/bool-поля, нулевой padding input, `items[].value` как JSON-объект и `result_metadata.element.struct`. Nested/string/custom lifecycle не поддержаны.
 - TArray<int32>/TArray<FName>/однобайтовый enum — input и by-value return в подтверждённом layout; возврат `{items, total_count, partial}` копирует значения с проверкой metadata и очисткой контейнера. TArray<UObject> — const-reference input, by-value return и отдельный pure output; массив однобайтового enum — подтверждённый input. TSet<UObject> — by-value return. Контейнеры копируют pointers, не владеют самими UObject.
 - Scalar DTO — только by-value return с собственными отражёнными scalar-полями; это более узкий контракт, чем вложенное чтение состояния. Generic nested Struct/Array<Struct> invoke, Map, Weak/Soft/Optional и delegate-аргументы не добавлены.
-- Pure scalar output и TArray<UObject>/FVector output запрашиваются `{"out":true}` по отражённому имени. Inout, произвольный mutable reference и неподтверждённые out-типы отвергаются.
+- Pure scalar, TArray<UObject>/FVector и int32/FName/enum/scalar DTO array output запрашиваются `{"out":true}` по отражённому имени. Ответы — `out_parameters`, metadata — `out_parameter_metadata`; pure output с подтверждённой очисткой. Inout, произвольный mutable reference и неподтверждённые out-типы отвергаются.
 
 После исполнения ошибка копирования/очистки или native/script fault сохраняет признаки эффекта. `may_have_executed`, `outcome_unknown` и `do_not_retry` запрещают автоматический повтор; отказ до исполнения отличается от неизвестного результата уже начавшегося вызова. Перед новым вызовом после invalidation требуется свежий handle/контракт. Invoke не является произвольным AngelScript eval.
 

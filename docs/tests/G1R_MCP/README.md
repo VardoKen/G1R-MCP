@@ -1,5 +1,11 @@
 # Проверки G1R MCP: локальные инструменты и нативный маршрут
 
+## Текущие проверки dev.108 — 05.11.2026
+
+[Общий live-цикл](../../../artifacts/dev108-typed-input-live-complete.json): accepted=true, **29/29 typed-вызовов**, **9/9 проверок**. Восемь новых pure output-сценариев для int32/FName/enum/scalar DTO: пустые и заполненные массивы, точные reflection-флаги, metadata, значения и освобождение output-буферов подтверждены. Прежние input/return-сценарии сохранены; marker 71→72→72→71, успешный/неудачный reload, source/staging восстановлены, игра закрыта и заявка освобождена.
+
+[DLL-сборка](../../../artifacts/native-build-dev108.txt) прошла; [bootstrap](../../../artifacts/python-bootstrap-dev108.txt) — **3/3, 6,856 с**. Полный новый Python/CTest-прогон не выполнялся. [Runtime-комплект](../../../artifacts/bridge-bundle-dev108/manifest.json): 79 payload-файлов, manifest проверен. [Wheel](../../../artifacts/wheel-dev108/g1r_mcp-1.0.0.dev108-py3-none-any.whl) подготавливается; consumer-сеанс не повторяется. Inout, произвольные layouts и ByteProperty fallback этим результатом не подтверждены.
+
 ## Текущие проверки dev.107 — 05.11.2026
 
 [Общий live-цикл](../../../artifacts/dev107-typed-input-live-complete.json): accepted=true, **21/21 typed-вызовов**, **9/9 проверок**. Scalar DTO array input: пустой → 0, смешанные элементы → 1000, дубликаты → −18; fixture stride 24/alignment 8, cleanup подтверждён. Прежние DTO/int32/FName/enum-возвраты и input-сценарии сохранены; marker 71→72→72→71, успешный/неудачный reload, source/staging восстановлены, игра закрыта и заявка освобождена.

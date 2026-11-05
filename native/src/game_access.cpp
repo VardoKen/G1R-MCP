@@ -628,7 +628,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.107"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.108"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -1596,8 +1596,10 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                 captured["aux"]={{scalar_array?"scalar_array_return":"object_array_return",array}};array_public=array.at("public");supported=true;
             } else {
                 if((flags&0x100) && !(flags&kConstParm)) {
-                    const auto array=capture_object_array_return(field,size,array_dim,true);
-                    captured["aux"]={{"object_array_output",array}};array_public=array.at("public");supported=true;
+                    const auto inner_type=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);});
+                    const bool scalar_array=inner_type=="IntProperty" || inner_type=="NameProperty" || inner_type=="EnumProperty" || inner_type=="ByteProperty" || inner_type=="StructProperty";
+                    const auto array=scalar_array?capture_scalar_array_return(field,size,array_dim,true):capture_object_array_return(field,size,array_dim,true);
+                    captured["aux"]={{scalar_array?"scalar_array_output":"object_array_output",array}};array_public=array.at("public");supported=true;
                 } else if(field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);})=="ObjectProperty") {
                     const auto array=capture_object_array_parameter(field,size,array_dim,flags);
                     captured["aux"]={{"object_array",array}};array_public=array.at("public");supported=true;
@@ -1688,7 +1690,7 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
             public_parameter["array"]=array_public;public_parameter["direction"]=returned?"return":"input";public_parameter["passing"]=returned?"value":"const_reference";
             if(!returned) {
                 const bool value_array=captured["aux"].contains("enum_array") || captured["aux"].contains("scalar_array");
-                if(captured["aux"].contains("object_array_output")) {
+                if(captured["aux"].contains("object_array_output") || captured["aux"].contains("scalar_array_output")) {
                     public_parameter["direction"]="output";public_parameter.erase("passing");
                     public_parameter["argument_marker"]={{"out",true}};
                 } else {
@@ -1782,7 +1784,10 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                 } else if(capture_object_array_return(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>())!=auxiliary.at("object_array_return"))
                     throw HandlerError("signature_changed","The returned object array metadata changed while reading the signature");
             } else {
-                if(auxiliary.contains("object_array_output")) {
+                if(auxiliary.contains("scalar_array_output")) {
+                    if(capture_scalar_array_return(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>(),true)!=auxiliary.at("scalar_array_output"))
+                        throw HandlerError("signature_changed","The scalar array output metadata changed while reading the signature");
+                } else if(auxiliary.contains("object_array_output")) {
                     if(capture_object_array_return(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>(),true)!=auxiliary.at("object_array_output"))
                         throw HandlerError("signature_changed","The object array output metadata changed while reading the signature");
                 } else if(auxiliary.contains("scalar_array")) {
@@ -2510,12 +2515,15 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         }
         if(type=="ArrayProperty") {
             if((flags&0x100) && !(flags&0x2)) {
-                if(!contains_array_output)throw HandlerError("signature_changed","The Object array output appeared after reading the complete signature");
-                const auto metadata=capture_object_array_return(field,size,read<int32_t>(field+0x30),true);
+                if(!contains_array_output)throw HandlerError("signature_changed","The array output appeared after reading the complete signature");
+                const auto inner_type=field_type(read<uintptr_t>(field+0x78),[this](auto value){return name(value);});
+                const bool scalar_array=inner_type=="IntProperty" || inner_type=="NameProperty" || inner_type=="EnumProperty" || inner_type=="ByteProperty" || inner_type=="StructProperty";
+                const auto metadata=scalar_array?capture_scalar_array_return(field,size,read<int32_t>(field+0x30),true)
+                    :capture_object_array_return(field,size,read<int32_t>(field+0x30),true);
                 const auto key=name(read<uint64_t>(field+0x20));
-                if(!arguments.contains(key))throw HandlerError("missing_argument","Object array output argument is missing: "+key);
+                if(!arguments.contains(key))throw HandlerError("missing_argument","Array output argument is missing: "+key);
                 parameter_direction::validate_output_marker(arguments.at(key));
-                if(offset%8)throw HandlerError("unsupported_signature","The Object array output offset is not aligned");
+                if(offset%8)throw HandlerError("unsupported_signature","The array output offset is not aligned");
                 std::memset(buffer+offset,0,16);
                 array_outputs.push_back({field,offset,metadata,key});
                 ++input_count;continue;
@@ -2869,7 +2877,9 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         require_transform_result_contract();
         decode_vector_outputs();decode_color_outputs();decode_transform_return();decode_scalar_outputs();decode_scalar_struct_return();
         for(const auto& output:array_outputs) {
-            out_parameters[output.key]=read_object_array_return(output.field,reinterpret_cast<uintptr_t>(buffer+output.offset),output.metadata);
+            out_parameters[output.key]=output.metadata.contains("scalar_type")
+                ?read_scalar_array_return(output.field,reinterpret_cast<uintptr_t>(buffer+output.offset),output.metadata)
+                :read_object_array_return(output.field,reinterpret_cast<uintptr_t>(buffer+output.offset),output.metadata);
             out_parameter_metadata[output.key]=output.metadata.at("public");
         }
         require_transform_result_contract();
