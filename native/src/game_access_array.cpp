@@ -88,9 +88,9 @@ json GameAccess::capture_scalar_array_return(uintptr_t field,int size,int dim,bo
         if(type=="BoolProperty")element["bool_layout"]=inner.at("bool_layout");
         json captured={{"outer",std::move(outer)},{"inner",std::move(inner)},{"scalar_type",type}};
         if(type=="StructProperty") {
-            const auto structure=capture_scalar_struct_parameter(inner_pointer,stride,1);
-            captured["struct"]=scalar_struct_snapshot_json(structure);
-            element["struct"]=scalar_struct_snapshot_json(structure,false);
+            const auto structure=capture_pod_struct_parameter(inner_pointer,stride,1);
+            captured["struct"]=structure;
+            element["struct"]=pod_struct_metadata(structure);
         }
         if(enumeration) {
             const auto layout=enum_layout(type,stride,inner_pointer);
@@ -140,10 +140,10 @@ json GameAccess::read_scalar_array_return(uintptr_t field,uintptr_t address,cons
         scalar_layout.field_size=boolean.at("field_size").get<uint8_t>();scalar_layout.byte_offset=boolean.at("byte_offset").get<uint8_t>();
         scalar_layout.byte_mask=boolean.at("byte_mask").get<uint8_t>();scalar_layout.field_mask=boolean.at("field_mask").get<uint8_t>();
     }
-    std::optional<scalar_struct_values::Snapshot> structure;
+    json structure=nullptr;
     if(type=="StructProperty") {
-        structure=capture_scalar_struct_parameter(metadata.at("inner").at("pointer").get<uintptr_t>(),stride,1);
-        if(scalar_struct_snapshot_json(*structure)!=metadata.at("struct"))
+        structure=capture_pod_struct_parameter(metadata.at("inner").at("pointer").get<uintptr_t>(),stride,1);
+        if(structure!=metadata.at("struct"))
             throw HandlerError("signature_changed","The returned DTO array structure changed after the call");
     }
     const auto page=array_page(header,stride,1,0,std::numeric_limits<size_t>::max());
@@ -159,7 +159,7 @@ json GameAccess::read_scalar_array_return(uintptr_t field,uintptr_t address,cons
         } else if(type=="NameProperty") {
             uint64_t value{};std::memcpy(&value,bytes,sizeof(value));item["value"]=name(value);
         } else if(type=="StructProperty") {
-            item["value"]=scalar_struct_values::decode(structure->layout,std::span<const std::byte>(bytes,static_cast<size_t>(stride)));
+            item["value"]=decode_pod_struct(structure,std::span<const std::byte>(bytes,static_cast<size_t>(stride)));
         } else {
             uint8_t value{};std::memcpy(&value,bytes,sizeof(value));item["value"]=value;
             if(metadata.contains("enum"))item["enum"]=enum_metadata(reinterpret_cast<void*>(metadata.at("inner").at("enum").get<uintptr_t>()),item["value"],"ByteProperty");

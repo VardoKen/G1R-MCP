@@ -628,7 +628,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.109"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0-dev.110"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},
@@ -734,9 +734,7 @@ json GameAccess::request(const json& envelope) {
     if(!enabled_) throw HandlerError("native_not_ready","Game hooks are not installed: "+startup_error_);
     const auto wait=request_wait(envelope);
     auto job=std::make_shared<Job>();job->request=envelope;auto future=job->result.get_future();
-    {std::unique_lock lock(queue_mutex_,std::try_to_lock);
-     if(!lock.owns_lock())throw HandlerError("game_thread_busy","The game thread is servicing the queue; the request was not queued",
-        {{"executed",false},{"may_have_executed",false},{"do_not_retry",false},{"request_started",false},{"stage","not_queued"}});
+    {std::lock_guard lock(queue_mutex_);
      job->world_generation=world_generation_.load();job->script_generation=successful_script_reloads_.load();queue_.push_back(job);}
     if(future.wait_for(wait)!=std::future_status::ready) {
         if(job->state.cancel()) {
@@ -1399,6 +1397,26 @@ json GameAccess::snapshot(const json& targets) {
     }
     return result;
 }
+uint64_t GameAccess::encode_name_text(const json& value) const {
+            if(value.size()!=1 || !value.at("name").is_string())
+                throw HandlerError("invalid_name_argument","Text FName requires only {name:string}");
+            const auto& text=value.at("name").get_ref<const std::string&>();
+            if(text.find('\0')!=std::string::npos)
+                throw HandlerError("invalid_name_argument","Text FName cannot contain an embedded NUL");
+            std::wstring encoded;
+            if(!text.empty()) {
+                const auto length=static_cast<int>(text.size());
+                const auto units=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text.data(),length,nullptr,0);
+                if(!units)throw HandlerError("invalid_name_argument","Text FName contains invalid UTF-8");
+                encoded.resize(static_cast<size_t>(units));
+                if(MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text.data(),length,encoded.data(),units)!=units)
+                    throw HandlerError("invalid_name_argument","Text FName could not be converted to UTF-16");
+            }
+            uint64_t packed{};
+            if(!construct_name(base_+kNameConstruct,&packed,reinterpret_cast<const char16_t*>(encoded.c_str())))
+                throw HandlerError("name_constructor_fault","The FName constructor raised a native exception");
+            return packed;
+}
 scalar_struct_values::Snapshot GameAccess::capture_scalar_struct_parameter(uintptr_t field,int size,int dim) const {
     return scalar_struct_values::capture(field,size,dim,
         []<class Value>(uintptr_t address){return read<Value>(address);},
@@ -1568,14 +1586,16 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                 captured["aux"]={{"rotator",scalar_struct_snapshot_json(rotator)}};
                 rotator_public=scalar_struct_snapshot_json(rotator,false);supported=true;
             } else {
+                const bool output=!returned && vector_parameter_direction::classify(flags)==vector_parameter_direction::Direction::output;
                 if((returned && (flags&(kConstParm|kReferenceParm)))
-                   || (!returned && (flags&(kConstParm|kReferenceParm|0x100))))
-                    throw HandlerError("unsupported_signature","Scalar DTO requires input or return by value");
-                const auto scalar_struct=capture_scalar_struct_parameter(field,size,array_dim);
-                if(offset%scalar_struct.layout.min_alignment)
+                   || (!returned && !output && (flags&(kConstParm|kReferenceParm|0x100))))
+                    throw HandlerError("unsupported_signature","DTO requires input, return by value, or pure output");
+                const auto scalar_struct=capture_pod_struct_parameter(field,size,array_dim);
+                if(offset%scalar_struct.at("min_alignment").get<int>())
                     throw HandlerError("unsupported_scalar_struct_layout","The DTO offset does not match its reflected alignment");
-                captured["aux"]={{"scalar_struct",scalar_struct_snapshot_json(scalar_struct)}};
-                scalar_struct_public=scalar_struct_snapshot_json(scalar_struct,false);supported=true;
+                captured["aux"]={{"scalar_struct",scalar_struct}};
+                if(output)captured["aux"]["scalar_struct_output"]=true;
+                scalar_struct_public=pod_struct_metadata(scalar_struct);supported=true;
             }
         }
         else if(type=="StrProperty") {
@@ -1706,6 +1726,9 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
         }
         if(!scalar_struct_public.is_null()) {
             public_parameter["struct"]=scalar_struct_public;public_parameter["direction"]=returned?"return":"input";public_parameter["passing"]="value";
+            if(captured["aux"].contains("scalar_struct_output")) {
+                public_parameter["direction"]="output";public_parameter.erase("passing");public_parameter["argument_marker"]={{"out",true}};
+            }
         }
         parameters.push_back(std::move(public_parameter));
         return captured;
@@ -1757,8 +1780,8 @@ json GameAccess::capture_function_contract(void* object,uintptr_t owner,uintptr_
                 continue;
             }
             if(auxiliary.contains("scalar_struct")) {
-                const auto current=capture_scalar_struct_parameter(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>());
-                if(scalar_struct_snapshot_json(current)!=auxiliary.at("scalar_struct"))
+                const auto current=capture_pod_struct_parameter(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>());
+                if(current!=auxiliary.at("scalar_struct"))
                     throw HandlerError("signature_changed","The scalar DTO changed while reading the signature");
             } else if(auxiliary.contains("linear_color")) {
                 const auto current=capture_linear_color_parameter(field,captured.at("size").get<int>(),captured.at("array_dim").get<int>());
@@ -2019,24 +2042,7 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     auto encode_name=[&](uintptr_t field,int32_t field_offset,int32_t destination_offset,const json& value)->uint64_t {
         validate_name_argument_layout(read<int32_t>(field+0x34),read<int32_t>(field+0x30));
         if(value.is_object() && value.contains("name")) {
-            if(value.size()!=1 || !value.at("name").is_string())
-                throw HandlerError("invalid_name_argument","Text FName requires only {name:string}");
-            const auto& text=value.at("name").get_ref<const std::string&>();
-            if(text.find('\0')!=std::string::npos)
-                throw HandlerError("invalid_name_argument","Text FName cannot contain an embedded NUL");
-            std::wstring encoded;
-            if(!text.empty()) {
-                const auto length=static_cast<int>(text.size());
-                const auto units=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text.data(),length,nullptr,0);
-                if(!units)throw HandlerError("invalid_name_argument","Text FName contains invalid UTF-8");
-                encoded.resize(static_cast<size_t>(units));
-                if(MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,text.data(),length,encoded.data(),units)!=units)
-                    throw HandlerError("invalid_name_argument","Text FName could not be converted to UTF-16");
-            }
-            uint64_t packed{};
-            if(!construct_name(base_+kNameConstruct,&packed,reinterpret_cast<const char16_t*>(encoded.c_str())))
-                throw HandlerError("name_constructor_fault","The FName constructor raised a native exception");
-            return packed;
+            return encode_name_text(value);
         } else {
             const auto source=validated_name_argument(read<int32_t>(field+0x34),read<int32_t>(field+0x30),value,capture_name);
             name_inputs.push_back({field,field_offset,destination_offset,source});
@@ -2056,6 +2062,9 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
     struct TransformReturn {uintptr_t field{};int offset{};transform_layout::Snapshot layout;};
     std::optional<TransformReturn> transform_return;
     std::optional<scalar_struct_values::Snapshot> scalar_struct_return;
+    json pod_struct_return=nullptr;
+    struct PodStructOutput {uintptr_t field{};int offset{},size{};std::string key;json metadata;};
+    std::vector<PodStructOutput> pod_struct_outputs;
     json set_return_metadata=nullptr;
     json array_return_metadata=nullptr;
     json pod_function_contract=nullptr;
@@ -2143,10 +2152,10 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             ObjectArrayInput input{field,read<int32_t>(field+0x44),flags,key,metadata,{},{},{}};
             if(enum_array || scalar_array) {
                 input.stride=stride;input.scalar_bytes.resize(values.size()*input.stride);
-                std::optional<scalar_struct_values::Snapshot> structure;
+                json structure=nullptr;
                 if(scalar_array && metadata.at("scalar_type")=="StructProperty") {
-                    structure=capture_scalar_struct_parameter(metadata.at("inner").at("pointer").get<uintptr_t>(),static_cast<int>(stride),1);
-                    if(scalar_struct_snapshot_json(*structure)!=metadata.at("struct"))
+                    structure=capture_pod_struct_parameter(metadata.at("inner").at("pointer").get<uintptr_t>(),static_cast<int>(stride),1);
+                    if(structure!=metadata.at("struct"))
                         throw HandlerError("signature_changed","The input DTO array metadata changed while encoding its values");
                 }
                 size_t index{};
@@ -2157,8 +2166,8 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                     } else if(metadata.at("scalar_type")=="NameProperty") {
                         const auto encoded=encode_name(metadata.at("inner").at("pointer").get<uintptr_t>(),0,0,value);
                         std::memcpy(input.scalar_bytes.data()+index*input.stride,&encoded,sizeof(encoded));
-                    } else if(structure) {
-                        const auto encoded=scalar_struct_arguments::encode(structure->layout,value);
+                    } else if(!structure.is_null()) {
+                        const auto encoded=encode_pod_struct(structure,value);
                         std::memcpy(input.scalar_bytes.data()+index*input.stride,encoded.data(),encoded.size());
                     } else {
                         const auto& scalar_type=metadata.at("scalar_type");
@@ -2400,11 +2409,11 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
                 } else {
                     if(!contains_scalar_struct)throw HandlerError("signature_changed","The scalar DTO return appeared after reading the complete signature");
                     if(flags&(kConstParm|kReferenceParm))throw HandlerError("unsupported_signature","Const or reference DTO returns are unsupported");
-                    auto scalar_struct=capture_scalar_struct_parameter(field,size,read<int32_t>(field+0x30));
-                    if(offset%scalar_struct.layout.min_alignment
-                       || reinterpret_cast<uintptr_t>(buffer+offset)%static_cast<uintptr_t>(scalar_struct.layout.min_alignment))
+                    auto scalar_struct=capture_pod_struct_parameter(field,size,read<int32_t>(field+0x30));
+                    const auto alignment=scalar_struct.at("min_alignment").get<uintptr_t>();
+                    if(offset%alignment || reinterpret_cast<uintptr_t>(buffer+offset)%alignment)
                         throw HandlerError("unsupported_scalar_struct_layout","The DTO buffer does not match its reflected alignment");
-                    scalar_struct_return=std::move(scalar_struct);
+                    pod_struct_return=std::move(scalar_struct);
                 }
                 continue;
             }
@@ -2490,16 +2499,23 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             }
             if(structure_path!="/Script/CoreUObject.Vector") {
                 if(!contains_scalar_struct)throw HandlerError("signature_changed","The scalar DTO appeared after reading the complete signature");
-                if(flags&(kConstParm|kReferenceParm|0x100))
-                    throw HandlerError("unsupported_signature","Scalar DTO requires input by value");
+                const bool output=vector_parameter_direction::classify(flags)==vector_parameter_direction::Direction::output;
+                if(!output && (flags&(kConstParm|kReferenceParm|0x100)))
+                    throw HandlerError("unsupported_signature","DTO requires input by value or pure output");
                 const auto key=name(read<uint64_t>(field+0x20));
                 if(!arguments.contains(key))throw HandlerError("missing_argument","Scalar DTO argument is missing: "+key);
-                const auto scalar_struct=capture_scalar_struct_parameter(field,size,read<int32_t>(field+0x30));
-                if(offset%scalar_struct.layout.min_alignment
-                   || reinterpret_cast<uintptr_t>(buffer+offset)%static_cast<uintptr_t>(scalar_struct.layout.min_alignment))
+                const auto scalar_struct=capture_pod_struct_parameter(field,size,read<int32_t>(field+0x30));
+                const auto alignment=scalar_struct.at("min_alignment").get<uintptr_t>();
+                if(offset%alignment || reinterpret_cast<uintptr_t>(buffer+offset)%alignment)
                     throw HandlerError("unsupported_scalar_struct_layout","The DTO buffer does not match its reflected alignment");
-                const auto encoded=scalar_struct_arguments::encode(scalar_struct.layout,arguments.at(key));
-                std::memcpy(buffer+offset,encoded.data(),encoded.size());
+                if(output) {
+                    vector_parameter_direction::validate_output_marker(arguments.at(key));
+                    std::memset(buffer+offset,0,static_cast<size_t>(size));
+                    pod_struct_outputs.push_back({field,offset,size,key,scalar_struct});
+                } else {
+                    const auto encoded=encode_pod_struct(scalar_struct,arguments.at(key));
+                    std::memcpy(buffer+offset,encoded.data(),encoded.size());
+                }
                 ++input_count;continue;
             }
             if(!contains_vector)throw HandlerError("signature_changed","The FVector parameter appeared after reading the complete signature");
@@ -2864,6 +2880,20 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
             throw HandlerError("stale_handle","The target changed while copying the scalar output result");
     };
     auto decode_scalar_struct_return=[&] {
+        if(!pod_struct_return.is_null()) {
+            const auto field=pod_struct_return.at("pointer").get<uintptr_t>();
+            const auto size=pod_struct_return.at("element_size").get<int>();
+            const auto offset=pod_struct_return.at("offset").get<int>();
+            if(capture_pod_struct_parameter(field,size,1)!=pod_struct_return)
+                throw HandlerError("signature_changed","The DTO return metadata changed after the call");
+            std::vector<std::byte> copied(static_cast<size_t>(size));
+            if(!copy_memory(copied.data(),buffer+offset,copied.size()))
+                throw HandlerError("invalid_struct_copy","The DTO result could not be copied");
+            result=decode_pod_struct(pod_struct_return,copied);result_metadata=pod_struct_metadata(pod_struct_return);
+            if(capture_pod_struct_parameter(field,size,1)!=pod_struct_return)
+                throw HandlerError("signature_changed","The DTO metadata changed while copying the result");
+            return;
+        }
         if(!scalar_struct_return)return;
         const auto& saved=*scalar_struct_return;
         if(!same_serial_identity(serial_identity(invocation_identity),serial_identity(validate_object(object))))
@@ -2888,6 +2918,17 @@ json GameAccess::invoke(void* object,const std::string& function_name,const json
         };
         require_transform_result_contract();
         decode_vector_outputs();decode_color_outputs();decode_transform_return();decode_scalar_outputs();decode_scalar_struct_return();
+        for(const auto& output:pod_struct_outputs) {
+            if(capture_pod_struct_parameter(output.field,output.size,1)!=output.metadata)
+                throw HandlerError("signature_changed","The output DTO metadata changed after the call");
+            std::vector<std::byte> copied(static_cast<size_t>(output.size));
+            if(!copy_memory(copied.data(),buffer+output.offset,copied.size()))
+                throw HandlerError("invalid_struct_copy","The output DTO could not be copied");
+            out_parameters[output.key]=decode_pod_struct(output.metadata,copied);
+            out_parameter_metadata[output.key]=pod_struct_metadata(output.metadata);
+            if(capture_pod_struct_parameter(output.field,output.size,1)!=output.metadata)
+                throw HandlerError("signature_changed","The output DTO metadata changed while copying its value");
+        }
         for(const auto& output:array_outputs) {
             out_parameters[output.key]=output.metadata.contains("scalar_type")
                 ?read_scalar_array_return(output.field,reinterpret_cast<uintptr_t>(buffer+output.offset),output.metadata)

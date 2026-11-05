@@ -158,6 +158,11 @@ private:
     nlohmann::json read_scalar_array_return(std::uintptr_t field,std::uintptr_t address,const nlohmann::json& metadata);
     nlohmann::json read_struct(void* object, const std::string& handle, const std::string& property_name);
     nlohmann::json capture_read_value(std::uintptr_t field,int size,int dim) const;
+    nlohmann::json capture_pod_struct_parameter(std::uintptr_t field,int size,int dim) const;
+    static nlohmann::json pod_struct_metadata(const nlohmann::json& captured);
+    std::vector<std::byte> encode_pod_struct(const nlohmann::json& captured,const nlohmann::json& value) const;
+    nlohmann::json decode_pod_struct(const nlohmann::json& captured,std::span<const std::byte> copied);
+    std::uint64_t encode_name_text(const nlohmann::json& value) const;
     nlohmann::json decode_read_value(const nlohmann::json& metadata,std::span<const std::byte> copied,
                                     std::uintptr_t live_address,std::vector<std::pair<std::uintptr_t,ArrayHeader>>& copied_headers);
     vector_layout::Snapshot capture_vector_parameter(std::uintptr_t field,int size,int dim) const;

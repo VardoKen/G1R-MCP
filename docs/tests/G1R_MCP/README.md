@@ -1,5 +1,11 @@
 # Проверки G1R MCP: локальные инструменты и нативный маршрут
 
+## Текущие проверки dev.110 — 05.11.2026
+
+[Финальный live-цикл](../../../artifacts/dev110-typed-input-live-complete.json): accepted=true, **42/42 typed-вызовов**, **9/9 проверок**. DTO с nested Inner/FName Label/byte enum Mode: single input/return/pure output, array input/return и пустой/заполненный output приняты; рекурсивная metadata, значения и cleanup подтверждены. Прежние 37 сценариев сохранены. Marker 71→72→72→71, successful/failed reload, source/staging восстановлены, игра закрыта, заявка освобождена.
+
+[Первичная DLL-сборка](../../../artifacts/native-build-dev110.txt), [финальная DTO-сборка](../../../artifacts/native-build-dev110-final.txt) и [queue-сборка](../../../artifacts/native-build-dev110-queue.txt) прошли; [финальный bootstrap](../../../artifacts/python-bootstrap-dev110-final.txt) — **3/3, 6,020 с**, существующее ожидание каталога синхронизировано. Первичный цикл остановился на старом scalar-вызове из-за раннего `game_thread_busy`; отказ заменён обычным ожиданием очереди, финальный цикл принят. Полный новый Python/CTest-прогон не выполнялся. [Runtime-комплект](../../../artifacts/bridge-bundle-dev110/manifest.json): 79 payload-файлов, final manifest проверен. [Wheel](../../../artifacts/wheel-dev110/g1r_mcp-1.0.0.dev110-py3-none-any.whl) подготавливается; consumer-сеанс не повторяется. FString/custom lifecycle, nested name_from, inout и полный игровой API этим результатом не подтверждены.
+
 ## Текущие проверки dev.109 — 05.11.2026
 
 [Общий live-цикл](../../../artifacts/dev109-typed-input-live-complete.json): accepted=true, **37/37 typed-вызовов**, **9/9 проверок**. Шесть новых scalar roundtrip-типов Bool/Int64/UInt32/UInt64/Float/Double и шесть заполненных pure output-типов с пустым output-контролем приняты; Int32 сохранён. Reflection, bool field masks, числовые диапазоны (включая UInt64 MAX), значения и cleanup подтверждены. Прежние FName/enum/DTO-сценарии, marker 71→72→72→71 и successful/failed reload сохранены; source/staging восстановлены, игра закрыта, заявка освобождена.

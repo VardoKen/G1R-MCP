@@ -2,11 +2,14 @@
 #include "g1r_mcp/game_memory.hpp"
 #include "g1r_mcp/array_page.hpp"
 #include "g1r_mcp/scalar_struct_values.hpp"
+#include "g1r_mcp/scalar_arguments.hpp"
+#include "g1r_mcp/enum_arguments.hpp"
 #include "g1r_mcp/vector_arguments.hpp"
 #include "g1r_mcp/transform_arguments.hpp"
 #include "g1r_mcp/rotator_arguments.hpp"
 #include "g1r_mcp/linear_color_arguments.hpp"
 #include <functional>
+#include <cstring>
 #include <optional>
 #include <set>
 #include <span>
@@ -14,6 +17,133 @@
 namespace g1r_mcp {
 using json=nlohmann::json;
 using game_memory::read;
+namespace {
+scalar_outputs::Layout pod_scalar_layout(const json& captured) {
+    scalar_outputs::Layout layout{captured.at("type").get<std::string>(),captured.at("element_size").get<int>(),captured.at("array_dim").get<int>()};
+    if(layout.type=="BoolProperty") {
+        const auto& boolean=captured.at("boolean");
+        layout.field_size=boolean.at("field_size").get<uint8_t>();layout.byte_offset=boolean.at("byte_offset").get<uint8_t>();
+        layout.byte_mask=boolean.at("byte_mask").get<uint8_t>();layout.field_mask=boolean.at("field_mask").get<uint8_t>();
+    }
+    scalar_outputs::validate_layout(layout);return layout;
+}
+bool pod_numeric_type(const std::string& type) {
+    return type=="BoolProperty" || type=="IntProperty" || type=="Int64Property" || type=="UInt32Property"
+        || type=="UInt64Property" || type=="FloatProperty" || type=="DoubleProperty";
+}
+}
+json GameAccess::capture_pod_struct_parameter(uintptr_t field,int size,int dim) const {
+    auto captured=capture_read_value(field,size,dim);
+    std::function<void(json&)> complete;
+    complete=[&](json& current) {
+        if(current.contains("error"))throw HandlerError(current.at("error").at("code").get<std::string>(),current.at("error").at("message").get<std::string>());
+        const auto type=current.at("type").get<std::string>();
+        const auto bytes=current.at("element_size").get<int>();
+        if(type=="StructProperty") {
+            const auto& structure=current.at("structure");
+            current["struct_path"]=structure.at("path");current["struct_name"]=name(structure.at("identity").at("name").get<uint64_t>());
+            current["properties_size"]=structure.at("properties_size");current["min_alignment"]=structure.at("min_alignment");
+            auto& children=current.at("children");
+            if(children.empty())throw HandlerError("unsupported_scalar_struct_layout","A POD DTO requires own supported fields");
+            std::set<std::string> names;
+            for(size_t index=0;index<children.size();++index) {
+                auto& child=children[index];complete(child);
+                const auto offset=child.at("offset").get<int>(),child_size=child.at("element_size").get<int>();
+                if(child.at("name").get<std::string>().empty() || !names.insert(child.at("name").get<std::string>()).second
+                   || offset<0 || child_size>bytes || offset>bytes-child_size)
+                    throw HandlerError("unsupported_scalar_struct_layout","DTO fields duplicate names or exceed the struct size");
+                for(size_t previous=0;previous<index;++previous) {
+                    const auto& other=children[previous];const auto other_offset=other.at("offset").get<int>(),other_size=other.at("element_size").get<int>();
+                    if(offset>=other_offset+other_size || other_offset>=offset+child_size)continue;
+                    if(child.at("type")=="BoolProperty" && other.at("type")=="BoolProperty" && offset==other_offset
+                       && !(child.at("boolean").at("field_mask").get<uint8_t>()&other.at("boolean").at("field_mask").get<uint8_t>()))continue;
+                    throw HandlerError("unsupported_scalar_struct_layout","POD DTO fields overlap");
+                }
+            }
+        } else if(pod_numeric_type(type)) {
+            pod_scalar_layout(current);
+        } else if(type=="NameProperty") {
+            if(bytes!=8)throw HandlerError("unsupported_scalar_struct_layout","A DTO FName requires eight bytes");
+        } else if(type=="EnumProperty" || type=="ByteProperty") {
+            if(bytes!=1 || current.at("underlying_type")!="ByteProperty")
+                throw HandlerError("unsupported_enum_underlying_layout","A DTO enum requires one-byte ByteProperty values");
+            const auto layout=enum_layout(type,bytes,current.at("pointer").get<uintptr_t>());
+            if(type=="EnumProperty" || layout.object) {
+                const auto table=enum_table(layout.object);json entries=json::array();
+                for(const auto& entry:table.entries)entries.push_back({{"name",entry.name},{"label",name(entry.name)},{"value",entry.value}});
+                const auto pointer=reinterpret_cast<uintptr_t>(layout.object);
+                current["enum_table"]={{"path",table.path},{"underlying_type",layout.underlying_type},{"entries",std::move(entries)},
+                    {"data",read<uintptr_t>(pointer+0x40)},{"count",read<int32_t>(pointer+0x48)},{"capacity",read<int32_t>(pointer+0x4c)}};
+            }
+        } else throw HandlerError("unsupported_scalar_struct_layout","A POD DTO supports only own numeric, FName, byte enum, or nested DTO fields");
+    };
+    if(captured.at("type")!="StructProperty")throw HandlerError("unsupported_scalar_struct_layout","A POD DTO requires StructProperty");
+    complete(captured);return captured;
+}
+json GameAccess::pod_struct_metadata(const json& captured) {
+    json components=json::array();
+    for(const auto& child:captured.at("children")) {
+        json item={{"name",child.at("name")},{"type",child.at("type")},{"element_size",child.at("element_size")},
+            {"array_dim",child.at("array_dim")},{"offset",child.at("offset")}};
+        if(child.contains("boolean"))item["bool_layout"]=child.at("boolean");
+        if(child.at("type")=="StructProperty")item["struct"]=pod_struct_metadata(child);
+        if(child.contains("enum_table")) {
+            const auto& table=child.at("enum_table");json entries=json::array();
+            for(const auto& entry:table.at("entries"))entries.push_back({{"name",entry.at("label")},{"value",entry.at("value")}});
+            item["enum"]={{"path",table.at("path")},{"underlying_type",table.at("underlying_type")},{"entries",std::move(entries)}};
+        }
+        components.push_back(std::move(item));
+    }
+    return {{"struct_path",captured.at("struct_path")},{"struct_name",captured.at("struct_name")},
+        {"properties_size",captured.at("properties_size")},{"min_alignment",captured.at("min_alignment")},{"components",std::move(components)}};
+}
+std::vector<std::byte> GameAccess::encode_pod_struct(const json& captured,const json& value) const {
+    const auto& children=captured.at("children");
+    if(!value.is_object() || value.size()!=children.size())throw HandlerError("invalid_argument","A DTO requires exactly the reflected field names");
+    std::vector<std::byte> result(captured.at("element_size").get<size_t>(),std::byte{});
+    for(const auto& child:children) {
+        const auto& key=child.at("name").get_ref<const std::string&>();
+        if(!value.contains(key))throw HandlerError("invalid_argument","A DTO requires exactly the reflected field names");
+        const auto& input=value.at(key);const auto type=child.at("type").get<std::string>();
+        auto* destination=result.data()+child.at("offset").get<size_t>();
+        const auto write=[destination](auto number){std::memcpy(destination,&number,sizeof(number));};
+        if(type=="StructProperty") {
+            const auto encoded=encode_pod_struct(child,input);std::memcpy(destination,encoded.data(),encoded.size());
+        } else if(type=="NameProperty")write(encode_name_text(input));
+        else if(type=="EnumProperty" || type=="ByteProperty") {
+            const auto encoded=enum_arguments::encode_integer("ByteProperty",1,input);std::memcpy(destination,encoded.bytes.data(),encoded.size);
+        } else if(type=="BoolProperty") {
+            const auto layout=pod_scalar_layout(child);
+            if(!input.is_boolean())throw HandlerError("invalid_argument","A DTO boolean field is required");
+            auto& byte=destination[layout.byte_offset];const auto previous=std::to_integer<uint8_t>(byte);
+            byte=static_cast<std::byte>((previous&static_cast<uint8_t>(~layout.byte_mask))|(input.get<bool>()?layout.byte_mask:uint8_t{}));
+        } else if(type=="IntProperty")write(int32_argument(input));
+        else if(type=="Int64Property")write(int64_argument(input));
+        else if(type=="UInt32Property")write(uint32_argument(input));
+        else if(type=="UInt64Property")write(uint64_argument(input));
+        else if(type=="FloatProperty")write(float_argument(input));
+        else if(type=="DoubleProperty")write(double_argument(input));
+        else throw HandlerError("unsupported_scalar_struct_layout","The DTO field is unsupported");
+    }
+    return result;
+}
+json GameAccess::decode_pod_struct(const json& captured,std::span<const std::byte> copied) {
+    if(copied.size()!=captured.at("element_size").get<size_t>())throw HandlerError("invalid_struct_copy","The DTO copy size does not match reflection");
+    json result=json::object();
+    for(const auto& child:captured.at("children")) {
+        const auto type=child.at("type").get<std::string>();
+        const auto bytes=copied.subspan(child.at("offset").get<size_t>(),child.at("element_size").get<size_t>());
+        json value;
+        if(type=="StructProperty")value=decode_pod_struct(child,bytes);
+        else if(type=="NameProperty") {
+            uint64_t packed{};std::memcpy(&packed,bytes.data(),sizeof(packed));value=name(packed);
+        } else if(type=="EnumProperty" || type=="ByteProperty") {
+            uint8_t integer{};std::memcpy(&integer,bytes.data(),sizeof(integer));value=integer;
+        } else value=scalar_outputs::decode(pod_scalar_layout(child),bytes);
+        result[child.at("name").get_ref<const std::string&>()]=std::move(value);
+    }
+    return result;
+}
 json GameAccess::capture_read_value(uintptr_t field,int size,int dim) const {
     std::set<uintptr_t> active_structs,active_arrays;
     auto identity=[&](uintptr_t pointer) {

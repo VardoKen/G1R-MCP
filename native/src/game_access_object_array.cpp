@@ -67,9 +67,9 @@ nlohmann::json GameAccess::capture_scalar_array_parameter(std::uintptr_t field,i
                 {"element_size",element_size},{"array_dim",1},{"offset",0}}}}}};
         if(scalar_type=="BoolProperty")captured["public"]["element"]["bool_layout"]=captured.at("inner").at("bool_layout");
         if(scalar_type=="StructProperty") {
-            const auto structure=capture_scalar_struct_parameter(inner_pointer,element_size,1);
-            captured["struct"]=scalar_struct_snapshot_json(structure);
-            captured["public"]["element"]["struct"]=scalar_struct_snapshot_json(structure,false);
+            const auto structure=capture_pod_struct_parameter(inner_pointer,element_size,1);
+            captured["struct"]=structure;
+            captured["public"]["element"]["struct"]=pod_struct_metadata(structure);
         }
         return captured;
     };

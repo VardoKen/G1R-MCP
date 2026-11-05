@@ -1,5 +1,9 @@
 # История задач G1R MCP
 
+## 05.11.2026 — dev.110: собственные вложенные DTO
+
+Расширены существующие scalar_* контракты: own numeric/bool/FName/byte enum и вложенные own Struct для single input/return/output и array input/return/pure output. FName внутри DTO принимает `{name:string}`, custom lifecycle/FString не добавлены. Ранний `game_thread_busy` заменён обычным ожиданием очереди. [Финальная приёмка](../../../../artifacts/dev110-typed-input-live-complete.json): 42/42 typed-вызовов, 9/9 проверок; nested metadata/значения/cleanup и прежние 37 сценариев приняты. Marker/reload/восстановление, закрытие своей игры и освобождение заявки подтверждены. DLL-сборки и финальный bootstrap 3/3 прошли; runtime-комплект dev.110 проверен, wheel подготавливается. PLAN-001 R18 продолжается; следующий шаг — оставшиеся подтверждённые сигнатуры и критерии плана.
+
 ## 05.11.2026 — dev.109: базовые scalar-массивы
 
 Расширены input/return/pure output-массивы Bool/Int32/Int64/UInt32/UInt64/Float/Double по отражённым размерам и bool masks; старый int_array сохранён. [Live-приёмка](../../../../artifacts/dev109-typed-input-live-complete.json): 37/37 typed-вызовов, 9/9 проверок; шесть новых roundtrip-типов, заполненные/пустые outputs, числовые диапазоны и cleanup приняты. Прежние FName/enum/DTO, marker/reload/восстановление, закрытие своей игры и освобождение заявки сохранены. DLL-сборка и bootstrap 3/3 прошли; runtime-комплект dev.109 проверен, wheel подготавливается. PLAN-001 R18 продолжается; следующий шаг — оставшиеся подтверждённые сигнатуры и критерии плана.

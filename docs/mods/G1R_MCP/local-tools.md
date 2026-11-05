@@ -1,15 +1,15 @@
-# Локальные MCP-инструменты — 1.0.0-dev.109
+# Локальные MCP-инструменты — 1.0.0-dev.110
 
 Дата сверки: **04.11.2026**. Документ описывает текущую реализацию в `src/g1r_mcp/` и `native/src/`. Сервер использует официальный Python SDK `mcp==2.3.0`; в `server.py` зарегистрирован **51 инструмент**. Схемы аргументов задаёт регистрация MCP, а `g1r_capabilities` дополняет их происхождением данных, доступностью, форматами и ограничениями. Ответы и ошибки моста — на английском языке; проектная документация — на русском.
 
 Назначение G1R MCP — полноценное исследование, разработка и отладка официальных модов, а перенос пользовательских модов с UE4SS — промежуточный рубеж. Рабочие пакеты — официальные `GothicMod.json` и AngelScript. Каталог ниже описывает реализованные инструменты, а не завершение всей цели. Игровой маршрут, включая загрузку DLL и выполнение через Tick, описан в [native-route.md](native-route.md); сводка готового и неготового — в [README.md](README.md), доказательства — в [описании проверок](../../tests/G1R_MCP/README.md).
 
-Dev.109: базовые scalar-массивы Bool/Int32/Int64/UInt32/UInt64/Float/Double поддержаны в input/return/pure output. Шесть новых roundtrip-типов и заполненные/пустые output-контроли приняты; reflected bool masks и числовые диапазоны, включая UInt64 MAX, подтверждены. Cleanup сохранён. Общий цикл — 37/37 typed-вызовов и 9/9 проверок. [Подтверждения](../../../artifacts/dev109-typed-input-live-complete.json).
+Dev.110: собственные DTO с вложенным Inner, FName Label и однобайтовым enum Mode приняты: single input/return/output и array input/return/пустой/заполненный output. Рекурсивная metadata и cleanup подтверждены; FName внутри DTO принимает `{name:string}`. Ранний `game_thread_busy` заменён обычным ожиданием очереди. Общий цикл — 42/42 typed-вызовов и 9/9 проверок. [Подтверждения](../../../artifacts/dev110-typed-input-live-complete.json).
 
 
 ## Каталог 51 инструмента
 
-Рабочий runtime — **1.0.0-dev.109**, 51 инструмент. Базовые scalar-массивы и прежние FName/enum/DTO input/return/pure output приняты в одном live-цикле: 37/37 typed-вызовов, 9/9 итоговых проверок. [Результат dev.109](../../../artifacts/dev109-typed-input-live-complete.json).
+Рабочий runtime — **1.0.0-dev.110**, 51 инструмент. Собственные вложенные DTO с FName/enum и прежние scalar/FName/enum/DTO-сценарии приняты в одном live-цикле: 42/42 typed-вызовов, 9/9 итоговых проверок. [Результат dev.110](../../../artifacts/dev110-typed-input-live-complete.json).
 
 Dev.103: int32/FName input-массивы и собственные простые структуры с числовыми/bool-полями копируются в принадлежащий вызову буфер по повторно проверенной reflection-раскладке и identity. Направление input и передача value/const_reference определяются фактическими флагами: const reference с CPF_OutParm нормализуется как input. Поддержка чтения произвольного DTO не означает поддержку его как аргумента; FName-элемент принимает {name:string} или {name_from:{handle,property_name}}; текстовый FName создаётся с Number=0, источник name_from повторно проверяется. Другие элементы массива и вложенные структуры этой приёмкой не подтверждены.
 
@@ -147,7 +147,7 @@ Object/Class значения включают тип и session descriptor; Wea
 - FString — JSON string, by-value/const-reference input и возврат; выделенные engine buffers имеют отдельный учёт владения/очистки.
 - UObject/Class — `null` или `{"handle":"…"}`, с проверкой declared type/meta class.
 - FVector — input/const-reference, pure output и by-value return; FRotator/FTransform — input/const-reference и by-value return. FLinearColor — by-value input/return. FGameplayTag — input с единственным TagName через существующий FName, by-value/const-reference.
-- Массив собственной scalar DTO — value/const-reference input и by-value return с отражённым stride/alignment; own numeric/bool-поля, нулевой padding input, `items[].value` как JSON-объект и `result_metadata.element.struct`. Nested/string/custom lifecycle не поддержаны.
+- Собственная DTO и её массив — own numeric/bool/FName/byte enum и вложенные own Struct по рекурсивной reflection. Single DTO поддерживает by-value input/return и pure output; массив — value/const-reference input, by-value return и pure output. FName внутри DTO — `{name:string}`, без nested name_from; metadata содержит struct/enum/bool. FString/custom lifecycle и inout не поддержаны.
 - Базовые scalar-массивы Bool/Int32/Int64/UInt32/UInt64/Float/Double — input/return/pure output по отражённой ширине элемента и bool masks; exact integer ranges и finite float, старый int_array контракт сохранён.
 - TArray<int32>/TArray<FName>/однобайтовый enum — input и by-value return в подтверждённом layout; возврат `{items, total_count, partial}` копирует значения с проверкой metadata и очисткой контейнера. TArray<UObject> — const-reference input, by-value return и отдельный pure output; массив однобайтового enum — подтверждённый input. TSet<UObject> — by-value return. Контейнеры копируют pointers, не владеют самими UObject.
 - Scalar DTO — только by-value return с собственными отражёнными scalar-полями; это более узкий контракт, чем вложенное чтение состояния. Generic nested Struct/Array<Struct> invoke, Map, Weak/Soft/Optional и delegate-аргументы не добавлены.
