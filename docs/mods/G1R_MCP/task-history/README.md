@@ -1,5 +1,9 @@
 # История задач G1R MCP
 
+## 06.11.2026 — dev.114: готовый save-load, debugger и FString output
+
+[Общая live-приёмка](../../../../artifacts/dev114-save-debugger-typed-live.json) принята на Python/native dev.114: save loaded/MainMap/готовый персонаж, Continue и MoviePlayer finish, debugger locals/evaluate Sum 0→1/step_over/continue 6, 50/50 typed и 10/10 checks. Исправлены условие MoviePlayer allow-tick и отражённое имя BP_IsGameplayReady; pure output FString и mixed scalar return/output приняты. Reload 71→72→72→71, source/staging восстановлены, своя игра закрыта и заявка освобождена. CTest 39/39 PASS, 11,33 с; первичный Python: 740 тестов/394,235 с — 730 успешных/9 errors/1 dirty failure. Девять актуализированных методов затем приняты адресно, committed helper отдельно PASS; общего 740 PASS нет. [Installed wheel/runtime dev.114](../../../../artifacts/dev114-wheel-installed-acceptance.json) принят: 12 calls/9 checks, string-output metadata без запуска игры; bundle содержит 84 файла, wheel — 23 точных модуля. Э8 текущей приёмки завершена: измеренный stdio96 диапазон признан достаточным для последовательной разработки (17 объектов/561 поле,snapshot5141033байта,строки300000символов,max221,046/1079,454мс,dropped0/queue0/cleanup), без CPU/FPS/caps и переноса latency наHTTP114. PLAN-001 R18 активен по публичному Э9 и конкретным границам интерфейсов; публикации не было.
+
 ## 05.11.2026 — dev.113: загрузка сохранений и shared debugger
 
 Добавлены `g1r_save_list/load/status` и `g1r_modlist_dialog`: выбор профиля и слота из главного меню, прохождение нативного диалога несовпадения модов вне Tick, ожидание MoviePlayer и готового персонажа. Статус после тайм-аута повторно проверяет мир без повторной загрузки. Исправлены общий срок lookup/invoke и удержание блокировки при отмене подготовки меню. Добавлены восемь команд единого debugger-сеанса; breakpoint/stack/variables/continue подтверждены, evaluate `this` и step остаются открыты.

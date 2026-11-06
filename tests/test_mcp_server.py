@@ -135,7 +135,7 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
 
                         native.request.side_effect = boundary
                         listed = (await rpc(second, "tools/list", {}, two)).json()["result"]["tools"]
-                        self.assertEqual(len(listed), 51)
+                        self.assertEqual(len(listed), 64)
                         schemas = {item["name"]: item["inputSchema"] for item in listed}
                         self.assertEqual(set(schemas["g1r_watch_list"].get("properties", {})), {"timeout_seconds"})
                         self.assertEqual(set(schemas["g1r_watch_resume"]["properties"]), set(resume) | {"timeout_seconds"})
@@ -405,7 +405,7 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(initialized.server_info.version, __version__)
                     tools = (await client.list_tools()).tools
                     names = {tool.name for tool in tools}
-                    self.assertEqual(len(names), 51)
+                    self.assertEqual(len(names), 64)
                     self.assertTrue({"g1r_movieplayer_status", "g1r_movieplayer_finish"}.issubset(names))
                     self.assertIn("g1r_development_key", names)
                     source_tools = {"g1r_source_identity", "g1r_verify_source_game", "g1r_list_source_functions"}
@@ -421,6 +421,9 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                                  "g1r_development_start", "g1r_development_stop", "g1r_development_key", "g1r_native_load",
                                  "g1r_create_package_directory"}
                     mutations.update({"g1r_session_acquire", "g1r_session_release"})
+                    mutations.update({"g1r_save_list", "g1r_save_load", "g1r_modlist_dialog",
+                                      "g1r_debug_attach", "g1r_debug_detach", "g1r_debug_breakpoints",
+                                      "g1r_debug_control", "g1r_debug_evaluate"})
                     self.assertTrue(all(tool.annotations.read_only_hint for tool in tools if tool.name not in mutations))
                     self.assertFalse(next(tool for tool in tools if tool.name == "g1r_invoke").annotations.read_only_hint)
                     key_tool = next(tool for tool in tools if tool.name == "g1r_development_key")

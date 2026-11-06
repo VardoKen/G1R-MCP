@@ -258,13 +258,18 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     @server.tool(annotations=read_only)
     async def g1r_capabilities() -> dict[str, Any]:
         """Get the catalog of local tools and unavailable game groups."""
+        tool_contracts = build_tool_contracts(await server.list_tools())
+        contracts_by_name = {contract["name"]: contract for contract in tool_contracts}
         return {
             "catalog_revision": __version__,
             "catalog_revision_kind": "server_tool_contract",
-            "tool_contracts": build_tool_contracts(await server.list_tools()),
+            "tool_contracts": tool_contracts,
             "local_tools": [
                 {"name": name, "description": description, "implemented": True,
-                 "available": True, "effects": "read_only", "validation": "local_only"}
+                 "available": (None if contracts_by_name[name]["result"]["dynamic_fields"]
+                               and contracts_by_name[name]["context"]["requires"] else True),
+                 "effects": "read_only" if contracts_by_name[name]["effects"]["read_only"] else "runtime_state_change",
+                 "validation": "runtime_not_checked" if contracts_by_name[name]["result"]["dynamic_fields"] else "local_only"}
                 for name, description in LOCAL_TOOLS
             ],
             "native_tools": [{"name": name, "description": description, "implemented": True,
@@ -700,9 +705,21 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                            "max_utf16_units": 2147483646, "max_inputs": None,
                            "max_allocated_input_bytes": None, "embedded_nul_allowed": False,
                            "ownership": "engine_owned_copy", "by_value_input_supported": True,
-                           "out_supported": False, "inout_supported": False,
+                           "out_supported": True, "inout_supported": False,
                            "requires_signature_validation": True,
                            "availability": "requires_live_native_status_and_per_invoke_allocator_validation"},
+                "string_output": {"type": "FString", "property_type": "StrProperty", "argument_marker": {"out": True},
+                                  "direction": "output", "size": 16, "array_dim": 1, "min_alignment": 8,
+                                  "pure_output_only": True, "initial_buffer": "empty_string",
+                                  "const_supported": False, "reference_supported": False, "inout_supported": False,
+                                  "output_field": "out_parameters", "metadata_field": "out_parameter_metadata",
+                                  "output_keys": "reflected_parameter_name", "result_shape": "string",
+                                  "metadata_schema": {"type": "StrProperty", "element_size": 16, "array_dim": 1},
+                                  "layout_source": "saved_reflected_function_parameter", "values_copied": True,
+                                  "cleanup_fields": ["cleanup_confirmed", "string_output_cleanup_confirmed"],
+                                  "normal_output_cleanup_confirmed": True, "uncertain_construction_cleanup_confirmed": False,
+                                  "requires_signature_validation": True,
+                                  "availability": "requires_live_native_status_and_per_invoke_allocator_validation"},
                 "transform": {"type": "FTransform", "struct_path": "/Script/CoreUObject.Transform",
                               "modes": ["input", "const_reference_input"], "size": 96,
                               "reference_input_supported": True, "const_reference_required": True,

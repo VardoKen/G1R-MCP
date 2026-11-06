@@ -129,6 +129,15 @@ int main() {
             const auto cleanup=ledger.release([](std::uintptr_t){return true;});
             require(cleanup.confirmed && cleanup.released_count==1,"Подготовка без входов должна сохранять один return allocation");}
 
+        {Ledger ledger;ledger.prepare(1,3);ledger.add_input({0x1000,2,4},1);
+            const std::vector<StringHeader> outputs{{0x2000,2,4},{0,0,0},{0x1000,2,4}};
+            ledger.add_owned_range(outputs);ledger.add_return({0x3000,2,4});
+            std::vector<std::uintptr_t> calls;
+            const auto cleanup=ledger.release([&](std::uintptr_t pointer){calls.push_back(pointer);return true;});
+            require(cleanup.confirmed && calls==std::vector<std::uintptr_t>{0x1000,0x2000,0x3000},
+                    "Несколько FString output, empty и input alias должны освобождаться однократно вместе с return");
+            require(ledger.retained_count()==0,"Pure output не должен сохранять подтверждённые allocation");}
+
         for(const bool throws:{false,true}) {
             Ledger ledger;ledger.prepare(2);ledger.add_input({0x1000,2,4},1);ledger.add_input({0x2000,2,4},1);ledger.add_return({0x3000,2,4});
             std::vector<std::uintptr_t> calls;

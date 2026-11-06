@@ -38,7 +38,7 @@ inline bool same_header(const StringHeader& left, const StringHeader& right) noe
     return left.data == right.data && left.count == right.count && left.capacity == right.capacity;
 }
 
-// Records appear only after confirmed FString construction or return.
+// Records appear only after confirmed FString construction, return or pure output.
 // Ledger destruction releases nothing; uncertain ownership is quarantined.
 class Ledger {
 public:
@@ -49,9 +49,11 @@ public:
     Ledger& operator=(Ledger&&) = delete;
 
     // Allocate host memory before constructing the first engine FString.
-    void prepare(std::size_t input_count) {
+    void prepare(std::size_t input_count, std::size_t result_count = 1) {
+        if (input_count > allocations_.max_size() || result_count > allocations_.max_size() - input_count)
+            fail("string_lifetime_unknown", "FString ownership tracking exceeds its representable range");
         inputs_.resize(input_count);
-        allocations_.resize(input_count+1);
+        allocations_.resize(input_count+result_count);
     }
 
     void add_input(const StringHeader& header, std::size_t source_units) {

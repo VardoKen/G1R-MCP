@@ -1,15 +1,17 @@
-# Локальные MCP-инструменты — 1.0.0-dev.112
+# Локальные MCP-инструменты — 1.0.0-dev.114
 
-Дата сверки: **05.11.2026**. Документ описывает текущую реализацию в `src/g1r_mcp/` и `native/src/`. Сервер использует официальный Python SDK `mcp==2.3.0`; в `server.py` зарегистрирован **52 инструмента**. Схемы аргументов задаёт регистрация MCP, а `g1r_capabilities` дополняет их происхождением данных, доступностью, форматами и ограничениями. Ответы и ошибки моста — на английском языке; проектная документация — на русском.
+Дата сверки: **06.11.2026**. Документ описывает текущую реализацию в `src/g1r_mcp/` и `native/src/`. Сервер использует официальный Python SDK `mcp==2.3.0`; в `server.py` зарегистрировано **64 инструмента**. Схемы аргументов задаёт регистрация MCP, а `g1r_capabilities` дополняет их происхождением данных, доступностью, форматами и ограничениями. Ответы и ошибки моста — на английском языке; проектная документация — на русском.
 
 Назначение G1R MCP — полноценное исследование, разработка и отладка официальных модов, а перенос пользовательских модов с UE4SS — промежуточный рубеж. Рабочие пакеты — официальные `GothicMod.json` и AngelScript. Каталог ниже описывает реализованные инструменты, а не завершение всей цели. Игровой маршрут, включая загрузку DLL и выполнение через Tick, описан в [native-route.md](native-route.md); сводка готового и неготового — в [README.md](README.md), доказательства — в [описании проверок](../../tests/G1R_MCP/README.md).
 
 Dev.112: `g1r_debug_database` получил полную runtime-базу: 5 262 chunks, 20 151 types, 119 789 flat entries, 9 470 492 bytes, 1,394 с; settings type31/version5/float64=true, отдельного type33 не было. Общий cache принадлежит серверу; query не открывает TCP и работает после закрытия игры. Это raw debugger catalog, не доказательство UFunction-доступности или полного каталога собственных AS-пакетов. [Подтверждения](../../../artifacts/dev112-debug-database-live-complete.json).
 
 
-## Каталог 52 инструмента
+## Каталог 64 инструментов
 
-Python-сервер — **1.0.0-dev.112**, native DLL — **1.0.0-dev.111**, 52 инструмента. Полная debugger database и прежние 46/46 typed-вызовов, 9/9 итоговых проверок приняты. [Результат dev.112](../../../artifacts/dev112-debug-database-live-complete.json).
+Python/server и native DLL — **1.0.0-dev.114**. Live принял save loaded/MainMap/готовый персонаж, debugger locals/evaluate Sum/step_over/continue, 50/50 typed-вызовов, 10/10 checks и cleanup. CTest 39/39 пройден; Python: 730 исходных успешных + 9 актуализированных адресных методов + committed helper. Первичный прогон 740 тестов сохраняет ошибки, единого 740 PASS нет. Raw database dev.112 и installed wheel/runtime dev.114 приняты отдельно. [Live dev.114](../../../artifacts/dev114-save-debugger-typed-live.json), [database dev.112](../../../artifacts/dev112-debug-database-live-complete.json), [consumer dev.114](../../../artifacts/dev114-wheel-installed-acceptance.json).
+
+Э8 текущей приёмки завершена в подтверждённом контракте. Исторический stdio dev.96 диапазон принят для последовательной development-работы: 17 объектов/561 поле, snapshots по 5 141 033 байта, строки по 300 000 символов, максимум малых/объёмных запросов 221,046/1079,454 мс, dropped0/queue0/cleanup. Это не latency-гарантия HTTP dev.114; CPU/FPS не измерены, caps не вводятся. Точные замеры и границы — у [владельца проверок](../../tests/G1R_MCP/README.md).
 
 Dev.103: int32/FName input-массивы и собственные простые структуры с числовыми/bool-полями копируются в принадлежащий вызову буфер по повторно проверенной reflection-раскладке и identity. Направление input и передача value/const_reference определяются фактическими флагами: const reference с CPF_OutParm нормализуется как input. Поддержка чтения произвольного DTO не означает поддержку его как аргумента; FName-элемент принимает {name:string} или {name_from:{handle,property_name}}; текстовый FName создаётся с Number=0, источник name_from повторно проверяется. Другие элементы массива и вложенные структуры этой приёмкой не подтверждены.
 
@@ -20,7 +22,7 @@ Dev.103: int32/FName input-массивы и собственные просты
 | Инструмент | Аргументы | Назначение |
 | --- | --- | --- |
 | `g1r_status` | Нет | Версия, готовность сервера и настроенные корни; без проверки живой игры |
-| `g1r_capabilities` | Нет | Каталог 52 инструмента, bootstrap, форматы чтения/вызова и границы поддержки |
+| `g1r_capabilities` | Нет | Каталог 64 инструментов, bootstrap, форматы чтения/вызова и границы поддержки |
 | `g1r_debug_database` | `query=""`, `limit=100`, `offset=0`, `refresh=false`, `timeout=30.0` | Полная raw runtime-база debugger; explicit refresh подключается к listener один раз, query читает общий cache без TCP |
 | `g1r_source_identity` | Нет | Git-метаданные настроенного Modkit; отдельно от caller label `--source-revision` |
 | `g1r_verify_source_game` | `hash_executable=false` | Последовательное сравнение источников с установленной игрой; опциональный SHA-256 EXE |
@@ -29,6 +31,25 @@ Dev.103: int32/FName input-массивы и собственные просты
 | `g1r_read_source` | `relative_path`, `start_line=1`, `line_count=100` | Построчный просмотр официального исходника и SHA-256 полных байтов |
 | `g1r_read_source_exact` | `relative_path` | Полный UTF-8 исходник с сохранением BOM, CRLF и EOF |
 | `g1r_list_source_types` | `query=""`, `limit=50`, `offset=0`, `relative_path` | Лексические объявления class/struct/enum, namespace, исходное объявление и базовый тип |
+
+### Shared debugger и сохранения — 12
+
+| Инструмент | Аргументы | Назначение |
+| --- | --- | --- |
+| `g1r_debug_attach` | `timeout=5.0` | Подключить одну общую debugger-сессию к listener игры |
+| `g1r_debug_detach` | Нет | Отключить debugger и закрыть его соединение |
+| `g1r_debug_status` | Нет | Соединение, paused и последнее событие |
+| `g1r_debug_breakpoints` | `path`, `lines`, `module=""`, `timeout=5.0` | Заменить breakpoints выбранного скрипта/модуля |
+| `g1r_debug_control` | `action`, `timeout=5.0` | pause/continue/step_over/step_in/step_out; live принят step_over/continue |
+| `g1r_debug_stack` | `timeout=5.0` | Стек остановленного AngelScript |
+| `g1r_debug_variables` | `expression`, `timeout=5.0` | Переменные выбранного debugger-контекста, например `0:%local%` |
+| `g1r_debug_evaluate` | `expression`, `frame_id=0`, `timeout=5.0` | Значение выражения в остановленном frame; принят evaluate локальной Sum |
+| `g1r_save_list` | `profile_id=2` | Выбрать профиль в главном меню и вернуть сохранения |
+| `g1r_save_load` | `slot_name`, `profile_id=2`, `accept_mod_mismatch=true`, `timeout=120.0` | Один запрос загрузки, Continue/MoviePlayer и ожидание готового персонажа; live114 подтвердил loaded/MainMap |
+| `g1r_save_status` | Нет | Общий результат загрузки и поздняя проверка готовности без повторного StartLoadingSave |
+| `g1r_modlist_dialog` | `action="status"`, `process_id=null` | Проверить нативное окно несовпадения модов либо публиковать Continue |
+
+DebugSession и SaveLoading принадлежат общему серверу, отдельные процессы для чатов не создаются. Выбранный live debugger-цикл подтверждает locals/evaluate Sum/step_over/continue; произвольная арифметика, `this` и step_in/step_out этим сценарием не проверены. Save-маршрут требует страниц главного меню; dev.114 подтвердил loaded с BP_IsGameplayReady=true, gameplay reload этим не подтверждён.
 
 ### Рабочий пакет и экспорт — 11
 
@@ -164,7 +185,7 @@ Object/Class значения включают тип и session descriptor; Wea
 - **Реализовано и принято в игре:** выбранные native Tick/ProcessEvent контракты, чтение объектов и поддержанных значений, вложенные Struct/Array DTO, snapshots/watches; перезагрузка тел функций и два конкретных ScriptPatches подтверждены историческими игровыми пробами. Для нового вызова, пакета или патча требуется собственный результат.
 - **Реализовано локально:** каталог и чтение исходников, редактура/структурная проверка пакетов, построение ScriptPatches, экспорт и проверка ZIP. `valid_structure` и успешная запись не означают компиляцию, загрузку или применение патча.
 - **Механизм реализован, подтверждение результата неполно:** native compiler formatter, чтение предоставленного отчёта и staged-file hot reload. `compiler_api_available=true` не является API произвольной компиляции; `compiled=false`, `report_matches_runtime_compile=false` и неизвестная связь отчёта с SHA-256 сохраняются. Scripts-generation наблюдает успешный возврат reload, а не подтверждает компиляцию выбранных байтов.
-- **Диагностика реализована частично:** ошибки наблюдаемого AngelScript invoke и стек относятся к текущему `ProcessEvent`. Полная история runtime-ошибок и debugger с breakpoint/step/locals не реализованы этим каналом.
+- **Диагностика текущего invoke:** ошибки и стек относятся к текущему `ProcessEvent`, полной истории runtime-ошибок нет. Отдельный официальный debugger-канал подтвердил breakpoint/stack/locals/evaluate Sum/step_over/continue/detach в выбранном сценарии.
 - **Готового контракта нет:** произвольный eval/VM-компиляция, универсальный invoke вложенных DTO/контейнеров и общая delegate-подписка. Создание и cooking assets относятся к Unreal Editor; текстовая работа и экспорт существующего `Content/` их не заменяют.
 
 Полная сводка и источники доказательств находятся в [README.md](README.md) и [проверках](../../tests/G1R_MCP/README.md); исторические результаты не переносятся автоматически на новый API или каноническую DLL dev.99.

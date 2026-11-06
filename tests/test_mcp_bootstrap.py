@@ -75,6 +75,21 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(game.exists())
                     catalog = await self.call_ok(client, "g1r_capabilities")
                     contracts = {item["name"]: item for item in catalog["tool_contracts"]}
+                    local_tools = {item["name"]: item for item in catalog["local_tools"]}
+                    runtime_mutations = {"g1r_save_list", "g1r_save_load", "g1r_modlist_dialog",
+                                         "g1r_debug_attach", "g1r_debug_detach", "g1r_debug_breakpoints",
+                                         "g1r_debug_control", "g1r_debug_evaluate"}
+                    for name in runtime_mutations:
+                        self.assertEqual(local_tools[name]["effects"], "runtime_state_change")
+                        self.assertEqual(local_tools[name]["validation"], "runtime_not_checked")
+                    for name in ("g1r_save_list", "g1r_save_load", "g1r_debug_attach", "g1r_debug_stack"):
+                        self.assertIsNone(local_tools[name]["available"])
+                    for name in ("g1r_save_status", "g1r_debug_status"):
+                        self.assertTrue(local_tools[name]["available"])
+                        self.assertEqual(local_tools[name]["effects"], "read_only")
+                        self.assertEqual(local_tools[name]["validation"], "runtime_not_checked")
+                    self.assertEqual(local_tools["g1r_read_source"]["validation"], "local_only")
+                    self.assertTrue(local_tools["g1r_read_source"]["available"])
                     self.assertEqual(len(catalog["tool_contracts"]), len(tools))
                     self.assertEqual(set(contracts), set(tools))
                     for name, tool in tools.items():
@@ -168,6 +183,17 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIsNone(string_input["max_inputs"])
                     self.assertIsNone(string_input["max_allocated_input_bytes"])
                     self.assertEqual(string_input["max_utf16_units"], 2147483646)
+                    self.assertTrue(string_input["out_supported"])
+                    self.assertFalse(string_input["inout_supported"])
+                    string_output = catalog["invoke_arguments"]["string_output"]
+                    self.assertEqual(string_output["argument_marker"], {"out": True})
+                    self.assertTrue(string_output["pure_output_only"])
+                    self.assertTrue(all(not string_output[key] for key in
+                                        ("const_supported", "reference_supported", "inout_supported")))
+                    self.assertEqual((string_output["size"], string_output["array_dim"], string_output["min_alignment"]), (16, 1, 8))
+                    self.assertEqual(string_output["metadata_schema"], {"type": "StrProperty", "element_size": 16, "array_dim": 1})
+                    self.assertEqual(string_output["result_shape"], "string")
+                    self.assertEqual(string_output["cleanup_fields"], ["cleanup_confirmed", "string_output_cleanup_confirmed"])
                     array_input = catalog["invoke_arguments"]["object_array"]
                     self.assertIsNone(array_input["max_inputs"])
                     self.assertIsNone(array_input["max_allocated_input_bytes"])

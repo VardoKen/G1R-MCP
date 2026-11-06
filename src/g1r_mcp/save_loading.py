@@ -141,7 +141,7 @@ class SaveLoading:
                 for player in self._objects("PlayerCharacterBP_C", timeout=5.0):
                     if world_path and not player.get("path", "").startswith(world_path + "."):
                         continue
-                    if self._invoke(player, "IsGameplayReady", timeout=5.0).get("result") is True:
+                    if self._invoke(player, "BP_IsGameplayReady", timeout=5.0).get("result") is True:
                         result.update(state="loaded", world_loaded=True, player=player)
                         break
         except Exception as error:
@@ -250,7 +250,6 @@ class SaveLoading:
                         if movieplayer.get("active_wait"):
                             wait_id = movieplayer.get("wait_id")
                             if (movieplayer.get("loading_finished") is True
-                                    and movieplayer.get("caller_allow_engine_tick") is False
                                     and isinstance(wait_id, str) and wait_id
                                     and wait_id not in finish_attempted):
                                 finish_attempted.add(wait_id)
@@ -270,7 +269,7 @@ class SaveLoading:
                             for player in players:
                                 if world_path and not player.get("path", "").startswith(world_path + "."):
                                     continue
-                                player_ready = await asyncio.to_thread(self._invoke, player, "IsGameplayReady", timeout=min(5.0, max(0.001, deadline - time.monotonic())))
+                                player_ready = await asyncio.to_thread(self._invoke, player, "BP_IsGameplayReady", timeout=min(5.0, max(0.001, deadline - time.monotonic())))
                                 if player_ready.get("result") is True:
                                     if time.monotonic() >= deadline:
                                         result.update(state="loading_timeout")

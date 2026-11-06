@@ -174,6 +174,31 @@ class UG1RMCPTypedInputProbe : UObject
     }
 
     UFUNCTION(BlueprintCallable)
+    void WriteString(bool WithValue, FString&out Value)
+    {
+        Value = WithValue ? "Entry\nΩ" : "";
+    }
+
+    UFUNCTION(BlueprintCallable)
+    FString WriteAndReturnStrings(FString Input, FString&out First, FString&out Second)
+    {
+        First = Input;
+        Second = "";
+        return Input;
+    }
+
+    UFUNCTION(BlueprintCallable)
+    FString WriteStringsAndArray(FString&out First, FString&out Second, TArray<FString>&out Values)
+    {
+        First = "Entry";
+        Second = "";
+        Values.Empty();
+        Values.Add("Entry");
+        Values.Add("");
+        return "Entry";
+    }
+
+    UFUNCTION(BlueprintCallable)
     TArray<int64> EchoInt64Array(TArray<int64> Values)
     {
         TArray<int64> Result;

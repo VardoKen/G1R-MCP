@@ -94,7 +94,7 @@ class MCPHTTPWindowInputTests(unittest.IsolatedAsyncioTestCase):
                         claim = await tool(first, owner, "g1r_session_acquire", {"reason": "Проверка MoviePlayer Wait"})
                         self.assertTrue(claim["claimed"])
                         listed = (await rpc(second, "tools/list", {}, other)).json()["result"]["tools"]
-                        self.assertEqual(len(listed), 51)
+                        self.assertEqual(len(listed), 64)
                         tools = {item["name"]: item for item in listed}
                         self.assertTrue(tools["g1r_movieplayer_status"]["annotations"]["readOnlyHint"])
                         self.assertFalse(tools["g1r_movieplayer_finish"]["annotations"]["readOnlyHint"])
