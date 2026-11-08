@@ -54,16 +54,16 @@ void changes_limits_and_stop() {
     auto paged=model.read("owner",query(id,0,1));
     require(paged.at("truncated")==true && paged.at("cursor")==2,"Пагинация потеряла cursor");
     require(model.read("owner",query(id)).at("events").size()==2,"Чтение неожиданно опустошило буфер");
-    error("foreign_watch",[&]{model.read("other",query(id));});
-    error("watch_running",[&]{model.forget("owner",query(id));});
-    const auto stopped=model.stop("owner",query(id),31,6);
+    require(model.read("other",query(id))==events,"Another client could not read the existing watch");
+    error("watch_running",[&]{model.forget("other",query(id));});
+    const auto stopped=model.stop("other",query(id),31,6);
     require(stopped.at("cleanup_complete")==true && stopped.at("state")=="stopped","Остановка не подтверждена");
     const auto last=stopped.at("last_seq");
     model.stop("owner",query(id),32,7);
     require(model.read("owner",query(id)).at("last_seq")==last,"Повтор stop создал второе terminal");
     model.pump(90,8,[&](const json&){++calls;return snapshot(99);});
     require(calls==3,"Чтение после stop");
-    require(model.forget("owner",query(id)).at("forgotten")==true && model.size()==0,"Forget не очистил запись");
+    require(model.forget("another-client",query(id)).at("forgotten")==true && model.size()==0,"Another client could not forget the stopped watch");
     error("unknown_watch",[&]{model.read("owner",query(id));});
 }
 
@@ -101,13 +101,14 @@ void shared_connection_client_ownership() {
             && other.at("session_id")=="connection-2","Наблюдение должно публиковать native connection session");
     require(model.read("client-a",query(a_id)).at("events").size()==1
             && model.read("client-b",query(b_id)).at("events").size()==1,"Клиенты не прочитали собственные baseline");
-    error("foreign_watch",[&]{model.read("client-b",query(a_id));});
-    error("foreign_watch",[&]{model.stop("client-b",query(a_id),1,2);});
-    error("foreign_watch",[&]{model.forget("client-b",query(a_id));});
-    error("foreign_watch",[&]{model.read("connection-1",query(a_id));});
-    require(model.stop("client-a",query(a_id),1,2).at("state")=="stopped","Клиент не остановил своё наблюдение");
+    require(model.read("client-b",query(a_id)).at("client_owner")=="client-a"
+            && model.read("connection-1",query(a_id)).at("events").size()==1,
+            "Client metadata must not prevent reading a watch by id");
+    error("watch_running",[&]{model.forget("client-b",query(a_id));});
+    require(model.stop("client-b",query(a_id),1,2).at("state")=="stopped","Another client could not stop the watch");
     require(model.read("client-b",query(b_id)).at("state")=="running","Остановка клиента A затронула клиента B");
-    error("foreign_watch",[&]{model.forget("client-b",query(a_id));});
+    require(model.read("client-a",query(a_id)).at("state")=="stopped",
+            "The original client could not read a watch stopped by another client");
     model.disconnect("client-a");
     require(model.size()==3,"Disconnect должен проверять connection session, а не владельца клиента");
     model.disconnect("connection-1");
@@ -126,10 +127,13 @@ void shared_connection_client_ownership() {
     const auto legacy_id=legacy.at("watch_id").get<std::string>();
     require(legacy.at("session_id")=="legacy-session"
             && model.read("legacy-session",query(legacy_id)).at("state")=="running","Legacy owner=session изменился");
-    model.stop("legacy-session",query(legacy_id),21,6);
-    require(model.forget("legacy-session",query(legacy_id)).at("forgotten")==true && model.size()==0,
-            "Legacy stop и forget должны сохранять прежнее владение");
-    error("invalid_owner",[&]{model.start("connection-1","",params(),snapshot(1),0,1);});
+    model.stop("another-client",query(legacy_id),21,6);
+    require(model.forget("",query(legacy_id)).at("forgotten")==true && model.size()==0,
+            "Legacy watches must allow stop and forget by any client");
+    const auto anonymous=model.start("connection-1","",params(),snapshot(1),0,1);
+    require(anonymous.at("client_owner")=="" && anonymous.at("session_id")=="connection-1",
+            "Optional client metadata must not prevent creating a watch");
+    model.disconnect("connection-1");
 }
 
 void list_and_resume_without_restarting() {
@@ -157,11 +161,12 @@ void list_and_resume_without_restarting() {
             && model.read("client-b",query(id))==expected,"Resume изменил события или состояние running наблюдения");
     require(model.read("client-other",query(other_id))==other_before && model.size()==3,
             "Resume затронул другую запись или создал новую");
-    error("foreign_watch",[&]{model.read("client-a",query(id));});
-    error("foreign_watch",[&]{model.stop("client-a",query(id),6,2);});
-    error("foreign_watch",[&]{model.forget("client-a",query(id));});
+    require(model.read("client-a",query(id))==expected,
+            "Updating client metadata must not revoke access from another client");
+    error("watch_running",[&]{model.forget("client-a",query(id));});
     const auto after_resume=model.read("client-b",query(id));
-    error("watch_resume_mismatch",[&]{model.resume("connection-1","client-b",claim);});
+    require(model.resume("connection-1","client-b",claim)==resumed,
+            "Stale expected client metadata must not prevent repeating resume");
     require(model.list("connection-1","client-b").at("items")[0].at("client_owner")=="client-b"
             && model.read("client-b",query(id))==after_resume,"Неопределённый результат resume не виден в list или повтор мутирует запись");
     auto wrong_session=claim;wrong_session["expected_session_id"]="connection-2";
@@ -169,10 +174,19 @@ void list_and_resume_without_restarting() {
     auto current_claim=claim;current_claim["expected_client_owner"]="client-b";
     error("watch_resume_mismatch",[&]{model.resume("connection-2","client-c",current_claim);});
     auto malformed=current_claim;malformed.erase("expected_client_owner");
-    error("invalid_watch_params",[&]{model.resume("connection-1","client-c",malformed);});
+    require(model.resume("connection-1","client-b",malformed)==resumed,
+            "Resume must not require expected client metadata");
+    malformed["expected_client_owner"]=3;
+    require(model.resume("connection-1","client-b",malformed)==resumed,
+            "Legacy expected client metadata must not act as authorization");
     malformed=current_claim;malformed["expected_session_id"]=3;
     error("invalid_watch_params",[&]{model.resume("connection-1","client-c",malformed);});
-    error("invalid_owner",[&]{model.resume("connection-1","",current_claim);});
+    const auto anonymous=model.resume("connection-1","",current_claim);
+    expected=after_resume;expected["client_owner"]="";
+    require(anonymous.at("client_owner")=="" && model.read("client-a",query(id))==expected,
+            "Optional client metadata must not prevent resuming a watch");
+    require(model.resume("connection-1","client-b",{{"watch_id",id}})==resumed,
+            "Resume by watch id must preserve the current native connection lifecycle");
     require(model.read("client-b",query(id))==after_resume,"Отказ resume изменил запись");
     int calls=0;
     model.pump(14,2,[&](const json&){++calls;return snapshot(11);});
@@ -189,8 +203,10 @@ void list_and_resume_without_restarting() {
     expected=terminal_before;expected["client_owner"]="client-c";
     require(terminal.at("state")=="completed" && model.read("client-c",query(id))==expected,
             "Передача terminal записи изменила события или terminal состояние");
-    error("foreign_watch",[&]{model.read("client-b",query(id));});
-    error("foreign_watch",[&]{model.forget("client-b",query(id));});
+    require(model.read("client-b",query(id))==expected,
+            "The previous client could not read a terminal watch after a metadata update");
+    require(model.forget("client-b",query(id)).at("forgotten")==true,
+            "The previous client could not forget the terminal watch");
     auto final_claim=current_claim;final_claim["expected_client_owner"]="client-c";
     model.disconnect("connection-1");
     require(model.list("connection-1","client-c").at("items").empty() && model.size()==1,

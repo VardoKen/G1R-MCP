@@ -1,4 +1,4 @@
-"""MCP → TCP проверки реальных форм снимков и владения наблюдениями без игры."""
+"""MCP-to-TCP snapshot and shared-observation contracts without a game."""
 
 import copy
 import json
@@ -39,7 +39,7 @@ def watch_metadata(*, session="fixture-session-1", state="running", reason="", n
 
 
 class SessionNativeFixture:
-    """Заданный сценарий с потерей ответа и новым владельцем после reconnect."""
+    """Scripted responses with connection loss and shared client metadata."""
 
     def __init__(self, steps):
         self.steps = steps
@@ -96,13 +96,12 @@ class SessionNativeFixture:
                 parameters = dict(request.get("params", {}))
                 if step.get("session_owner") is True:
                     owner = parameters.pop("client_owner", None)
-                    if (not isinstance(owner, str) or not owner.startswith("local:0x")
-                            or not owner[8:] or any(character not in "0123456789abcdef" for character in owner[8:])):
-                        raise AssertionError("Не передан скрытый владелец stdio MCP-сессии")
+                    if owner != "shared_native_connection":
+                        raise AssertionError("The observation route did not use shared client metadata")
                     if self.watch_client_owner is None:
                         self.watch_client_owner = owner
                     elif owner != self.watch_client_owner:
-                        raise AssertionError(f"Владелец watch изменился внутри одной stdio MCP-сессии: {self.watch_client_owner!r} -> {owner!r}")
+                        raise AssertionError("The shared observation client metadata changed")
                 if request.get("protocol") != 1 or request.get("op") != step["op"] or parameters != step["params"]:
                     raise AssertionError(f"Неверный маршрут нативного запроса: {request}")
                 if not isinstance(request.get("id"), str) or not request["id"]:
@@ -320,7 +319,7 @@ class MCPObservationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(native.requests), 7)  # Сравнение выполняется на копиях без TCP.
             self.assertEqual(len({request["id"] for request in native.requests}), 7)
 
-    async def test_lost_start_is_not_retried_and_old_owner_is_not_reassigned(self):
+    async def test_lost_start_is_not_retried_and_old_native_connection_watch_is_unavailable(self):
         start_params = {"handle": "obj-1", "properties": ["Enabled"], "duration_ms": 1000,
                         "interval_ms": 20, "capacity": 32}
         status = {"version": "1.0.0-dev.6", "ready": True, "tick_count": 90,

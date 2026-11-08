@@ -1,5 +1,13 @@
 # Проверки G1R MCP: локальные инструменты и нативный маршрут
 
+## Общий доступ клиентов — 08.11.2026, dev.115
+
+Python/native **1.0.0-dev.115**, 64 инструмента. [Live-приёмка](../../../artifacts/dev115-cross-client-watch-live.json) принята: второй клиент читает, останавливает и забывает watch первого; resume со старыми owner metadata проходит. Session metadata необязательна, `control_required=false`, `ownership_enforced=false`; native-сессия и object/world/script validity сохраняются. Очистка подтверждена, игра закрыта.
+
+Затронутые проверки: **7 session unit tests PASS**, **9 HTTP control-модулей PASS**, **9 watch Python tests PASS**. [Первичный session/bootstrap](../../../artifacts/dev115-session-bootstrap-tests.txt): 20 тестов/32,264 с — 19 PASS и одна ошибка прежнего watch-контракта. После актуализации [этот метод](../../../artifacts/dev115-bootstrap-target-final.txt) прошёл за 3,024 с; [финальная optional watch_resume schema](../../../artifacts/dev115-bootstrap-final-schema.txt) — 1 PASS/4,019 с. Адресный HTTP optional-resume — 1 PASS/0,422 с. Native build PASS; [CTest native_observations](../../../artifacts/dev115-native-observations-tests.txt) — **1/1 PASS, 0,57 с**. Это адресные результаты; нового единого полного Python/CTest или повтора общей dev.114-приёмки не было.
+
+[Финальный installed wheel consumer](../../../artifacts/dev115-wheel-installed-acceptance.json) принят после синхронизации последних server/catalog-модулей: версия dev.115, **12 calls, 9 checks и 7 metadata checks**, 64 инструмента, точные модули вне checkout, source/package/runtime recipe. Проверены optional watch_resume metadata, только watch_id как обязательный аргумент и отсутствие session-state gate в control-контрактах. HTTP/native-порты закрыты.
+
 ## Продолжение приёмки — 06.11.2026
 
 Python/server и native DLL — **dev.114**. [Общая live-приёмка](../../../artifacts/dev114-save-debugger-typed-live.json) имеет **accepted=true**, **50/50 typed-вызовов**, **10/10 checks**. Четыре новые проверки pure output FString и mixed scalar return/output приняты, прежние сценарии сохранены; очистка строк/массивов подтверждена. Save-load из главного меню завершился `state=loaded`, `world_loaded=true`, MainMap и `BP_IsGameplayReady=true` у персонажа PersistentLevel. Continue опубликован, адресный movieplayer_finish для wait329 завершился и при `caller_allow_engine_tick=true`; временный native_timeout сохранён в observation_errors и не помешал результату. Debugger подтвердил breakpoint/stack/locals, evaluate Sum0→1 после step_over и continue6. Reload marker71→72→72→71, успешная/ошибочная/восстановленная фазы и source/staging подтверждены. Своя игра закрыта, заявка освобождена.

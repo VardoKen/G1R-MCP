@@ -93,11 +93,11 @@ _CONTRACTS = {
     "g1r_compare_snapshots": _entry("client_supplied_snapshot_copies", ("caller_supplied_snapshot_copies",),
                                      "src/g1r_mcp/snapshots.py:compare_snapshots",
                                      ("source", "validation", "provenance", "comparable", "items", "coverage", "truncated")),
-    "g1r_session_status": _entry("shared_game_claim", (), "src/g1r_mcp/session_ownership.py:SessionOwnership.status",
-                                  ("claimed", "claim", "disconnect_releases_claim", "automatic_game_stop")),
-    "g1r_session_acquire": _entry("shared_game_claim", ("mcp_client_identity", "available_game_claim"),
+    "g1r_session_status": _entry("optional_development_session_metadata", (), "src/g1r_mcp/session_ownership.py:SessionOwnership.status",
+                                  ("claimed", "claim", "control_required", "ownership_enforced", "disconnect_releases_claim", "automatic_game_stop")),
+    "g1r_session_acquire": _entry("optional_development_session_metadata", (),
                                    "src/g1r_mcp/session_ownership.py:SessionOwnership.acquire", ("claimed", "claim")),
-    "g1r_session_release": _entry("shared_game_claim", ("own_claim_or_abandoned_claim_with_empty_process_snapshot",),
+    "g1r_session_release": _entry("optional_development_session_metadata", (),
                                    "src/g1r_mcp/session_ownership.py:SessionOwnership.release",
                                    ("released", "previous_claim", "game_stopped")),
     "g1r_compile_diagnostics": _entry("compiler_diagnostic_text", ("workspace_package",
@@ -112,30 +112,30 @@ _CONTRACTS = {
                                           "src/g1r_mcp/development.py:DevelopmentService.process_state",
                                           ("processes", "running", "source", "launch_observation")),
     "g1r_development_start": _entry("game_process_and_development_staging", ("workspace_package", "expected_manifest_hash",
-                                                                          "windows", "http_game_claim", "exact_process_if_restart"),
+                                                                          "windows", "exact_process_if_restart"),
                                       "src/g1r_mcp/development.py:DevelopmentService.start",
                                       ("state", "manifest_sha256", "package_name", "tool_result", "compiled", "outcome_unknown"),
-                                      state_tools=("g1r_development_processes", "g1r_session_status")),
-    "g1r_apply_staged_file": _entry("active_staging_file", ("workspace_package", "windows", "exact_expected_process", "http_game_claim"),
+                                      state_tools=("g1r_development_processes",)),
+    "g1r_apply_staged_file": _entry("active_staging_file", ("workspace_package", "windows", "exact_expected_process"),
                                      "src/g1r_mcp/development.py:DevelopmentService.apply_staged_file",
                                      ("package_path", "file_path", "written", "created", "bytes", "sha256", "validation",
                                       "source_package_path", "staged_package_path", "source_sha256", "staged_before_sha256",
                                       "process", "launch_id", "source_modified", "hot_reload", "compiled", "runtime_validation"),
-                                     state_tools=("g1r_development_processes", "g1r_session_status")),
-    "g1r_development_stop": _entry("game_process", ("windows", "exact_expected_process", "http_game_claim"),
+                                     state_tools=("g1r_development_processes",)),
+    "g1r_development_stop": _entry("game_process", ("windows", "exact_expected_process"),
                                      "src/g1r_mcp/development.py:DevelopmentService.stop",
                                      ("state", "process", "tool_result", "outcome_unknown", "stop_reason"),
-                                     state_tools=("g1r_development_processes", "g1r_session_status")),
+                                     state_tools=("g1r_development_processes",)),
     "g1r_development_key": _entry("game_window_message_queue", ("windows", "exact_expected_process",
-                                                               "unique_or_exact_expected_window", "http_game_claim"),
+                                                               "unique_or_exact_expected_window"),
                                     "src/g1r_mcp/window_input.py:queue_key",
                                     ("status", "process", "selected_hwnd", "window_thread_id", "virtual_key", "messages",
                                      "handling_confirmed", "outcome_unknown", "do_not_retry"),
-                                    state_tools=("g1r_development_processes", "g1r_session_status")),
-    "g1r_native_load": _entry("game_process_modules", ("windows", "exact_expected_process", "expected_dll_hash", "http_game_claim"),
+                                    state_tools=("g1r_development_processes",)),
+    "g1r_native_load": _entry("game_process_modules", ("windows", "exact_expected_process", "expected_dll_hash"),
                                "src/g1r_mcp/development.py:DevelopmentService.load_native",
                                ("state", "process", "dll_sha256", "game_ready", "outcome_unknown"),
-                               state_tools=("g1r_development_processes", "g1r_session_status")),
+                               state_tools=("g1r_development_processes",)),
     "g1r_native_status": _entry("native_process_metadata", ("native_tcp_channel",),
                                  "native/src/game_access.cpp:GameAccess::status", _NATIVE_STATUS),
     "g1r_native_enable": _entry("native_hooks_and_tick_queue", ("native_tcp_channel", "compatible_loaded_dll"),
@@ -151,11 +151,11 @@ _CONTRACTS = {
          "game_calls_on_status", "ordinary_tick_ready", "session_id", "process_id", "protocol")),
     "g1r_movieplayer_finish": _entry(
         "movieplayer_wait_finish", ("native_tcp_channel", "loaded_movieplayer_hooks", "matching_observed_wait_id",
-                                  "loading_finished_at_platform_service", "http_game_claim"),
+                                  "loading_finished_at_platform_service"),
         "native/src/game_access.cpp:GameAccess::request_movieplayer_finish",
         ("source", "wait_id", "thread_id", "loading_finished", "finish_call_completed",
          "session_id", "process_id", "protocol"),
-        state_tools=("g1r_movieplayer_status", "g1r_session_status")),
+        state_tools=("g1r_movieplayer_status",)),
 }
 
 for _name, _implementation, _fields, _dynamic in (
@@ -192,19 +192,19 @@ for _name, _method, _fields in (
     ("g1r_watch_stop", "stop", _WATCH),
     ("g1r_watch_forget", "forget", ("watch_id", "forgotten", "cleanup_complete")),
 ):
-    _requires = ("native_tcp_channel", "current_game_tick", "mcp_client_observation_owner")
-    _requires += (("current_native_session_object_handles",) if _method == "start" else ("owned_watch_id",))
+    _requires = ("native_tcp_channel", "current_game_tick")
+    _requires += (("current_native_session_object_handles",) if _method == "start" else ("existing_watch_id",))
     _CONTRACTS[_name] = _entry("native_observation" if _method != "read" else "observation_event_copies",
                                _requires, "native/src/observations.cpp:Observations::" + _method,
                                _fields, dynamic=_method == "read", state_tools=("g1r_native_status",))
 
 _CONTRACTS["g1r_watch_list"] = _entry(
-    "current_native_connection_observation_metadata", ("native_tcp_channel", "current_game_tick", "mcp_client_identity"),
+    "current_native_connection_observation_metadata", ("native_tcp_channel", "current_game_tick"),
     "native/src/observations.cpp:Observations::list", ("session_id", "current_client_owner", "items"),
     dynamic=True, state_tools=("g1r_native_status",))
 _CONTRACTS["g1r_watch_resume"] = _entry(
-    "native_observation_owner", ("native_tcp_channel", "current_game_tick", "mcp_client_identity",
-                                 "existing_watch_id", "expected_native_session_id", "expected_previous_client_owner"),
+    "native_observation_client_metadata", ("native_tcp_channel", "current_game_tick", "existing_watch_id",
+                                           "matching_native_session_if_supplied"),
     "native/src/observations.cpp:Observations::resume", _WATCH, state_tools=("g1r_native_status", "g1r_watch_list"))
 
 

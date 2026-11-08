@@ -4,9 +4,27 @@ build-backend = "hatchling.build"
 
 [project]
 name = "g1r-mcp"
-version = "1.0.0-dev.114"
+version = "1.0.0-dev.115"
 description = "Gothic 1 Remake mod development tools through MCP"
-readme = "README.md"
+readme = {text = """
+# G1R MCP
+
+MCP tools for researching, developing, and debugging official Gothic 1 Remake
+mods built with GothicMod.json and AngelScript.
+
+Install the Python package in a Python 3.11+ environment. The native runtime
+bundle, official G1R Modkit, and installed game are configured separately.
+
+Start one shared server for all clients:
+
+    g1r-mcp --transport streamable-http --host 127.0.0.1 --port 27124 --modkit-root <modkit> --workspace-root <workspace> --runtime-root <runtime> --game-root <game>
+
+Connect MCP clients to http://127.0.0.1:27124/mcp and begin with g1r_status and
+g1r_capabilities. These tools do not start the game or check its live state.
+Development-session records are optional information; they do not authorize
+game control. Any client can read, stop, or forget a watch by its watch_id.
+The native runtime bundle includes installation and development instructions.
+""", content-type = "text/markdown"}
 requires-python = ">=3.11"
 dependencies = ["mcp==2.3.0"]
 

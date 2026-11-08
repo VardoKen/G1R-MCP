@@ -14,7 +14,6 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.server.transport_security import TransportSecuritySettings
 
 from g1r_mcp import __version__
-from g1r_mcp.native_client import NativeError
 from g1r_mcp.server import create_server
 from tests.test_mcp_observations import watch_metadata
 
@@ -46,7 +45,7 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self._asyncioRunner.get_loop().slow_callback_duration = 2.0
 
-    async def test_lost_start_list_and_explicit_resume_transfer_watch_to_new_http_owner(self):
+    async def test_lost_start_is_readable_by_another_http_client_before_optional_resume(self):
         metadata = {**watch_metadata(state="expired", reason="duration_elapsed", next_seq=3),
                     "watch_id": "watch-lost", "started_ms": 55}
         events = [{"seq": 2, "kind": "terminal", "reason": "duration_elapsed"}]
@@ -100,7 +99,7 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                                                  base_url="http://127.0.0.1:27124") as second:
                         one, two = await initialize(first, "lost-start-owner"), await initialize(second, "resume-owner")
                         self.assertNotEqual(one, two)
-                        owner_a, owner_b = "http:" + one, "http:" + two
+                        owner_a = owner_b = "shared_native_connection"
                         lost_metadata = {**metadata, "client_owner": owner_a}
                         started_metadata = {**lost_metadata, "state": "running", "reason": "", "cleanup_complete": False,
                                             "next_seq": 1, "last_seq": 0, "oldest_seq": 1}
@@ -108,18 +107,21 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                         start = {"handle": "obj-lost", "properties": ["Enabled"], "duration_ms": 1000,
                                  "interval_ms": 20, "capacity": 2}
                         resume = {"watch_id": "watch-lost", "expected_session_id": metadata["session_id"],
-                                  "expected_client_owner": owner_a}
+                                  "expected_client_owner": "legacy-client-metadata"}
                         read = {"watch_id": "watch-lost", "after_seq": 0, "limit": 100}
                         terminal = {**resumed_metadata, "events": events, "cursor": 2, "gap": False, "truncated": False}
                         expected = [
                             ("watch_start", {**start, "client_owner": owner_a}, started_metadata),
                             ("watch_list", {"client_owner": owner_b}, {"session_id": metadata["session_id"],
                                 "current_client_owner": owner_b, "items": [lost_metadata]}),
+                            ("watch_read", {**read, "client_owner": owner_b}, terminal),
+                            ("watch_resume", {"watch_id": "watch-lost", "client_owner": owner_b}, resumed_metadata),
+                            ("watch_resume", {"watch_id": "watch-lost", "client_owner": owner_b}, resumed_metadata),
                             ("watch_resume", {**resume, "client_owner": owner_b}, resumed_metadata),
                             ("watch_list", {"client_owner": owner_b}, {"session_id": metadata["session_id"],
                                 "current_client_owner": owner_b, "items": [resumed_metadata]}),
                             ("watch_read", {**read, "client_owner": owner_b}, terminal),
-                            ("watch_read", {**read, "client_owner": owner_a}, None),
+                            ("watch_read", {**read, "client_owner": owner_a}, terminal),
                             ("watch_forget", {"watch_id": "watch-lost", "client_owner": owner_b},
                                 {"watch_id": "watch-lost", "forgotten": True, "cleanup_complete": True}),
                         ]
@@ -129,8 +131,6 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                             planned_operation, planned_parameters, result = expected[len(observed)]
                             self.assertEqual((operation, parameters), (planned_operation, planned_parameters))
                             observed.append((operation, parameters))
-                            if result is None:
-                                raise NativeError("foreign_watch", "Наблюдение принадлежит новому владельцу")
                             return result
 
                         native.request.side_effect = boundary
@@ -139,6 +139,9 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                         schemas = {item["name"]: item["inputSchema"] for item in listed}
                         self.assertEqual(set(schemas["g1r_watch_list"].get("properties", {})), {"timeout_seconds"})
                         self.assertEqual(set(schemas["g1r_watch_resume"]["properties"]), set(resume) | {"timeout_seconds"})
+                        self.assertEqual(schemas["g1r_watch_resume"].get("required"), ["watch_id"])
+                        for legacy in ("expected_session_id", "expected_client_owner"):
+                            self.assertIsNone(schemas["g1r_watch_resume"]["properties"][legacy]["default"])
                         for name in ("g1r_watch_list", "g1r_watch_resume"):
                             for hidden in ("ctx", "client_owner", "new_owner"):
                                 self.assertNotIn(hidden, schemas[name].get("properties", {}))
@@ -147,20 +150,20 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(lossy.discarded, started_metadata)
                         discovered = await tool(second, two, "g1r_watch_list")
                         self.assertEqual(discovered["items"], [lost_metadata])
+                        self.assertEqual(await tool(second, two, "g1r_watch_read", {"watch_id": "watch-lost"}), terminal)
+                        self.assertEqual(await tool(second, two, "g1r_watch_resume", {"watch_id": "watch-lost"}), resumed_metadata)
+                        self.assertEqual(await tool(second, two, "g1r_watch_resume", {
+                            "watch_id": "watch-lost", "expected_session_id": None, "expected_client_owner": None}), resumed_metadata)
                         transferred = await tool(second, two, "g1r_watch_resume", resume)
                         self.assertEqual(transferred, resumed_metadata)
                         self.assertEqual({key: value for key, value in transferred.items() if key != "client_owner"}, metadata)
                         self.assertEqual((await tool(second, two, "g1r_watch_list"))["items"], [resumed_metadata])
                         self.assertEqual(await tool(second, two, "g1r_watch_read", {"watch_id": "watch-lost"}), terminal)
-                        result = (await rpc(first, "tools/call", {"name": "g1r_watch_read", "arguments": {
-                            "watch_id": "watch-lost"}}, one)).json()["result"]
-                        self.assertTrue(result.get("isError", False), result)
-                        text = "\n".join(item.get("text", "") for item in result["content"])
-                        self.assertEqual(json.loads(text[text.index("{"):])["code"], "foreign_watch")
+                        self.assertEqual(await tool(first, one, "g1r_watch_read", {"watch_id": "watch-lost"}), terminal)
                         self.assertTrue((await tool(second, two, "g1r_watch_forget", {"watch_id": "watch-lost"}))["forgotten"])
                         self.assertEqual(len(observed), len(expected))
                         self.assertEqual(sum(operation == "watch_start" for operation, _ in observed), 1)
-                        self.assertEqual(sum(operation == "watch_resume" for operation, _ in observed), 1)
+                        self.assertEqual(sum(operation == "watch_resume" for operation, _ in observed), 3)
                         self.assertFalse(any(operation == "watch_stop" for operation, _ in observed))
                         for client, session in ((first, one), (second, two)):
                             deleted = await client.delete("/mcp", headers={"Mcp-Session-Id": session,
@@ -172,7 +175,7 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(source.read_bytes(), original)
             self.assertEqual(list(workspace.iterdir()), [])
 
-    async def test_lost_http_stop_response_keeps_session_terminal_result_and_other_watch(self):
+    async def test_lost_http_stop_response_remains_readable_and_removable_by_another_client(self):
         started_a = {**watch_metadata(), "watch_id": "watch-a"}
         started_b = {**watch_metadata(), "watch_id": "watch-b"}
         stopped_a = {**watch_metadata(state="stopped", reason="explicit_stop", next_seq=3), "watch_id": "watch-a"}
@@ -236,7 +239,7 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                                                  base_url="http://127.0.0.1:27124") as second:
                         one, two = await initialize(first, "watch-loss-a"), await initialize(second, "watch-loss-b")
                         self.assertNotEqual(one, two)
-                        owner_a, owner_b = "http:" + one, "http:" + two
+                        owner_a = owner_b = "shared_native_connection"
                         start = {"properties": ["Enabled"], "duration_ms": 1000, "interval_ms": 20, "capacity": 2}
                         query_a = {"watch_id": "watch-a", "after_seq": 0, "limit": 100}
                         query_b = {"watch_id": "watch-b", "after_seq": 0, "limit": 100}
@@ -246,10 +249,9 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                             ("watch_stop", {"watch_id": "watch-a", "client_owner": owner_a}, stopped_a),
                             ("watch_read", {**query_a, "client_owner": owner_a}, terminal_a),
                             ("watch_read", {**query_b, "client_owner": owner_b}, running_b),
-                            ("watch_read", {**query_a, "client_owner": owner_b}, None),
-                            ("watch_stop", {"watch_id": "watch-a", "client_owner": owner_b}, None),
-                            ("watch_forget", {"watch_id": "watch-a", "client_owner": owner_b}, None),
-                            ("watch_forget", {"watch_id": "watch-a", "client_owner": owner_a}, forgotten_a),
+                            ("watch_read", {**query_a, "client_owner": owner_b}, terminal_a),
+                            ("watch_stop", {"watch_id": "watch-a", "client_owner": owner_b}, stopped_a),
+                            ("watch_forget", {"watch_id": "watch-a", "client_owner": owner_b}, forgotten_a),
                             ("watch_read", {**query_b, "client_owner": owner_b}, running_b),
                         ]
                         observed = []
@@ -258,8 +260,6 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                             planned_operation, planned_parameters, result = expected[len(observed)]
                             self.assertEqual((operation, parameters), (planned_operation, planned_parameters))
                             observed.append((operation, parameters))
-                            if result is None:
-                                raise NativeError("foreign_watch", "Наблюдение принадлежит другому владельцу")
                             return result
 
                         native.request.side_effect = boundary
@@ -275,12 +275,9 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                                                      base_url="http://127.0.0.1:27124") as resumed:
                             self.assertEqual(await tool(resumed, one, "g1r_watch_read", {"watch_id": "watch-a"}), terminal_a)
                             self.assertEqual(await tool(second, two, "g1r_watch_read", {"watch_id": "watch-b"}), running_b)
-                            for name in ("g1r_watch_read", "g1r_watch_stop", "g1r_watch_forget"):
-                                result = await rpc(second, "tools/call", {"name": name, "arguments": {"watch_id": "watch-a"}}, two)
-                                self.assertTrue(result.get("isError", False), result)
-                                text = "\n".join(item.get("text", "") for item in result["content"])
-                                self.assertEqual(json.loads(text[text.index("{"):])["code"], "foreign_watch")
-                            self.assertEqual(await tool(resumed, one, "g1r_watch_forget", {"watch_id": "watch-a"}), forgotten_a)
+                            self.assertEqual(await tool(second, two, "g1r_watch_read", {"watch_id": "watch-a"}), terminal_a)
+                            self.assertEqual(await tool(second, two, "g1r_watch_stop", {"watch_id": "watch-a"}), stopped_a)
+                            self.assertEqual(await tool(second, two, "g1r_watch_forget", {"watch_id": "watch-a"}), forgotten_a)
                             self.assertEqual(await tool(second, two, "g1r_watch_read", {"watch_id": "watch-b"}), running_b)
                             self.assertEqual(initializations, 2)
                             for client, session in ((resumed, one), (second, two)):
@@ -288,15 +285,15 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                                     "Accept": "application/json, text/event-stream"})
                                 self.assertEqual(deleted.status_code, 200, deleted.text)
                         self.assertEqual(len(observed), len(expected))
-                        self.assertEqual(sum(operation == "watch_stop" and params["client_owner"] == owner_a
-                                             for operation, params in observed), 1)
+                        self.assertEqual(sum(operation == "watch_stop" for operation, _ in observed), 2)
+                        self.assertFalse(any(operation == "watch_resume" for operation, _ in observed))
                         factory.assert_called_once_with(port=27123)
                         native.close.assert_not_called()
                 native.close.assert_called_once_with()
             self.assertEqual(source.read_bytes(), original)
             self.assertEqual(list(workspace.iterdir()), [])
 
-    async def test_http_watch_tools_forward_hidden_session_owner_to_one_native_client(self):
+    async def test_http_watch_tools_use_shared_client_metadata_in_one_native_connection(self):
         calls = (("g1r_watch_start", "watch_start", {"handle": "obj-1", "properties": ["Enabled"],
                   "duration_ms": 1000, "interval_ms": 20, "capacity": 2}),
                  ("g1r_watch_read", "watch_read", {"watch_id": "watch-1", "after_seq": 3, "limit": 10}),
@@ -360,13 +357,12 @@ class MCPServerTests(unittest.IsolatedAsyncioTestCase):
                                 result = response.json()["result"]
                                 self.assertFalse(result.get("isError", False), result)
                                 self.assertEqual(result["structuredContent"], {"operation": operation})
-                                native.request.assert_called_with(operation, {**arguments, "client_owner": "http:" + session})
+                                native.request.assert_called_with(operation, {**arguments, "client_owner": "shared_native_connection"})
                         self.assertEqual(native.request.call_count, 8)
                         first_owner = {item.args[1]["client_owner"] for item in native.request.call_args_list[:4]}
                         second_owner = {item.args[1]["client_owner"] for item in native.request.call_args_list[4:]}
-                        self.assertEqual(first_owner, {"http:" + one})
-                        self.assertEqual(second_owner, {"http:" + two})
-                        self.assertTrue(first_owner.isdisjoint(second_owner))
+                        self.assertEqual(first_owner, {"shared_native_connection"})
+                        self.assertEqual(second_owner, first_owner)
                         for client, session in ((first, one), (second, two)):
                             deleted = await client.delete("/mcp", headers={"Mcp-Session-Id": session,
                                                         "Accept": "application/json, text/event-stream"})

@@ -126,11 +126,11 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                     watch_resume = contracts["g1r_watch_resume"]
                     self.assertEqual(set(watch_resume["args"]["properties"]),
                                      {"watch_id", "expected_session_id", "expected_client_owner", "timeout_seconds"})
-                    self.assertEqual(set(watch_resume["args"]["required"]),
-                                     {"watch_id", "expected_session_id", "expected_client_owner"})
+                    self.assertEqual(set(watch_resume["args"]["required"]), {"watch_id"})
                     self.assertFalse(watch_resume["effects"]["read_only"])
-                    self.assertEqual(watch_resume["effects"]["target"], "native_observation_owner")
-                    self.assertIn("expected_previous_client_owner", watch_resume["context"]["requires"])
+                    self.assertEqual(watch_resume["effects"]["target"], "native_observation_client_metadata")
+                    self.assertNotIn("expected_previous_client_owner", watch_resume["context"]["requires"])
+                    self.assertNotIn("mcp_client_identity", watch_resume["context"]["requires"])
                     self.assertIn("g1r_watch_list", watch_resume["context"]["state_tools"])
                     self.assertIn("client_owner", watch_resume["result"]["fields"])
                     self.assertIn("oldest_seq", watch_resume["result"]["fields"])
@@ -224,7 +224,8 @@ class MCPBootstrapTests(unittest.IsolatedAsyncioTestCase):
                     catalogued.add(catalog["snapshot_comparison"]["tool"])
                     self.assertEqual(catalogued, set(tools))
                     observations = catalog["observations"]
-                    self.assertEqual(observations["ownership"], "mcp_client_in_shared_native_connection")
+                    self.assertEqual(observations["ownership"], "shared_native_connection")
+                    self.assertFalse(observations["client_authorization_required"])
                     self.assertEqual(observations["connection_lifecycle"], "native_tcp_session")
                     self.assertEqual(observations["client_disconnect"], "continues_until_explicit_stop_or_existing_duration")
                     self.assertFalse(observations["reconnect_reassigns_owner"])

@@ -1,4 +1,4 @@
-"""HTTP-владение вводом и общая native-сессия без обращения к Windows или игре."""
+"""Shared HTTP input and native sessions without accessing Windows or the game."""
 
 import copy
 import json
@@ -23,7 +23,7 @@ class MCPHTTPWindowInputTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self._asyncioRunner.get_loop().slow_callback_duration = 2.0
 
-    async def test_movieplayer_finish_requires_owner_and_lost_http_response_is_not_retried(self):
+    async def test_movieplayer_finish_needs_no_claim_and_lost_http_response_is_not_retried(self):
         cached = {"source": "native_movieplayer_cache", "active_wait": True, "wait_id": "wait-59",
                   "wait_returned": False, "thread_id": 456, "caller_allow_engine_tick": False,
                   "entered_ms": 590, "last_sample_ms": 591, "sample_wait_id": "wait-59",
@@ -89,10 +89,8 @@ class MCPHTTPWindowInputTests(unittest.IsolatedAsyncioTestCase):
                     async with httpx2.AsyncClient(transport=lossy, base_url="http://127.0.0.1:27124") as first, \
                                httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app),
                                                  base_url="http://127.0.0.1:27124") as second:
-                        owner, other = await initialize(first, "movie-finish-owner"), await initialize(second, "movie-status-reader")
+                        owner, other = await initialize(first, "movie-finish-client"), await initialize(second, "movie-status-reader")
                         self.assertNotEqual(owner, other)
-                        claim = await tool(first, owner, "g1r_session_acquire", {"reason": "Проверка MoviePlayer Wait"})
-                        self.assertTrue(claim["claimed"])
                         listed = (await rpc(second, "tools/list", {}, other)).json()["result"]["tools"]
                         self.assertEqual(len(listed), 64)
                         tools = {item["name"]: item for item in listed}
@@ -108,11 +106,6 @@ class MCPHTTPWindowInputTests(unittest.IsolatedAsyncioTestCase):
                             "default": None, "title": "Timeout Seconds"})
                         observed = await tool(second, other, "g1r_movieplayer_status")
                         self.assertEqual(observed, cached)
-                        refused = (await rpc(second, "tools/call", {"name": "g1r_movieplayer_finish",
-                            "arguments": {"expected_wait_id": "wait-59"}}, other)).json()["result"]
-                        self.assertTrue(refused.get("isError", False), refused)
-                        text = "\n".join(item.get("text", "") for item in refused["content"])
-                        self.assertEqual(json.loads(text[text.index("{"):])["code"], "game_session_owned")
                         self.assertEqual(len(native.requests), 1)
                         with self.assertRaises(httpx2.ReadError):
                             await tool(first, owner, "g1r_movieplayer_finish", {"expected_wait_id": observed["wait_id"]})
@@ -132,9 +125,6 @@ class MCPHTTPWindowInputTests(unittest.IsolatedAsyncioTestCase):
                             self.assertFalse(returned["active_wait"])
                             self.assertTrue(returned["wait_returned"])
                             self.assertNotIn("game_ready", returned)
-                            released = await tool(resumed, owner, "g1r_session_release")
-                            self.assertTrue(released["released"])
-                            self.assertFalse(released["game_stopped"])
                             for client, session in ((resumed, owner), (second, other)):
                                 deleted = await client.delete("/mcp", headers={"Mcp-Session-Id": session,
                                     "Accept": "application/json, text/event-stream"})
@@ -149,7 +139,7 @@ class MCPHTTPWindowInputTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(source.read_bytes(), original)
                 self.assertEqual(list(workspace.iterdir()), [])
 
-    async def test_key_owner_strict_arguments_partial_receipt_and_shared_native_session(self):
+    async def test_key_cross_client_stale_record_strict_arguments_and_partial_receipt(self):
         native_status = {"ready": True, "session_id": "fixture-session-1", "tick_count": 48}
         steps = [{"op": "status", "params": {}, "result": native_status} for _ in range(4)]
         with tempfile.TemporaryDirectory() as temporary, SessionNativeFixture(steps) as native:
@@ -249,29 +239,30 @@ class MCPHTTPWindowInputTests(unittest.IsolatedAsyncioTestCase):
                                                  base_url="http://127.0.0.1:27124") as first, \
                                httpx2.AsyncClient(transport=httpx2.ASGITransport(app=app),
                                                  base_url="http://127.0.0.1:27124") as second:
-                        owner = await initialize(first, "input-owner")
+                        owner = await initialize(first, "input-first")
                         other = await initialize(second, "input-other")
                         self.assertNotEqual(owner, other)
                         self.assertEqual(await tool(first, owner, "g1r_native_status"), native_status)
-                        claim = await tool(first, owner, "g1r_session_acquire", {
-                            "reason": "Изолированный оконный ввод", "expected_process": identity})
-                        self.assertEqual(claim["claim"]["process"], identity)
                         arguments = {"expected_process": identity, "virtual_key": 120, "expected_window": 1024}
                         before = len(process_calls)
-                        await rejected(second, other, arguments, "game_session_owned")
-                        await rejected(first, owner, {**arguments, "expected_process": {
-                            **identity, "creation_time": "2026-11-01T00:01:03.1234567Z"}},
-                            "session_process_mismatch")
                         for invalid in ({"virtual_key": 120.5}, {"virtual_key": True}, {"expected_window": 1024.5}):
                             with self.subTest(arguments=invalid):
                                 await rejected(first, owner, {**arguments, **invalid})
                         self.assertEqual(len(process_calls), before)
                         queue.assert_not_called()
-                        queued = await tool(first, owner, "g1r_development_key", arguments)
+                        queued = await tool(second, other, "g1r_development_key", arguments)
                         self.assertEqual(queued, receipt)
                         self.assertEqual([item["message"] for item in queued["messages"]], ["WM_KEYDOWN", "WM_KEYUP"])
                         self.assertFalse(queued["handling_confirmed"])
                         queue.assert_called_once_with(identity, 120, expected_window=1024)
+                        stale_process = {**identity, "pid": 99, "creation_time": "2026-10-31T00:01:02.1234567Z"}
+                        stale_record = await tool(first, owner, "g1r_session_acquire", {
+                            "reason": "Retained information about an exited process", "expected_process": stale_process})
+                        self.assertEqual(stale_record["claim"]["process"], stale_process)
+                        self.assertFalse(stale_record["control_required"])
+                        await rejected(second, other, {**arguments, "expected_process": {
+                            **identity, "creation_time": "2026-11-01T00:01:03.1234567Z"}}, "process_changed")
+                        self.assertEqual(queue.call_count, 1)
                         failed = await rejected(first, owner, arguments, "window_message_failed")
                         self.assertEqual(failed["receipt"], partial)
                         self.assertTrue(failed["outcome_unknown"])
@@ -283,25 +274,12 @@ class MCPHTTPWindowInputTests(unittest.IsolatedAsyncioTestCase):
                                                         "Accept": "application/json, text/event-stream"})
                         self.assertEqual(terminated.status_code, 200, terminated.text)
                         remaining = await tool(second, other, "g1r_session_status")
-                        self.assertEqual(remaining["claim"]["claim_id"], claim["claim"]["claim_id"])
-                        await rejected(second, other, arguments, "game_session_owned")
+                        self.assertEqual(remaining["claim"], stale_record["claim"])
+                        self.assertEqual(remaining["scope"], "informational")
+                        self.assertFalse(remaining["ownership_enforced"])
                         self.assertEqual(queue.call_count, 2)
-                        self.assertEqual(len(process_calls), before + 2)
+                        self.assertEqual(len(process_calls), before + 3)
                         self.assertEqual(await tool(second, other, "g1r_native_status"), native_status)
-                        resume = {"reason": "Восстановление HTTP-владения", "expected_process": identity,
-                                  "expected_claim_id": claim["claim"]["claim_id"]}
-                        for invalid, expected_code in (({"expected_claim_id": "wrong"}, "session_claim_changed"),
-                                                       ({"expected_process": None}, "session_process_mismatch")):
-                            result = await rpc(second, "tools/call", {"name": "g1r_session_acquire",
-                                                                     "arguments": {**resume, **invalid}}, other)
-                            self.assertTrue(result.get("isError", False), result)
-                            text = "\n".join(item.get("text", "") for item in result["content"])
-                            self.assertEqual(json.loads(text[text.index("{"):])["code"], expected_code)
-                            self.assertEqual((await tool(second, other, "g1r_session_status"))["claim"], remaining["claim"])
-                            self.assertEqual(queue.call_count, 2)
-                        resumed = await tool(second, other, "g1r_session_acquire", resume)
-                        self.assertTrue(resumed["resumed"])
-                        self.assertEqual(resumed["claim"], remaining["claim"])
                         restored_input = await tool(second, other, "g1r_development_key", arguments)
                         self.assertEqual(restored_input, receipt)
                         self.assertEqual(queue.call_count, 3)

@@ -218,7 +218,11 @@ Verification does not launch the game or load the DLL.
    --game-root <installed game>`.
    In Codex config.toml, set `[mcp_servers.g1r_mcp]` and
    `url = "http://127.0.0.1:27124/mcp"`; do not set command/args for each chat.
-   The server does not launch the game; all chats share one native TCP owner.
+   The server does not launch the game; all chats share one native TCP connection.
+   Compatibility g1r_session_status/acquire/release tools store optional information;
+   they are not required for development control. Any chat can access a watch by
+   watch_id. Client-owner metadata does not authorize game or watch operations.
+   Exact target-process, native-connection and object-generation checks still apply.
    A separate stdio client uses the default transport without HTTP parameters.
    Use absolute paths; do not reuse values from another PC.
    The start_shared_mcp.ps1/stop_shared_mcp.ps1 scripts are intended for a working copy

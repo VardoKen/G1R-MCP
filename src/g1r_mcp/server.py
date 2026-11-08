@@ -92,7 +92,7 @@ NATIVE_TOOLS = (
     ("g1r_watch_stop", "Stop observation and confirm that reads have ceased"),
     ("g1r_watch_forget", "Release a completed observation"),
     ("g1r_watch_list", "Observation metadata for the current native connection"),
-    ("g1r_watch_resume", "Explicitly transfer an existing observation to the current client"),
+    ("g1r_watch_resume", "Update optional observation client metadata"),
     ("g1r_movieplayer_status", "Consistent copy of MoviePlayer wait status without game Tick"),
     ("g1r_movieplayer_finish", "Explicit request to finish a specific MoviePlayer wait"),
 )
@@ -158,24 +158,10 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     local_owner = object()
 
     def request_owner(ctx: Context | None) -> Any:
-        if ctx is None:
-            return local_owner
-        try:
-            if transport == "streamable-http":
-                request = ctx.request_context.request
-                session_id = request.headers.get("mcp-session-id") if request is not None else None
-                if session_id:
-                    return "http:" + session_id
-                raise DevelopmentError("session_identity_unavailable", "HTTP request does not contain an MCP session identity")
-            return local_owner
-        except ValueError:
-            return local_owner
+        return local_owner
 
     def watch_owner(ctx: Context | None) -> str:
-        if transport != "streamable-http":
-            return "local:" + hex(id(local_owner))
-        owner = request_owner(ctx)
-        return owner if isinstance(owner, str) else "local:" + hex(id(owner))
+        return "shared_native_connection"
 
     def development_service() -> DevelopmentService:
         nonlocal development
@@ -416,7 +402,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                     {"tool": "g1r_invoke", "condition": "One explicitly selected call using a confirmed signature"},
                     {"tool": "g1r_development_stop", "condition": "When explicitly ending your development session with the expected identity"},
                 ],
-                "existing_session_sequence": ["g1r_native_status", "g1r_session_status", "g1r_find_objects", "g1r_object_functions"],
+                "existing_session_sequence": ["g1r_native_status", "g1r_find_objects", "g1r_object_functions"],
                 "edit_tools": ["g1r_read_source_exact", "g1r_read_package_file_exact", "g1r_write_package_file", "g1r_apply_staged_file"],
                 "hot_reload_sequence": [
                     {"tool": "g1r_read_package_file_exact", "condition": "Read the canonical source and its active staged counterpart with exact SHA-256"},
@@ -923,7 +909,8 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                            "apply_target": "owned_active_staging_package", "apply_result_proves_compile": False},
             "observations": {"implemented": True, "availability": "requires_live_native_status",
                              "source": "selected_reflected_properties_on_existing_tick",
-                             "ownership": "mcp_client_in_shared_native_connection",
+                             "ownership": "shared_native_connection",
+                             "client_authorization_required": False,
                              "connection_lifecycle": "native_tcp_session",
                              "client_disconnect": "continues_until_explicit_stop_or_existing_duration",
                              "reconnect_reassigns_owner": False,
@@ -1204,32 +1191,16 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     def development_request(operation: str, *, ctx: Context | None = None, session_reason: str = "Workspace package verification", **params: Any) -> dict[str, Any]:
         nonlocal native
         try:
-            if transport == "streamable-http" and operation in ("start", "stop", "queue_key", "load_native", "apply_staged_file"):
+            result = getattr(development_service(), operation)(**params)
+            if transport == "streamable-http":
                 owner = request_owner(ctx)
-                with ownership.lock:
-                    acquired_here = False
-                    if operation == "start":
-                        if params.get("restart"):
-                            ownership.require(owner, params.get("expected_process"))
-                        acquired_here = not ownership.status()["claimed"]
-                        ownership.acquire(owner, session_reason, package=params.get("relative_package"))
-                    else:
-                        ownership.require(owner, params.get("expected_process"))
-                    try:
-                        result = getattr(development_service(), operation)(**params)
-                    except DevelopmentError as error:
-                        if acquired_here and not error.outcome_unknown:
-                            ownership.release(owner)
-                        raise
-                    if operation == "load_native":
-                        ownership.bind(owner, result["process"], "native_loaded")
-                    elif operation == "start" and result.get("state") == "launch_requested" and result.get("outcome_unknown") is False:
-                        ownership.launched(owner, params["relative_package"])
-                    elif operation == "stop" and result.get("outcome_unknown") is False and result.get("tool_result", {}).get("state") == "stopped":
-                        released = ownership.release(owner)
-                        result["session_released"] = released["released"]
-            else:
-                result = getattr(development_service(), operation)(**params)
+                if operation == "load_native":
+                    ownership.bind(owner, result["process"], "native_loaded")
+                elif operation == "start" and result.get("state") == "launch_requested" and result.get("outcome_unknown") is False:
+                    ownership.acquire(owner, session_reason, package=params.get("relative_package"))
+                    ownership.launched(owner, params["relative_package"])
+                elif operation == "stop" and result.get("outcome_unknown") is False and result.get("tool_result", {}).get("state") == "stopped":
+                    result["session_released"] = ownership.release(owner)["released"]
             stopped = result.get("tool_result")
             if ((operation == "start" and result.get("state") == "launch_requested"
                  and result.get("outcome_unknown") is False)
@@ -1257,32 +1228,24 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=read_only)
     def g1r_session_status() -> dict[str, Any]:
-        """Read the shared-game control owner; does not invoke game Tick."""
+        """Read optional shared development-session information; it does not restrict game control."""
         return ownership.status()
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     def g1r_session_acquire(reason: str, expected_process: dict[str, Any] | None = None,
                             expected_claim_id: str | None = None, ctx: Context = None) -> dict[str, Any]:
-        """Claim game control; after disconnection, reclaim an existing claim using expected_claim_id and exact expected_process. Does not start the game."""
+        """Record optional development-session information. Any client may update it; no game launch is performed."""
         try:
             owner = request_owner(ctx)
-            with ownership.lock:
-                process = None
-                if expected_process is not None:
-                    service = development_service()
-                    process = service._expected_process(expected_process, service.process_state(), allow_bootstrap=True)
-                return ownership.acquire(owner, reason, process=process,
-                                         expected_claim_id=expected_claim_id)
+            return ownership.acquire(owner, reason, process=expected_process,
+                                     expected_claim_id=expected_claim_id)
         except DevelopmentError as error:
             raise ToolError(json.dumps({"code": error.code, "message": str(error), "outcome_unknown": error.outcome_unknown}, ensure_ascii=False)) from None
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
     def g1r_session_release(expected_claim_id: str | None = None, ctx: Context = None) -> dict[str, Any]:
-        """Release your claim without stopping the game; another client's claim requires claim_id and no game processes."""
+        """Clear optional session information from any client without stopping the game."""
         try:
-            if expected_claim_id is not None:
-                with ownership.lock:
-                    return ownership.release_abandoned(expected_claim_id, game_running=development_service().process_state()["running"])
             return ownership.release(request_owner(ctx))
         except DevelopmentError as error:
             raise ToolError(json.dumps({"code": error.code, "message": str(error), "outcome_unknown": error.outcome_unknown}, ensure_ascii=False)) from None
@@ -1387,10 +1350,6 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                 timeout_seconds: float | None = None) -> dict[str, Any]:
         """Explicitly request completion of an exact wait; the finish call, Wait return, and game Tick are distinct."""
         try:
-            if transport == "streamable-http":
-                with ownership.lock:
-                    ownership.require(request_owner(ctx))
-                    return native_request("movieplayer_finish", {"expected_wait_id": expected_wait_id}, timeout_seconds)
             return native_request("movieplayer_finish", {"expected_wait_id": expected_wait_id}, timeout_seconds)
         except DevelopmentError as error:
             raise ToolError(json.dumps({"code": error.code, "message": str(error),
@@ -1505,14 +1464,16 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=False))
-    def g1r_watch_resume(watch_id: str, expected_session_id: str,
-                         expected_client_owner: str, ctx: Context = None,
+    def g1r_watch_resume(watch_id: str, expected_session_id: str | None = None,
+                        expected_client_owner: str | None = None, ctx: Context = None,
                          timeout_seconds: float | None = None) -> dict[str, Any]:
-        """Explicitly transfer an existing observation to the current client while preserving its state and events."""
-        return native_request("watch_resume", {"watch_id": watch_id,
-                              "expected_session_id": expected_session_id,
-                              "expected_client_owner": expected_client_owner,
-                              "client_owner": watch_owner(ctx)}, timeout_seconds)
+        """Update optional observation client metadata while preserving its state and events."""
+        params = {"watch_id": watch_id, "client_owner": watch_owner(ctx)}
+        if expected_session_id is not None:
+            params["expected_session_id"] = expected_session_id
+        if expected_client_owner is not None:
+            params["expected_client_owner"] = expected_client_owner
+        return native_request("watch_resume", params, timeout_seconds)
 
     save_loading = SaveLoading(native_request)
 

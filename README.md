@@ -4,9 +4,13 @@ G1R MCP — инструмент **исследования, разработк�
 
 **Перенос пользовательских модов с UE4SS — промежуточный рубеж разработки, а не назначение инструмента и не критерий завершения проекта.**
 
-Текущая разработка **1.0.0-dev.114**, целевая публичная версия **1.0.0**. [PLAN-001](docs/mods/G1R_MCP/plans/PLAN-001-active-implementation.md) остаётся активным: наличие 64 инструмента и успешные локальные тесты не означают выполнения всех его критериев.
+Текущая разработка **1.0.0-dev.115**, целевая публичная версия **1.0.0**. [PLAN-001](docs/mods/G1R_MCP/plans/PLAN-001-active-implementation.md) остаётся активным: наличие 64 инструмента и успешные локальные тесты не означают выполнения всех его критериев.
 
-## Состояние на 06.11.2026
+Development control is shared across clients in dev.115. The compatibility tools `g1r_session_status/acquire/release` keep optional session information; acquiring a claim is not required for start, stop, restart, DLL loading, keyboard input, staging updates, or MoviePlayer completion. Session metadata no longer binds control to a terminated process. Any client can read, stop, forget, or resume a watch by `watch_id`; client-owner metadata does not authorize these operations. Native connection, object identity, world/script generation, and exact target-process checks retain their documented meaning. The accepted dev.114 results below remain version-specific.
+
+Dev.115 принят адресно **08.11.2026**: общий доступ к watches и resume со старыми client metadata подтверждены [live-приёмкой](artifacts/dev115-cross-client-watch-live.json), своя игра закрыта. Затронутые session/HTTP/watch/bootstrap-проверки и native build прошли; CTest observations — 1/1 PASS. [Точные результаты и границы](docs/tests/G1R_MCP/README.md). Общая приёмка dev.114 ниже сохраняет свою версию; полного нового прогона dev.115 не было.
+
+## Общая приёмка на 06.11.2026 — dev.114
 
 Python/server и native DLL — **1.0.0-dev.114**, **64 инструмента**, Steam build **26394867**. Общая live-приёмка принята: загрузка сохранения из главного меню до MainMap и готового персонажа (`BP_IsGameplayReady=true`), debugger breakpoint/stack/locals/evaluate `Sum` 0→1 после `step_over`/continue6/detach, **50/50 типизированных вызовов** и **10/10 итоговых проверок**. Перезагрузка marker 71→72→72→71, восстановление source/staging и закрытие своей игры подтверждены. [Границы проверок](docs/tests/G1R_MCP/README.md).
 

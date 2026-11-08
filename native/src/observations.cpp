@@ -99,7 +99,6 @@ Observations::Json Observations::start(const std::string& connection_session,
                                       const std::string& client_owner, const Json& params,
                                       const Json& baseline, std::uint64_t now_ms,
                                       std::uint64_t tick) {
-    if (client_owner.empty()) throw HandlerError("invalid_owner", "The watch owner is missing");
     if (!params.is_object() || !params.contains("handle") || !params.contains("properties"))
         throw HandlerError("invalid_watch_params", "A watch requires handle and properties");
     Json targets = Json::array({{{"handle", params.at("handle")}, {"properties", params.at("properties")}}});
@@ -131,10 +130,9 @@ Observations::Json Observations::start(const std::string& connection_session,
     return result;
 }
 
-const Observations::Watch& Observations::find(const std::string& owner, const Json& params) const {
+const Observations::Watch& Observations::find(const std::string&, const Json& params) const {
     auto found = watches_.find(watch_id(params));
     if (found == watches_.end()) throw HandlerError("unknown_watch", "The watch does not exist in the current environment");
-    if (found->second.client_owner != owner) throw HandlerError("foreign_watch", "The watch belongs to a different client");
     return found->second;
 }
 Observations::Watch& Observations::find(const std::string& owner, const Json& params) {
@@ -153,18 +151,16 @@ Observations::Json Observations::list(const std::string& connection_session,
 
 Observations::Json Observations::resume(const std::string& connection_session,
                                        const std::string& new_client_owner, const Json& params) {
-    if(new_client_owner.empty())throw HandlerError("invalid_owner","Watch owner is missing");
     const auto id=watch_id(params);
-    if(!params.contains("expected_session_id") || !params.at("expected_session_id").is_string()
-       || !params.contains("expected_client_owner") || !params.at("expected_client_owner").is_string())
-        throw HandlerError("invalid_watch_params","Expected session_id and client_owner must be strings");
+    if(params.contains("expected_session_id") && !params.at("expected_session_id").is_string())
+        throw HandlerError("invalid_watch_params","Expected session_id must be a string");
     const auto found=watches_.find(id);
     if(found==watches_.end())throw HandlerError("unknown_watch","Watch does not exist in the current connection");
     auto& watch=found->second;
     if(watch.connection_session!=connection_session
-       || watch.connection_session!=params.at("expected_session_id").get_ref<const std::string&>()
-       || watch.client_owner!=params.at("expected_client_owner").get_ref<const std::string&>())
-        throw HandlerError("watch_resume_mismatch","Watch session or owner does not match the expected identity");
+       || (params.contains("expected_session_id")
+           && watch.connection_session!=params.at("expected_session_id").get_ref<const std::string&>()))
+        throw HandlerError("watch_resume_mismatch","Watch session does not match the expected identity");
     watch.client_owner=new_client_owner;
     return metadata(watch);
 }

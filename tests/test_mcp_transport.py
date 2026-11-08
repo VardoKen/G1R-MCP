@@ -1,4 +1,4 @@
-"""Один HTTP-сервер разделяет рабочую базу и native-клиент между MCP-сессиями."""
+"""One HTTP server shares the workspace and native client across MCP sessions."""
 from contextlib import redirect_stderr
 import io
 import json
@@ -19,7 +19,7 @@ from tests.test_mcp_observations import SessionNativeFixture
 
 
 class LargeFrameNativeFixture(SessionNativeFixture):
-    """Изолированный uint32 framing без старого фиктивного предела 1 МиБ."""
+    """Isolated uint32 framing without the obsolete artificial 1 MiB limit."""
 
     def __init__(self, steps):
         super().__init__(steps)
@@ -41,7 +41,7 @@ class LargeFrameNativeFixture(SessionNativeFixture):
                 try:
                     length = struct.unpack(">I", self.receive(4))[0]
                     if length == 0:
-                        raise AssertionError("Пустой нативный кадр")
+                        raise AssertionError("Empty native frame")
                     request = json.loads(self.receive(length).decode("utf-8"))
                 except EOFError:
                     self.stream.close()
@@ -52,9 +52,9 @@ class LargeFrameNativeFixture(SessionNativeFixture):
                 self.request_frame_lengths.append(length)
                 if (request.get("protocol") != 1 or request.get("op") != step["op"]
                         or request.get("params") != step["params"]):
-                    raise AssertionError("Запрос не соответствует ожидаемой операции")
+                    raise AssertionError("The request does not match the expected operation")
                 if not isinstance(request.get("id"), str) or not request["id"]:
-                    raise AssertionError("Нет нативного request ID")
+                    raise AssertionError("Missing native request ID")
                 result = dict(step["result"])
                 if request.get("params", {}).get("function") == "EchoLargeString":
                     self.echo_calls += 1
@@ -315,7 +315,7 @@ class MCPHTTPSharedServerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(source.read_bytes(), original)
             self.assertEqual(list(workspace.iterdir()), [])
 
-    async def test_two_http_sessions_share_native_owner_workspace_and_security_boundary(self):
+    async def test_two_http_sessions_share_native_connection_workspace_and_security_boundary(self):
         native_status = {"ready": True, "session_id": "shared-native-owner", "tick_count": 31}
         steps = [
             {"op": "status", "params": {}, "result": native_status},
@@ -382,18 +382,6 @@ class MCPHTTPSharedServerTests(unittest.IsolatedAsyncioTestCase):
                     first_session = await initialize(first)
                     second_session = await initialize(second)
                     self.assertNotEqual(first_session, second_session)
-                    claim = await tool(first, first_session, "g1r_session_acquire", {"reason": "Проверка первого клиента"})
-                    self.assertTrue(claim["claimed"])
-                    self.assertEqual((await tool(second, second_session, "g1r_session_status"))["claim"]["claim_id"], claim["claim"]["claim_id"])
-                    denied = await rpc(second, "tools/call", {"name": "g1r_session_acquire", "arguments": {"reason": "Второй клиент"}}, second_session)
-                    self.assertTrue(denied.json()["result"]["isError"])
-                    self.assertIn("game_session_owned", denied.text)
-                    stop = await rpc(second, "tools/call", {"name": "g1r_development_stop", "arguments": {"expected_process": {"pid": 123}}}, second_session)
-                    self.assertTrue(stop.json()["result"]["isError"])
-                    self.assertIn("game_session_owned", stop.text)
-                    released = await tool(first, first_session, "g1r_session_release")
-                    self.assertFalse(released["game_stopped"])
-                    self.assertFalse((await tool(second, second_session, "g1r_session_status"))["claimed"])
                     listed = await rpc(second, "tools/list", {}, second_session)
                     self.assertEqual(listed.status_code, 200, listed.text)
                     self.assertEqual(len(listed.json()["result"]["tools"]), 64)
@@ -403,7 +391,12 @@ class MCPHTTPSharedServerTests(unittest.IsolatedAsyncioTestCase):
                     handle = found["items"][0]["handle"]
                     self.assertEqual(await tool(second, second_session, "g1r_invoke", {
                         "handle": handle, "function": "ReadMarker"}), {"return": 111})
-                    metadata = {"name": "Shared", "title": "Общий пакет", "author": "Fixture", "modVersion": "1.0.0"}
+                    information = await tool(second, second_session, "g1r_session_status")
+                    self.assertFalse(information["claimed"])
+                    self.assertEqual(information["scope"], "informational")
+                    self.assertFalse(information["control_required"])
+                    self.assertFalse(information["ownership_enforced"])
+                    metadata = {"name": "Shared", "title": "Shared package", "author": "Fixture", "modVersion": "1.0.0"}
                     await tool(first, first_session, "g1r_create_package", {"relative_path": "Shared", "metadata": metadata})
                     package = await tool(second, second_session, "g1r_read_package_file", {
                         "relative_path": "Shared", "file_path": "GothicMod.json"})

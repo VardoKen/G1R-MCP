@@ -1,6 +1,6 @@
-# Локальные MCP-инструменты — 1.0.0-dev.114
+# Локальные MCP-инструменты — 1.0.0-dev.115
 
-Дата сверки: **06.11.2026**. Документ описывает текущую реализацию в `src/g1r_mcp/` и `native/src/`. Сервер использует официальный Python SDK `mcp==2.3.0`; в `server.py` зарегистрировано **64 инструмента**. Схемы аргументов задаёт регистрация MCP, а `g1r_capabilities` дополняет их происхождением данных, доступностью, форматами и ограничениями. Ответы и ошибки моста — на английском языке; проектная документация — на русском.
+Дата сверки: **08.11.2026**. Документ описывает текущую реализацию в `src/g1r_mcp/` и `native/src/`. Сервер использует официальный Python SDK `mcp==2.3.0`; в `server.py` зарегистрировано **64 инструмента**. Схемы аргументов задаёт регистрация MCP, а `g1r_capabilities` дополняет их происхождением данных, доступностью, форматами и ограничениями. Ответы и ошибки моста — на английском языке; проектная документация — на русском.
 
 Назначение G1R MCP — полноценное исследование, разработка и отладка официальных модов, а перенос пользовательских модов с UE4SS — промежуточный рубеж. Рабочие пакеты — официальные `GothicMod.json` и AngelScript. Каталог ниже описывает реализованные инструменты, а не завершение всей цели. Игровой маршрут, включая загрузку DLL и выполнение через Tick, описан в [native-route.md](native-route.md); сводка готового и неготового — в [README.md](README.md), доказательства — в [описании проверок](../../tests/G1R_MCP/README.md).
 
@@ -9,7 +9,7 @@ Dev.112: `g1r_debug_database` получил полную runtime-базу: 5 26
 
 ## Каталог 64 инструментов
 
-Python/server и native DLL — **1.0.0-dev.114**. Live принял save loaded/MainMap/готовый персонаж, debugger locals/evaluate Sum/step_over/continue, 50/50 typed-вызовов, 10/10 checks и cleanup. CTest 39/39 пройден; Python: 730 исходных успешных + 9 актуализированных адресных методов + committed helper. Первичный прогон 740 тестов сохраняет ошибки, единого 740 PASS нет. Raw database dev.112 и installed wheel/runtime dev.114 приняты отдельно. [Live dev.114](../../../artifacts/dev114-save-debugger-typed-live.json), [database dev.112](../../../artifacts/dev112-debug-database-live-complete.json), [consumer dev.114](../../../artifacts/dev114-wheel-installed-acceptance.json).
+Последняя общая приёмка относится к Python/server/native DLL **1.0.0-dev.114**. Live принял save loaded/MainMap/готовый персонаж, debugger locals/evaluate Sum/step_over/continue, 50/50 typed-вызовов, 10/10 checks и cleanup. CTest 39/39 пройден; Python: 730 исходных успешных + 9 актуализированных адресных методов + committed helper. Первичный прогон 740 тестов сохраняет ошибки, единого 740 PASS нет. Raw database dev.112 и installed wheel/runtime dev.114 приняты отдельно. Эти результаты не являются приёмкой нового dev.115. [Live dev.114](../../../artifacts/dev114-save-debugger-typed-live.json), [database dev.112](../../../artifacts/dev112-debug-database-live-complete.json), [consumer dev.114](../../../artifacts/dev114-wheel-installed-acceptance.json).
 
 Э8 текущей приёмки завершена в подтверждённом контракте. Исторический stdio dev.96 диапазон принят для последовательной development-работы: 17 объектов/561 поле, snapshots по 5 141 033 байта, строки по 300 000 символов, максимум малых/объёмных запросов 221,046/1079,454 мс, dropped0/queue0/cleanup. Это не latency-гарантия HTTP dev.114; CPU/FPS не измерены, caps не вводятся. Точные замеры и границы — у [владельца проверок](../../tests/G1R_MCP/README.md).
 
@@ -67,20 +67,20 @@ DebugSession и SaveLoading принадлежат общему серверу, 
 | `g1r_export_package` | `relative_package`, `destination` | ZIP полного пакета и SHA-256 manifest в новом каталоге `artifacts/` |
 | `g1r_verify_package_export` | `relative_path` | Проверка содержимого архива, manifest и хешей экспортированного комплекта |
 
-### Development-сеанс, владение и DLL — 14
+### Development-сеанс, информационные сведения и DLL — 14
 
 | Инструмент | Аргументы | Назначение |
 | --- | --- | --- |
-| `g1r_session_status` | Нет | Текущая заявка владельца общей игры; без игрового Tick |
-| `g1r_session_acquire` | `reason`, `expected_process`, `expected_claim_id` | Получение владения текущей MCP-сессией с проверкой идентичности |
-| `g1r_session_release` | `expected_claim_id` | Освобождение заявки без остановки игры; чужая заявка освобождается только после исчезновения игры |
+| `g1r_session_status` | Нет | Необязательные сведения общей development-сессии; control_required=false и ownership_enforced=false |
+| `g1r_session_acquire` | `reason`, `expected_process`, `expected_claim_id` | Совместимое имя для записи информационных сведений из любого чата; право управления не создаётся |
+| `g1r_session_release` | `expected_claim_id` | Очистка информационной записи из любого чата без остановки игры; исчезновение процесса не требуется |
 | `g1r_compile_diagnostics` | `relative_package`, `expected_manifest_sha256`, `report_path`, `enable_ingame_tools=false`, `show_script_errors=false` | Native compiler formatter либо явно выбранный UTF-8 отчёт |
 | `g1r_development_recipe` | `relative_package`, `enable_ingame_tools=false`, `companion_packages`, `show_script_errors=false` | Manifest выбранных пакетов, запуск, процессы и SHA-256 DLL |
 | `g1r_development_processes` | Нет | PID, время создания и полный путь EXE выбранной игры и её wrapper |
-| `g1r_apply_staged_file` | `relative_package`, `file_path`, `expected_source_sha256`, `expected_staged_sha256`, `expected_process` | Применение одного canonical-файла к активной staging-копии собственного сеанса |
+| `g1r_apply_staged_file` | `relative_package`, `file_path`, `expected_source_sha256`, `expected_staged_sha256`, `expected_process` | Применение одного canonical-файла к активной staging-копии development-сеанса |
 | `g1r_development_key` | `expected_process`, `virtual_key`, `expected_window` | Очередь выбранного ввода окну проверенного процесса; обработка игрой не подтверждается |
 | `g1r_development_start` | `relative_package`, `expected_manifest_sha256`, `restart=false`, `expected_process`, `enable_ingame_tools=false`, `session_reason`, `companion_packages`, `show_script_errors=false` | Запуск проверенного набора staging-пакетов; restart требует исходную идентичность |
-| `g1r_development_stop` | `expected_process`, `reason` | Остановка собственного проверенного сеанса |
+| `g1r_development_stop` | `expected_process`, `reason` | Остановка выбранного проверенного development-процесса |
 | `g1r_native_load` | `expected_process`, `expected_dll_sha256` | Однократная загрузка закреплённой DLL |
 | `g1r_native_status` | Нет | Живые ready/Tick, очередь, identity, поколения и состояние native-подключения |
 | `g1r_native_enable` | Нет | Установка игрового Tick hook; ready проверяется отдельно |
@@ -105,10 +105,10 @@ DebugSession и SaveLoading принадлежат общему серверу, 
 | `g1r_watch_stop` | `watch_id` | Остановка наблюдения |
 | `g1r_watch_forget` | `watch_id` | Удаление его сохранённых данных |
 | `g1r_watch_list` | Нет | Обнаружение наблюдений текущего native-подключения |
-| `g1r_watch_resume` | `watch_id`, `expected_session_id`, `expected_client_owner` | Смена владельца существующего наблюдения без повторного запуска |
+| `g1r_watch_resume` | `watch_id`; необязательные `expected_session_id`, `expected_client_owner` | Совместимое обновление информационных client metadata по watch_id без повторного запуска; expected_client_owner не ограничивает доступ, expected_session_id при передаче проверяет общую native-сессию |
 | `g1r_invoke` | `handle`, `function`, `arguments`, `expected_signature_token` | Один типизированный вызов подтверждённого контракта |
 
-Создание/запись/экспорт, apply-staged, владение, запуск/остановка/загрузка/enable, ввод, MoviePlayer finish, управление наблюдениями и invoke имеют эффекты. Сравнение снимков, чтение файлов/значений, каталог и диагностика читают данные. `g1r_status` и `g1r_capabilities` не обращаются к живой игре: `connection_checked=false` и `ready_known=false` не означают её проверенную доступность.
+Создание/запись/экспорт, apply-staged, информационные session acquire/release, запуск/остановка/загрузка/enable, ввод, MoviePlayer finish, управление наблюдениями и invoke имеют эффекты. Сравнение снимков, чтение файлов/значений, каталог и диагностика читают данные. `g1r_status` и `g1r_capabilities` не обращаются к живой игре: `connection_checked=false` и `ready_known=false` не означают её проверенную доступность.
 
 ## Источники и полнота результатов
 
@@ -158,7 +158,9 @@ Development helper поставляется отдельным companion-пак�
 
 Object/Class значения включают тип и session descriptor; Weak читается через текущую slot identity и serial, с проверкой доступности/типа. `null` допустим там, где отражённая ссылка пуста. `serial_guard.policy="strict_observed_equality_including_zero"`; наблюдаемые pointer/index/FName/serial объекта и класса должны совпасть. Нулевые serial не защищают от ABA, мост их не выделяет самостоятельно. Для мировых handles действует поколение `GameEngine.GameViewport.World`; world change завершает соответствующие watches и отзывает связанные handles. CDO/assets сохраняются при смене мира; script reload отдельно отзывает script-bound handles. Disconnect/reconnect отзывает handles и наблюдения всего native-подключения.
 
-`g1r_snapshot` и сравнение сохраняют различия значения, типа, охвата и неизвестного результата. `single_tick_sequential` не означает атомарность с произвольным внешним игровым кодом. Неполный охват не доказывает равенство; отсутствие цели не доказывает уничтожение объекта. Watches — опрос выбранных properties, а не произвольная подписка на игровые delegate-события. Их metadata включает причины завершения и потери; `watch_resume` передаёт существующее наблюдение по точным session/owner identity.
+`g1r_snapshot` и сравнение сохраняют различия значения, типа, охвата и неизвестного результата. `single_tick_sequential` не означает атомарность с произвольным внешним игровым кодом. Неполный охват не доказывает равенство; отсутствие цели не доказывает уничтожение объекта. Watches — опрос выбранных properties, а не произвольная подписка на игровые delegate-события. Любой чат читает/останавливает/забывает/возобновляет наблюдение по watch_id; client_owner и expected_client_owner не ограничивают доступ. Принадлежность общей native-сессии, сравнение expected_session_id и lifecycle мира/скриптов сохраняются.
+
+С dev.115 claim не требуется для development start/stop/restart, native load, клавиши, staging apply и MoviePlayer finish. Информационная запись старого завершённого процесса не привязывает новое управление к его PID. Проверки exact expected_process, native-поколений и действительности UObject не заменяются сведениями HTTP-клиента.
 
 ## Контракт invoke
 
