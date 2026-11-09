@@ -1,5 +1,9 @@
 # История задач G1R MCP
 
+## 09.11.2026 — очистка artifacts перед копированием моста
+
+525 старых development-сеансов и заменённые копии пакетов/сборок перенесены в `.trash/G1R MCP/artifacts/`; корзина не очищалась. `artifacts/`: 6 308 491 116 → 690 590 484 байт. Сохранены отчёты, уникальные исследовательские материалы, текущая сборка и файлы shared-сервера. Проверены отсутствие игровой сессии, runtime-пути, Git и источники больших пакетов. Код не менялся; несвязанный dirty helper сохранён.
+
 ## 09.11.2026 — dev.116: явная protection параллельной работы
 
 Python/server dev.116 сохраняет shared default и добавляет explicit protected_tools — выбранный список из 24 MCP-операций, reason и stable owner MCP-сессии. Status общедоступен, release и takeover явные для любого клиента; без списка acquire информационный и не снимает protection. Disconnect и confirmed stop сохраняют protection; нет PID prerequisite, TTL, автоприоритета, файловой блокировки ОС или отдельного сервера. Native DLL dev.115 не менялась. [Адресные проверки](../../../tests/G1R_MCP/README.md): unit10/10 PASS + lifecycle target1/1, HTTP2/2 PASS, bootstrap/catalog4/4 PASS, SDK coverage24/schema PASS; независимый review без существенных замечаний. Обновление общего HTTP runtime до Python116 подтверждено через status/capabilities. Полного нового/игрового прогона и публичного выпуска не было; PLAN-001 R18 активен.
