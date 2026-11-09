@@ -1,5 +1,9 @@
 # История задач G1R MCP
 
+## 09.11.2026 — dev.116: явная protection параллельной работы
+
+Python/server dev.116 сохраняет shared default и добавляет explicit protected_tools — выбранный список из 24 MCP-операций, reason и stable owner MCP-сессии. Status общедоступен, release и takeover явные для любого клиента; без списка acquire информационный и не снимает protection. Disconnect и confirmed stop сохраняют protection; нет PID prerequisite, TTL, автоприоритета, файловой блокировки ОС или отдельного сервера. Native DLL dev.115 не менялась. [Адресные проверки](../../../tests/G1R_MCP/README.md): unit10/10 PASS + lifecycle target1/1, HTTP2/2 PASS, bootstrap/catalog4/4 PASS, SDK coverage24/schema PASS; независимый review без существенных замечаний. Обновление общего HTTP runtime до Python116 подтверждено через status/capabilities. Полного нового/игрового прогона и публичного выпуска не было; PLAN-001 R18 активен.
+
 ## 08.11.2026 — dev.115: общий доступ клиентов к control и watches
 
 Session-инструменты сохранены как необязательные информационные записи; claim/HTTP client identity и сведения завершённого процесса больше не блокируют development control. Read/stop/forget/resume watches доступны любому чату по watch_id; expected_client_owner информативен, optional expected_session_id по-прежнему проверяет общую native-сессию. [Live](../../../../artifacts/dev115-cross-client-watch-live.json) принял второй клиент и resume со старыми owner metadata, очистка выполнена, игра закрыта. Session/HTTP/watch/bootstrap-проверки, native build и CTest observations 1/1 PASS; [точные адресные результаты](../../../tests/G1R_MCP/README.md). Финальный installed wheel consumer dev.115 принят: 12 calls, 9 checks, 7 metadata checks. Общего нового полного прогона не было; PLAN-001 R18 остаётся активным, публичного выпуска не было.

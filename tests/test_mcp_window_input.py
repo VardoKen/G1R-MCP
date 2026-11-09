@@ -183,7 +183,8 @@ class MCPHTTPWindowInputTests(unittest.IsolatedAsyncioTestCase):
 
             with patch("g1r_mcp.server.NativeClient", return_value=backend) as native_factory, \
                  patch("g1r_mcp.server.DevelopmentService", return_value=service) as development_factory, \
-                 patch("g1r_mcp.development.queue_key", side_effect=[receipt, windows_error, receipt]) as queue:
+                 patch("g1r_mcp.development.queue_key", side_effect=[receipt, windows_error, receipt,
+                                                                  receipt, receipt, receipt]) as queue:
                 server = create_server(modkit, workspace, game_root=game,
                                        native_port=native.port, transport="streamable-http")
                 security = TransportSecuritySettings(enable_dns_rebinding_protection=True,
@@ -292,6 +293,55 @@ class MCPHTTPWindowInputTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(revoked.status_code, 404, revoked.text)
                         self.assertEqual(queue.call_count, 3)
                         self.assertEqual(await tool(second, other, "g1r_native_status"), native_status)
+                        third = await initialize(first, "input-explicit-protection-other")
+                        self.assertNotEqual(third, other)
+                        protected = await tool(second, other, "g1r_session_acquire", {
+                            "reason": "Protect only keyboard input", "expected_process": stale_process,
+                            "protected_tools": ["g1r_development_key"]})
+                        self.assertEqual(protected["scope"], "optional_tool_protection")
+                        self.assertEqual(protected["protected_tools"], ["g1r_development_key"])
+                        self.assertTrue(protected["caller_owns_protection"])
+                        self.assertFalse(protected["control_required"])
+                        before_protection = len(process_calls)
+                        blocked = await rejected(first, third, arguments, "session_protected")
+                        self.assertFalse(blocked["outcome_unknown"])
+                        self.assertEqual(queue.call_count, 3)
+                        self.assertEqual(len(process_calls), before_protection)
+                        observed = await tool(first, third, "g1r_session_status")
+                        self.assertEqual(observed["protection"], protected["protection"])
+                        self.assertFalse(observed["caller_owns_protection"])
+                        self.assertEqual(await tool(second, other, "g1r_development_key", arguments), receipt)
+                        self.assertEqual(queue.call_count, 4)
+                        before_takeover = len(process_calls)
+                        replacement = await tool(first, third, "g1r_session_acquire", {
+                            "reason": "Explicit input takeover", "protected_tools": ["g1r_development_key"],
+                            "takeover": True})
+                        self.assertTrue(replacement["caller_owns_protection"])
+                        self.assertNotEqual(replacement["protection"]["claim_id"], protected["protection"]["claim_id"])
+                        await rejected(second, other, arguments, "session_protected")
+                        self.assertEqual(queue.call_count, 4)
+                        self.assertEqual(len(process_calls), before_takeover)
+                        self.assertEqual(await tool(first, third, "g1r_development_key", arguments), receipt)
+                        self.assertEqual(queue.call_count, 5)
+                        deleted = await first.delete("/mcp", headers={"Mcp-Session-Id": third,
+                            "Accept": "application/json, text/event-stream"})
+                        self.assertEqual(deleted.status_code, 200, deleted.text)
+                        before_release = len(process_calls)
+                        await rejected(second, other, arguments, "session_protected")
+                        self.assertEqual(queue.call_count, 5)
+                        self.assertEqual(len(process_calls), before_release)
+                        remaining_protection = await tool(second, other, "g1r_session_status")
+                        self.assertEqual(remaining_protection["protection"], replacement["protection"])
+                        self.assertFalse(remaining_protection["disconnect_releases_claim"])
+                        self.assertFalse(remaining_protection["automatic_game_stop"])
+                        released = await tool(second, other, "g1r_session_release")
+                        self.assertTrue(released["released"])
+                        self.assertFalse(released["game_stopped"])
+                        self.assertEqual(await tool(second, other, "g1r_development_key", arguments), receipt)
+                        self.assertEqual(queue.call_count, 6)
+                        self.assertEqual(len(process_calls), before_protection + 3)
+                        self.assertFalse((await tool(second, other, "g1r_session_status"))["claimed"])
+                        self.assertIsNone((await tool(second, other, "g1r_session_status"))["protection"])
                         native_factory.assert_called_once_with(port=native.port)
                         development_factory.assert_called_once()
                 self.assertEqual(native.connections, 1)

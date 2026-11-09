@@ -67,6 +67,9 @@ class SessionOwnershipTests(unittest.TestCase):
     def test_control_does_not_require_metadata_and_any_client_can_update_or_release(self):
         state = SessionOwnership(); a, b = object(), object()
         process = {"pid": 11, "creation_time": "T1", "executable": "game"}
+        for owner in (a, b):
+            for tool in ("g1r_development_key", "g1r_development_stop", "g1r_native_status"):
+                state.check(owner, tool)
         state.require(a, process)
         self.assertFalse(state.status()["claimed"])
         state.bind(a, process, "native_loaded")
@@ -74,6 +77,9 @@ class SessionOwnershipTests(unittest.TestCase):
         self.assertEqual(state.status()["scope"], "informational")
         self.assertFalse(state.status()["control_required"])
         self.assertFalse(state.status()["ownership_enforced"])
+        self.assertIsNone(state.status()["protection"])
+        self.assertEqual(state.status()["protected_tools"], [])
+        self.assertFalse(state.status(a)["caller_owns_protection"])
         replacement = {**process, "pid": 12}
         self.assertEqual(state.acquire(b, "Another inspection", process=replacement)["claim"]["process"], replacement)
         state.require(a, process)
@@ -86,6 +92,129 @@ class SessionOwnershipTests(unittest.TestCase):
         state.bind(a, replacement, "native_loaded")
         self.assertEqual(state.status()["claim"]["process"], replacement)
         self.assertFalse(state.release(b)["game_stopped"])
+
+    def test_explicit_protection_guards_only_selected_tools_and_ignores_process_metadata(self):
+        state = SessionOwnership(); a, b = object(), object()
+        process = {"pid": 11, "creation_time": "T1", "executable": "game"}
+        protected = state.acquire(a, "Protected verification", process=process,
+                                  protected_tools=["g1r_development_key", "g1r_development_stop"])
+        self.assertEqual(protected["scope"], "optional_tool_protection")
+        self.assertFalse(protected["control_required"])
+        self.assertTrue(protected["ownership_enforced"])
+        self.assertTrue(protected["caller_owns_protection"])
+        self.assertEqual(protected["protected_tools"], ["g1r_development_key", "g1r_development_stop"])
+        self.assertFalse(state.status(b)["caller_owns_protection"])
+        self.assertEqual(state.acquire(a, "Protected verification", protected_tools=protected["protected_tools"])
+                         ["protection"], protected["protection"])
+        for tools in ([], "g1r_development_key", [None]):
+            with self.subTest(tools=tools), self.assertRaises(DevelopmentError) as caught:
+                state.acquire(b, "Invalid protection", protected_tools=tools)
+            self.assertEqual(caught.exception.code, "invalid_protected_tools")
+            self.assertEqual(state.status(a)["protection"], protected["protection"])
+        for tool in ("g1r_development_key", "g1r_development_stop"):
+            state.check(a, tool)
+            with self.subTest(tool=tool), self.assertRaises(DevelopmentError) as caught:
+                state.check(b, tool)
+            self.assertEqual(caught.exception.code, "session_protected")
+            self.assertFalse(caught.exception.outcome_unknown)
+            self.assertEqual(caught.exception.receipt["protection"], protected["protection"])
+            self.assertEqual(caught.exception.receipt["tool"], tool)
+            self.assertEqual(caught.exception.receipt["release_tool"], "g1r_session_release")
+            self.assertEqual(caught.exception.receipt["takeover_parameter"], "takeover")
+        for tool in ("g1r_native_status", "g1r_development_processes", "g1r_invoke",
+                     "g1r_development_key_extra"):
+            state.check(b, tool)
+        before = state.status(a)
+        with self.assertRaises(DevelopmentError) as caught:
+            state.acquire(b, "Foreign ordinary inspection", process={**process, "pid": 12},
+                          protected_tools=["g1r_invoke"])
+        self.assertEqual(caught.exception.code, "session_protected")
+        self.assertEqual(state.status(a), before)
+        state.acquire(b, "Information about a replaced process", expected_claim_id="stale",
+                      process={**process, "creation_time": "T2"})
+        self.assertEqual(state.status(a)["protection"], before["protection"])
+        state.require(b, {**process, "pid": 12})
+        state.check(a, "g1r_development_key")
+        with self.assertRaises(DevelopmentError) as caught:
+            state.check(b, "g1r_development_key")
+        self.assertEqual(caught.exception.code, "session_protected")
+        self.assertFalse(state.status(b)["disconnect_releases_claim"])
+        self.assertFalse(state.status(b)["automatic_game_stop"])
+        key_protection = state.acquire(a, "Keep input protection across metadata cleanup",
+                                       protected_tools=["g1r_development_key"])["protection"]
+        state.check(b, "g1r_development_stop")
+        self.assertTrue(state.clear_information())
+        cleared = state.status(a)
+        self.assertFalse(cleared["claimed"])
+        self.assertIsNone(cleared["claim"])
+        self.assertEqual(cleared["protection"], key_protection)
+        self.assertTrue(cleared["caller_owns_protection"])
+        state.acquire(b, "Information after a stop", process={**process, "pid": 12})
+        self.assertEqual(state.status(a)["protection"], key_protection)
+        state.check(a, "g1r_development_key")
+        with self.assertRaises(DevelopmentError) as caught:
+            state.check(b, "g1r_development_key")
+        self.assertEqual(caught.exception.code, "session_protected")
+        state.check(b, "g1r_development_stop")
+
+    def test_explicit_takeover_and_any_client_release_do_not_stop_game_or_require_claim_id(self):
+        state = SessionOwnership(); a, b = object(), object()
+        state.acquire(a, "Protected verification", protected_tools=["g1r_development_key"])
+        original = state.status(a)
+        with self.assertRaises(DevelopmentError) as caught:
+            state.acquire(b, "Stale takeover", expected_claim_id="stale", takeover=True,
+                          process={"pid": 99},
+                          protected_tools=["g1r_development_key"])
+        self.assertEqual(caught.exception.code, "stale_session_claim")
+        with self.assertRaises(DevelopmentError) as caught:
+            state.release(b, expected_claim_id="stale")
+        self.assertEqual(caught.exception.code, "stale_session_claim")
+        self.assertEqual(state.status(a), original)
+        replacement = state.acquire(b, "Explicit takeover", takeover=True,
+                                    protected_tools=["g1r_development_key"])
+        self.assertNotEqual(replacement["protection"]["claim_id"], original["protection"]["claim_id"])
+        state.check(b, "g1r_development_key")
+        with self.assertRaises(DevelopmentError) as caught:
+            state.check(a, "g1r_development_key")
+        self.assertEqual(caught.exception.code, "session_protected")
+        changed = state.acquire(b, "Explicit takeover", protected_tools=["g1r_development_stop"])
+        self.assertNotEqual(changed["protection"]["claim_id"], replacement["protection"]["claim_id"])
+        state.check(a, "g1r_development_key")
+        with self.assertRaises(DevelopmentError) as caught:
+            state.check(a, "g1r_development_stop")
+        self.assertEqual(caught.exception.code, "session_protected")
+        released = state.release(a)
+        self.assertTrue(released["released"])
+        self.assertFalse(released["game_stopped"])
+        self.assertIsNone(state.status()["protection"])
+        for owner in (a, b):
+            state.check(owner, "g1r_development_key")
+        self.assertFalse(state.release(b)["released"])
+        final = state.acquire(a, "Another protected verification", protected_tools=["g1r_development_key"])
+        self.assertTrue(state.release(b, expected_claim_id=final["protection"]["claim_id"])["released"])
+        self.assertFalse(state.status()["claimed"])
+
+    def test_concurrent_explicit_acquire_has_one_holder_and_one_conflict(self):
+        state = SessionOwnership(); owners = [object(), object()]
+        barrier = threading.Barrier(2); accepted, rejected = [], []
+        def claim(owner):
+            barrier.wait()
+            try:
+                state.acquire(owner, "Concurrent protection", protected_tools=["g1r_development_key"])
+            except DevelopmentError as error:
+                rejected.append((owner, error))
+            else:
+                accepted.append(owner)
+        threads = [threading.Thread(target=claim, args=(owner,)) for owner in owners]
+        for thread in threads: thread.start()
+        for thread in threads: thread.join()
+        self.assertEqual(len(accepted), 1)
+        self.assertEqual(len(rejected), 1)
+        self.assertEqual(rejected[0][1].code, "session_protected")
+        state.check(accepted[0], "g1r_development_key")
+        with self.assertRaises(DevelopmentError):
+            state.check(rejected[0][0], "g1r_development_key")
+        state.check(rejected[0][0], "g1r_native_status")
 
     def test_repeated_acquire_keeps_metadata_without_text_length_or_content_limits(self):
         state = SessionOwnership(); a = object()

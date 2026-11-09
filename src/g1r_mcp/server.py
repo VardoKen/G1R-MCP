@@ -2,6 +2,8 @@
 
 import argparse
 import asyncio
+from functools import wraps
+import inspect
 import json
 import logging
 from pathlib import Path
@@ -25,7 +27,7 @@ from .debug_database import DebugDatabaseCatalog
 from .debug_session import DebugSession
 from .save_loading import SaveLoading, SaveLoadingError
 from . import modlist_dialog
-from .tool_catalog import build_tool_contracts
+from .tool_catalog import PROTECTABLE_TOOLS, build_tool_contracts
 from pydantic import StrictBool, StrictInt, StrictStr
 from .workspace import PackageWorkspace, WorkspaceError, _parts, _checked
 from .package_export import ExportError, export_package, verify_export
@@ -158,6 +160,15 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     local_owner = object()
 
     def request_owner(ctx: Context | None) -> Any:
+        if ctx is not None:
+            try:
+                request = ctx.request_context.request
+                session_id = request.headers.get("mcp-session-id") if request is not None else None
+                if session_id:
+                    return "http:" + session_id
+                return ctx.request_context.session
+            except ValueError:
+                pass
         return local_owner
 
     def watch_owner(ctx: Context | None) -> str:
@@ -217,8 +228,52 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     read_only = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
     debug_action = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
 
+    def protection_failure(error: DevelopmentError) -> ToolError:
+        payload = {"code": error.code, "message": str(error), "outcome_unknown": False}
+        if error.receipt is not None:
+            payload["receipt"] = error.receipt
+        return ToolError(json.dumps(payload, ensure_ascii=False))
+
+    def protected_tool(function):
+        """Check explicit tool protection at admission, preserving its MCP signature."""
+        signature = inspect.signature(function)
+        accepts_context = "ctx" in signature.parameters
+        guarded_signature = signature if accepts_context else signature.replace(parameters=[
+            *signature.parameters.values(),
+            inspect.Parameter("ctx", inspect.Parameter.KEYWORD_ONLY, default=None, annotation=Context),
+        ])
+
+        def check(args, kwargs):
+            arguments = guarded_signature.bind_partial(*args, **kwargs).arguments
+            if function.__name__ == "g1r_modlist_dialog" and arguments.get("action", "status") != "continue":
+                return
+            try:
+                with ownership.lock:
+                    ownership.check(request_owner(arguments.get("ctx")), function.__name__)
+            except DevelopmentError as error:
+                raise protection_failure(error) from None
+
+        if inspect.iscoroutinefunction(function):
+            @wraps(function)
+            async def guarded(*args, **kwargs):
+                check(args, kwargs)
+                if not accepts_context:
+                    kwargs.pop("ctx", None)
+                return await function(*args, **kwargs)
+        else:
+            @wraps(function)
+            def guarded(*args, **kwargs):
+                check(args, kwargs)
+                if not accepts_context:
+                    kwargs.pop("ctx", None)
+                return function(*args, **kwargs)
+        if not accepts_context:
+            guarded.__signature__ = guarded_signature
+            guarded.__annotations__ = {**function.__annotations__, "ctx": Context}
+        return guarded
+
     @server.tool(annotations=read_only)
-    def g1r_status() -> dict[str, Any]:
+    def g1r_status(ctx: Context = None) -> dict[str, Any]:
         """Get the server version and identify results that are not confirmed in the game."""
         return {
             "server": {"name": "G1R MCP", "version": __version__, "transport": transport, "ready": True,
@@ -228,7 +283,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                         "identity_tool": "g1r_source_identity"},
             "workspace": {"root": str(workspace.root), "format": "GothicMod.json/Script/ScriptPatches/Config/Content/Story",
                           "installed_game_deployment": False},
-            "game_session": ownership.status(),
+            "game_session": ownership.status(request_owner(ctx)),
             "game": {
                 "backend_implemented": True, "connection_checked": False, "ready": False, "ready_known": False,
                 "configured_root": str(configured_game_root.absolute()),
@@ -250,6 +305,11 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             "catalog_revision": __version__,
             "catalog_revision_kind": "server_tool_contract",
             "tool_contracts": tool_contracts,
+            "parallel_work": {"default": "shared", "opt_in": "g1r_session_acquire.protected_tools",
+                              "protectable_tools": list(PROTECTABLE_TOOLS), "reads_always_allowed": True,
+                              "conditional_read_paths": {"g1r_modlist_dialog": {"action": "status"}},
+                              "check_point": "dispatch_admission", "already_admitted_calls_cancelled": False,
+                              "release_tool": "g1r_session_release", "takeover_parameter": "takeover"},
             "local_tools": [
                 {"name": name, "description": description, "implemented": True,
                  "available": (None if contracts_by_name[name]["result"]["dynamic_fields"]
@@ -962,11 +1022,13 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
         }
 
     @server.tool(annotations=debug_action)
+    @protected_tool
     async def g1r_debug_attach(timeout: float = 5.0) -> dict[str, Any]:
         """Attach one shared debugger connection to the current game's listener."""
         return await asyncio.to_thread(debug_session.attach, timeout)
 
     @server.tool(annotations=debug_action)
+    @protected_tool
     async def g1r_debug_detach() -> dict[str, Any]:
         """Stop debugging and close the shared debugger connection."""
         return await asyncio.to_thread(debug_session.detach)
@@ -977,11 +1039,13 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
         return debug_session.status()
 
     @server.tool(annotations=debug_action)
+    @protected_tool
     async def g1r_debug_breakpoints(path: str, lines: list[int], module: str = "", timeout: float = 5.0) -> dict[str, Any]:
         """Replace breakpoints for one explicit script path and module."""
         return await asyncio.to_thread(debug_session.breakpoints, path, lines, module, timeout)
 
     @server.tool(annotations=debug_action)
+    @protected_tool
     async def g1r_debug_control(action: str, timeout: float = 5.0) -> dict[str, Any]:
         """Pause, continue or step execution using pause, continue, step_over, step_in or step_out."""
         return await asyncio.to_thread(debug_session.control, action, timeout)
@@ -997,6 +1061,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
         return await asyncio.to_thread(debug_session.variables, expression, timeout)
 
     @server.tool(annotations=debug_action)
+    @protected_tool
     async def g1r_debug_evaluate(expression: str, frame_id: int, timeout: float = 5.0) -> dict[str, Any]:
         """Evaluate an AngelScript expression in an explicit debugger frame."""
         return await asyncio.to_thread(debug_session.evaluate, expression, frame_id, timeout)
@@ -1083,6 +1148,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=False))
+    @protected_tool
     def g1r_create_package(relative_path: str, metadata: dict[str, Any]) -> dict[str, Any]:
         """Create GothicMod.json/Script: metadata requires name, title, author, and modVersion; does not load the mod."""
         try:
@@ -1092,6 +1158,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=True, openWorldHint=False))
+    @protected_tool
     def g1r_create_package_directory(relative_path: str, directory_path: str) -> dict[str, Any]:
         """Create allowed Script, ScriptPatches, Config, Content, or Story directories inside a package; preserve an existing directory."""
         try:
@@ -1118,6 +1185,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=False))
+    @protected_tool
     def g1r_write_package_file(relative_path: str, file_path: str, content: str,
                                expected_sha256: str | None = None) -> dict[str, Any]:
         """Write UTF-8 descriptor or component text; replacement requires SHA-256, while omitting the hash creates only a new file."""
@@ -1128,6 +1196,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=False))
+    @protected_tool
     def g1r_export_package(relative_package: str, destination: str) -> dict[str, Any]:
         """Export the complete package to a new workspace artifacts directory with ZIP and manifest; does not install or load it."""
         try:
@@ -1200,7 +1269,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                     ownership.acquire(owner, session_reason, package=params.get("relative_package"))
                     ownership.launched(owner, params["relative_package"])
                 elif operation == "stop" and result.get("outcome_unknown") is False and result.get("tool_result", {}).get("state") == "stopped":
-                    result["session_released"] = ownership.release(owner)["released"]
+                    result["session_released"] = ownership.clear_information()
             stopped = result.get("tool_result")
             if ((operation == "start" and result.get("state") == "launch_requested"
                  and result.get("outcome_unknown") is False)
@@ -1227,28 +1296,36 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             raise ToolError(json.dumps(payload, ensure_ascii=False)) from None
 
     @server.tool(annotations=read_only)
-    def g1r_session_status() -> dict[str, Any]:
-        """Read optional shared development-session information; it does not restrict game control."""
-        return ownership.status()
+    def g1r_session_status(ctx: Context = None) -> dict[str, Any]:
+        """Read shared session information and any explicitly selected tool protection."""
+        return ownership.status(request_owner(ctx))
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
     def g1r_session_acquire(reason: str, expected_process: dict[str, Any] | None = None,
-                            expected_claim_id: str | None = None, ctx: Context = None) -> dict[str, Any]:
-        """Record optional development-session information. Any client may update it; no game launch is performed."""
+                            expected_claim_id: str | None = None, protected_tools: list[str] | None = None,
+                            takeover: bool = False, ctx: Context = None) -> dict[str, Any]:
+        """Record session information, or explicitly protect selected mutating tools; takeover replaces another client's protection."""
         try:
+            if protected_tools is not None:
+                if not isinstance(protected_tools, list) or not protected_tools or any(
+                    not isinstance(name, str) or name not in PROTECTABLE_TOOLS for name in protected_tools
+                ):
+                    raise DevelopmentError("invalid_protected_tools",
+                                           "Select a non-empty list from g1r_capabilities.parallel_work.protectable_tools; use g1r_session_release to clear protection")
             owner = request_owner(ctx)
             return ownership.acquire(owner, reason, process=expected_process,
-                                     expected_claim_id=expected_claim_id)
+                                     expected_claim_id=expected_claim_id,
+                                     protected_tools=protected_tools, takeover=takeover)
         except DevelopmentError as error:
-            raise ToolError(json.dumps({"code": error.code, "message": str(error), "outcome_unknown": error.outcome_unknown}, ensure_ascii=False)) from None
+            raise protection_failure(error) from None
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
     def g1r_session_release(expected_claim_id: str | None = None, ctx: Context = None) -> dict[str, Any]:
-        """Clear optional session information from any client without stopping the game."""
+        """Explicitly clear session information and protection from any client without stopping the game."""
         try:
-            return ownership.release(request_owner(ctx))
+            return ownership.release(request_owner(ctx), expected_claim_id=expected_claim_id)
         except DevelopmentError as error:
-            raise ToolError(json.dumps({"code": error.code, "message": str(error), "outcome_unknown": error.outcome_unknown}, ensure_ascii=False)) from None
+            raise protection_failure(error) from None
 
     @server.tool(annotations=read_only)
     def g1r_compile_diagnostics(relative_package: str, expected_manifest_sha256: str | None = None, report_path: str | None = None,
@@ -1282,6 +1359,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=False))
+    @protected_tool
     def g1r_apply_staged_file(relative_package: str, file_path: str,
                                expected_source_sha256: str, expected_staged_sha256: str,
                                expected_process: dict[str, Any], ctx: Context = None) -> dict[str, Any]:
@@ -1293,6 +1371,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False,
         destructiveHint=False, idempotentHint=False, openWorldHint=False))
+    @protected_tool
     def g1r_development_key(expected_process: dict[str, Any], virtual_key: StrictInt,
                            expected_window: StrictInt | None = None,
                            ctx: Context = None) -> dict[str, Any]:
@@ -1303,6 +1382,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True,
                                             idempotentHint=False, openWorldHint=True))
+    @protected_tool
     def g1r_development_start(relative_package: str, expected_manifest_sha256: str,
                                restart: bool = False,
                              expected_process: dict[str, Any] | None = None,
@@ -1319,6 +1399,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True,
                                             idempotentHint=False, openWorldHint=True))
+    @protected_tool
     def g1r_development_stop(expected_process: dict[str, Any], reason: str = "Verification complete", ctx: Context = None) -> dict[str, Any]:
         """Close only the confirmed game instance using retained HANDLEs."""
         if not reason or any(ord(c) < 32 for c in reason):
@@ -1329,6 +1410,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=True))
+    @protected_tool
     def g1r_native_load(expected_process: dict[str, Any], expected_dll_sha256: str, ctx: Context = None) -> dict[str, Any]:
         """Load a DLL into a verified process with hash validation; do not retry an unknown outcome."""
         return development_request("load_native", expected_process=expected_process,
@@ -1346,6 +1428,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=False))
+    @protected_tool
     def g1r_movieplayer_finish(expected_wait_id: StrictStr, ctx: Context = None,
                                 timeout_seconds: float | None = None) -> dict[str, Any]:
         """Explicitly request completion of an exact wait; the finish call, Wait return, and game Tick are distinct."""
@@ -1357,6 +1440,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
                                        "retry": "only_explicit_new_request"}, ensure_ascii=False)) from None
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+    @protected_tool
     def g1r_native_enable() -> dict[str, Any]:
         """Install a Tick hook in an already loaded DLL; run after the main menu appears."""
         return native_request("enable_game", {})
@@ -1428,6 +1512,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=False))
+    @protected_tool
     def g1r_watch_start(handle: str, properties: list[str], duration_ms: int,
                          interval_ms: int, capacity: int = 32, ctx: Context = None,
                          timeout_seconds: float | None = None) -> dict[str, Any]:
@@ -1445,6 +1530,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=True, openWorldHint=False))
+    @protected_tool
     def g1r_watch_stop(watch_id: str, ctx: Context = None,
                         timeout_seconds: float | None = None) -> dict[str, Any]:
         """Stop subsequent reads on the game thread; retain final events."""
@@ -1452,6 +1538,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=False))
+    @protected_tool
     def g1r_watch_forget(watch_id: str, ctx: Context = None,
                           timeout_seconds: float | None = None) -> dict[str, Any]:
         """Release an already completed observation in the current session."""
@@ -1464,6 +1551,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False,
                                             idempotentHint=False, openWorldHint=False))
+    @protected_tool
     def g1r_watch_resume(watch_id: str, expected_session_id: str | None = None,
                         expected_client_owner: str | None = None, ctx: Context = None,
                          timeout_seconds: float | None = None) -> dict[str, Any]:
@@ -1478,6 +1566,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
     save_loading = SaveLoading(native_request)
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
+    @protected_tool
     async def g1r_save_list(profile_id: int = 2) -> dict[str, Any]:
         """Select a profile in the existing game menu and list saves without writing save files."""
         try:
@@ -1488,6 +1577,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
             raise ToolError(f"Save listing file operation failed (errno={error.errno}, winerror={getattr(error, 'winerror', None)})") from None
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
+    @protected_tool
     async def g1r_save_load(slot_name: str, profile_id: int = 2,
                             accept_mod_mismatch: bool = True, timeout: float = 120.0) -> dict[str, Any]:
         """Load a save from g1r_save_list; continue a mod mismatch and confirm a live player."""
@@ -1504,6 +1594,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
         return await asyncio.to_thread(save_loading.status)
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
+    @protected_tool
     async def g1r_modlist_dialog(action: str = "status", process_id: int | None = None) -> dict[str, Any]:
         """Read the native mod-list dialog outside Tick; action=continue publishes Continue anyway."""
         if process_id is None:
@@ -1525,6 +1616,7 @@ def create_server(modkit_root: Path, workspace_root: Path, source_revision: str 
         raise ToolError("Unknown mod-list dialog action")
 
     @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
+    @protected_tool
     def g1r_invoke(handle: str, function: str, arguments: dict[str, Any] | None = None,
                     expected_signature_token: StrictStr | None = None,
                     timeout_seconds: float | None = None) -> dict[str, Any]:

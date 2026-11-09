@@ -1,5 +1,13 @@
 # Проверки G1R MCP: локальные инструменты и нативный маршрут
 
+## Явная protection — 09.11.2026, dev.116
+
+Python/server dev.116, native DLL dev.115. Новый контракт сохраняет shared default: acquire без protected_tools — информационная запись, явный список защищает только перечисленные MCP-операции от другого клиента. Status доступен всем; reason/owner/protected_tools видны, release и takeover явные, без PID prerequisite, TTL и автоматического приоритета. Owner — MCP-сессия; после disconnect protection сохраняется, новая сессия восстанавливает управление явным release/takeover. Уже допущенные операции не отменяются. Исторические результаты dev.115 ниже не считаются проверкой dev.116.
+
+Затронутые [session unit tests](../../../tests/test_session_ownership.py) — **10/10 PASS, 0,006 с**: shared default, конкретный список, чужой отказ, идемпотентность и смена настроек владельцем, takeover/release, stale ID, metadata без PID gate и конкурентное acquisition. После lifecycle-поправки ровно один расширенный метод повторён: **1/1 PASS, 0,007 с**; clear_information после stop сохраняет protection, последующий информационный acquire её не снимает. [HTTP window/input](../../../tests/test_mcp_window_input.py) — **2/2 PASS, 1,994 с**: разные MCP IDs, отказ до process/queue effects, takeover, сохранение protection после HTTP DELETE, явный release чужим клиентом без stop и один native TCP. Прежний MoviePlayer shared-default/lost-response сценарий прошёл.
+
+[Bootstrap](../../../tests/test_mcp_bootstrap.py) — три метода и [существующий stdio catalog](../../../tests/test_mcp_server.py) — один метод: вместе **4/4 PASS, 23,151 с**. SDK-проверка всех **24 tools**, guard coverage, schema и скрытого ctx прошла; независимый финальный review не выявил существенных дефектов. Общий HTTP runtime обновлён одним restart на порту 27124; подключённые `g1r_status` и `g1r_capabilities` подтвердили Python116, 64 tools, новую acquire schema и 24 protectable tools. По умолчанию protection=null, control_required=false, ownership_enforced=false. Новый единый полный Python/CTest-прогон и игровая приёмка не выполнялись; игра и DLL не перезапускались, native dev.115 сохранена.
+
 ## Общий доступ клиентов — 08.11.2026, dev.115
 
 Python/native **1.0.0-dev.115**, 64 инструмента. [Live-приёмка](../../../artifacts/dev115-cross-client-watch-live.json) принята: второй клиент читает, останавливает и забывает watch первого; resume со старыми owner metadata проходит. Session metadata необязательна, `control_required=false`, `ownership_enforced=false`; native-сессия и object/world/script validity сохраняются. Очистка подтверждена, игра закрыта.

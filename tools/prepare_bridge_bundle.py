@@ -219,9 +219,14 @@ Verification does not launch the game or load the DLL.
    In Codex config.toml, set `[mcp_servers.g1r_mcp]` and
    `url = "http://127.0.0.1:27124/mcp"`; do not set command/args for each chat.
    The server does not launch the game; all chats share one native TCP connection.
-   Compatibility g1r_session_status/acquire/release tools store optional information;
-   they are not required for development control. Any chat can access a watch by
-   watch_id. Client-owner metadata does not authorize game or watch operations.
+Development-session records are optional information unless a client explicitly
+uses g1r_session_acquire(reason, protected_tools=[exact tool names]). Only those
+selected tools are protected from other clients; all other tools remain shared.
+g1r_session_status shows the owner, reason, and protected_tools. Any client can
+explicitly release protection, or replace the owner and selected tools with
+takeover=True. Protection persists after disconnect and only controls admission
+of new calls; it does not cancel accepted work. Without protection, any chat can
+read, stop, or forget a watch by watch_id.
    Exact target-process, native-connection and object-generation checks still apply.
    A separate stdio client uses the default transport without HTTP parameters.
    Use absolute paths; do not reuse values from another PC.

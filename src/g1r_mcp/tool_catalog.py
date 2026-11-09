@@ -4,6 +4,16 @@ from copy import deepcopy
 from typing import Any, Iterable
 
 
+PROTECTABLE_TOOLS = (
+    "g1r_create_package", "g1r_create_package_directory", "g1r_write_package_file", "g1r_export_package",
+    "g1r_development_start", "g1r_development_stop", "g1r_development_key", "g1r_native_load", "g1r_apply_staged_file",
+    "g1r_native_enable", "g1r_movieplayer_finish", "g1r_invoke",
+    "g1r_watch_start", "g1r_watch_stop", "g1r_watch_forget", "g1r_watch_resume",
+    "g1r_debug_attach", "g1r_debug_detach", "g1r_debug_breakpoints", "g1r_debug_control", "g1r_debug_evaluate",
+    "g1r_save_list", "g1r_save_load", "g1r_modlist_dialog",
+)
+
+
 # The fields below are an incomplete list of known successful-response fields,
 # not a new required schema. Schemas and arguments come only from MCP registration.
 _SOURCE_PAGE = ("items", "truncated", "total_matches", "source", "validation", "offset", "next_offset")
@@ -40,7 +50,7 @@ _CONTRACTS = {
     "g1r_status": _entry("server_metadata", (), "src/g1r_mcp/server.py:g1r_status",
                           ("server", "sources", "workspace", "game_session", "game")),
     "g1r_capabilities": _entry("registered_tool_metadata", (), "src/g1r_mcp/server.py:g1r_capabilities",
-                                ("catalog_revision", "tool_contracts", "local_tools", "native_tools", "workspace_tools")),
+                                ("catalog_revision", "tool_contracts", "parallel_work", "local_tools", "native_tools", "workspace_tools")),
     "g1r_source_identity": _entry("modkit_git_metadata", ("configured_modkit",),
                                    "src/g1r_mcp/source_identity.py:inspect",
                                    ("inspected_at", "snapshot_kind", "source_only", "git", "game_compatibility_checked")),
@@ -94,12 +104,14 @@ _CONTRACTS = {
                                      "src/g1r_mcp/snapshots.py:compare_snapshots",
                                      ("source", "validation", "provenance", "comparable", "items", "coverage", "truncated")),
     "g1r_session_status": _entry("optional_development_session_metadata", (), "src/g1r_mcp/session_ownership.py:SessionOwnership.status",
-                                  ("claimed", "claim", "control_required", "ownership_enforced", "disconnect_releases_claim", "automatic_game_stop")),
+                                  ("claimed", "claim", "protection", "protected_tools", "caller_owns_protection", "scope", "control_required",
+                                   "ownership_enforced", "disconnect_releases_claim", "automatic_game_stop")),
     "g1r_session_acquire": _entry("optional_development_session_metadata", (),
-                                   "src/g1r_mcp/session_ownership.py:SessionOwnership.acquire", ("claimed", "claim")),
+                                    "src/g1r_mcp/session_ownership.py:SessionOwnership.acquire",
+                                    ("claimed", "claim", "protection", "protected_tools", "caller_owns_protection")),
     "g1r_session_release": _entry("optional_development_session_metadata", (),
                                    "src/g1r_mcp/session_ownership.py:SessionOwnership.release",
-                                   ("released", "previous_claim", "game_stopped")),
+                                   ("released", "previous_claim", "previous_protection", "game_stopped")),
     "g1r_compile_diagnostics": _entry("compiler_diagnostic_text", ("workspace_package",
                                                                 "supplied_report_file_or_native_channel_and_angelscript_manager"),
                                        "src/g1r_mcp/compile_diagnostics.py:read_runtime_report/read_report",

@@ -1,6 +1,6 @@
-# Локальные MCP-инструменты — 1.0.0-dev.115
+# Локальные MCP-инструменты — 1.0.0-dev.116
 
-Дата сверки: **08.11.2026**. Документ описывает текущую реализацию в `src/g1r_mcp/` и `native/src/`. Сервер использует официальный Python SDK `mcp==2.3.0`; в `server.py` зарегистрировано **64 инструмента**. Схемы аргументов задаёт регистрация MCP, а `g1r_capabilities` дополняет их происхождением данных, доступностью, форматами и ограничениями. Ответы и ошибки моста — на английском языке; проектная документация — на русском.
+Дата сверки: **09.11.2026**. Python/server — dev.116, native DLL — dev.115; документ описывает реализацию в `src/g1r_mcp/` и `native/src/`. Сервер использует официальный Python SDK `mcp==2.3.0`; в `server.py` зарегистрировано **64 инструмента**. Схемы аргументов задаёт регистрация MCP, а `g1r_capabilities` дополняет их происхождением данных, доступностью, форматами и ограничениями. Ответы и ошибки моста — на английском языке; проектная документация — на русском.
 
 Назначение G1R MCP — полноценное исследование, разработка и отладка официальных модов, а перенос пользовательских модов с UE4SS — промежуточный рубеж. Рабочие пакеты — официальные `GothicMod.json` и AngelScript. Каталог ниже описывает реализованные инструменты, а не завершение всей цели. Игровой маршрут, включая загрузку DLL и выполнение через Tick, описан в [native-route.md](native-route.md); сводка готового и неготового — в [README.md](README.md), доказательства — в [описании проверок](../../tests/G1R_MCP/README.md).
 
@@ -9,7 +9,7 @@ Dev.112: `g1r_debug_database` получил полную runtime-базу: 5 26
 
 ## Каталог 64 инструментов
 
-Последняя общая приёмка относится к Python/server/native DLL **1.0.0-dev.114**. Live принял save loaded/MainMap/готовый персонаж, debugger locals/evaluate Sum/step_over/continue, 50/50 typed-вызовов, 10/10 checks и cleanup. CTest 39/39 пройден; Python: 730 исходных успешных + 9 актуализированных адресных методов + committed helper. Первичный прогон 740 тестов сохраняет ошибки, единого 740 PASS нет. Raw database dev.112 и installed wheel/runtime dev.114 приняты отдельно. Эти результаты не являются приёмкой нового dev.115. [Live dev.114](../../../artifacts/dev114-save-debugger-typed-live.json), [database dev.112](../../../artifacts/dev112-debug-database-live-complete.json), [consumer dev.114](../../../artifacts/dev114-wheel-installed-acceptance.json).
+Последняя общая приёмка относится к Python/server/native DLL **1.0.0-dev.114**. Live принял save loaded/MainMap/готовый персонаж, debugger locals/evaluate Sum/step_over/continue, 50/50 typed-вызовов, 10/10 checks и cleanup. CTest 39/39 пройден; Python: 730 исходных успешных + 9 актуализированных адресных методов + committed helper. Первичный прогон 740 тестов сохраняет ошибки, единого 740 PASS нет. Raw database dev.112, installed wheel/runtime dev.114 и адресный shared-control dev.115 приняты отдельно. Optional protection dev.116 принята адресными локальными и HTTP-проверками; игрового повтора и нового полного прогона не было. [Live dev.114](../../../artifacts/dev114-save-debugger-typed-live.json), [database dev.112](../../../artifacts/dev112-debug-database-live-complete.json), [адресные результаты](../../tests/G1R_MCP/README.md).
 
 Э8 текущей приёмки завершена в подтверждённом контракте. Исторический stdio dev.96 диапазон принят для последовательной development-работы: 17 объектов/561 поле, snapshots по 5 141 033 байта, строки по 300 000 символов, максимум малых/объёмных запросов 221,046/1079,454 мс, dropped0/queue0/cleanup. Это не latency-гарантия HTTP dev.114; CPU/FPS не измерены, caps не вводятся. Точные замеры и границы — у [владельца проверок](../../tests/G1R_MCP/README.md).
 
@@ -71,9 +71,9 @@ DebugSession и SaveLoading принадлежат общему серверу, 
 
 | Инструмент | Аргументы | Назначение |
 | --- | --- | --- |
-| `g1r_session_status` | Нет | Необязательные сведения общей development-сессии; control_required=false и ownership_enforced=false |
-| `g1r_session_acquire` | `reason`, `expected_process`, `expected_claim_id` | Совместимое имя для записи информационных сведений из любого чата; право управления не создаётся |
-| `g1r_session_release` | `expected_claim_id` | Очистка информационной записи из любого чата без остановки игры; исчезновение процесса не требуется |
+| `g1r_session_status` | Нет | Всегда доступные protection, protected_tools и caller_owns_protection; control_required=false, ownership_enforced=true только при активной protection выбранных tools |
+| `g1r_session_acquire` | `reason`, `expected_process=None`, `expected_claim_id=None`, `protected_tools=None`, `takeover=false` | Без списка — информационная запись без смены protection; явный непустой список защищает только выбранные изменяющие инструменты от другого MCP-клиента; takeover=true явно заменяет protection собственной причиной и списком |
+| `g1r_session_release` | `expected_claim_id=None` | Любой клиент явно снимает protection без остановки игры, проверки владельца или ожидания завершения процесса; optional claim ID сравнивается только при активной protection |
 | `g1r_compile_diagnostics` | `relative_package`, `expected_manifest_sha256`, `report_path`, `enable_ingame_tools=false`, `show_script_errors=false` | Native compiler formatter либо явно выбранный UTF-8 отчёт |
 | `g1r_development_recipe` | `relative_package`, `enable_ingame_tools=false`, `companion_packages`, `show_script_errors=false` | Manifest выбранных пакетов, запуск, процессы и SHA-256 DLL |
 | `g1r_development_processes` | Нет | PID, время создания и полный путь EXE выбранной игры и её wrapper |
@@ -105,7 +105,7 @@ DebugSession и SaveLoading принадлежат общему серверу, 
 | `g1r_watch_stop` | `watch_id` | Остановка наблюдения |
 | `g1r_watch_forget` | `watch_id` | Удаление его сохранённых данных |
 | `g1r_watch_list` | Нет | Обнаружение наблюдений текущего native-подключения |
-| `g1r_watch_resume` | `watch_id`; необязательные `expected_session_id`, `expected_client_owner` | Совместимое обновление информационных client metadata по watch_id без повторного запуска; expected_client_owner не ограничивает доступ, expected_session_id при передаче проверяет общую native-сессию |
+| `g1r_watch_resume` | `watch_id`; необязательные `expected_session_id`, `expected_client_owner` | Совместимое обновление информационных client metadata по watch_id без повторного запуска; expected_client_owner не ограничивает доступ, expected_session_id при передаче проверяет общую native-сессию; MCP guard действует только при явной protection этого инструмента |
 | `g1r_invoke` | `handle`, `function`, `arguments`, `expected_signature_token` | Один типизированный вызов подтверждённого контракта |
 
 Создание/запись/экспорт, apply-staged, информационные session acquire/release, запуск/остановка/загрузка/enable, ввод, MoviePlayer finish, управление наблюдениями и invoke имеют эффекты. Сравнение снимков, чтение файлов/значений, каталог и диагностика читают данные. `g1r_status` и `g1r_capabilities` не обращаются к живой игре: `connection_checked=false` и `ready_known=false` не означают её проверенную доступность.
@@ -158,9 +158,25 @@ Development helper поставляется отдельным companion-пак�
 
 Object/Class значения включают тип и session descriptor; Weak читается через текущую slot identity и serial, с проверкой доступности/типа. `null` допустим там, где отражённая ссылка пуста. `serial_guard.policy="strict_observed_equality_including_zero"`; наблюдаемые pointer/index/FName/serial объекта и класса должны совпасть. Нулевые serial не защищают от ABA, мост их не выделяет самостоятельно. Для мировых handles действует поколение `GameEngine.GameViewport.World`; world change завершает соответствующие watches и отзывает связанные handles. CDO/assets сохраняются при смене мира; script reload отдельно отзывает script-bound handles. Disconnect/reconnect отзывает handles и наблюдения всего native-подключения.
 
-`g1r_snapshot` и сравнение сохраняют различия значения, типа, охвата и неизвестного результата. `single_tick_sequential` не означает атомарность с произвольным внешним игровым кодом. Неполный охват не доказывает равенство; отсутствие цели не доказывает уничтожение объекта. Watches — опрос выбранных properties, а не произвольная подписка на игровые delegate-события. Любой чат читает/останавливает/забывает/возобновляет наблюдение по watch_id; client_owner и expected_client_owner не ограничивают доступ. Принадлежность общей native-сессии, сравнение expected_session_id и lifecycle мира/скриптов сохраняются.
+`g1r_snapshot` и сравнение сохраняют различия значения, типа, охвата и неизвестного результата. `single_tick_sequential` не означает атомарность с произвольным внешним игровым кодом. Неполный охват не доказывает равенство; отсутствие цели не доказывает уничтожение объекта. Watches — опрос выбранных properties, а не произвольная подписка на игровые delegate-события. По умолчанию любой чат читает/останавливает/забывает/возобновляет наблюдение по watch_id; client_owner и expected_client_owner не ограничивают доступ. Чтение остаётся общим; stop/forget/resume защищаются только при явном включении соответствующего tool в protection. Принадлежность общей native-сессии, сравнение expected_session_id и lifecycle мира/скриптов сохраняются.
 
-С dev.115 claim не требуется для development start/stop/restart, native load, клавиши, staging apply и MoviePlayer finish. Информационная запись старого завершённого процесса не привязывает новое управление к его PID. Проверки exact expected_process, native-поколений и действительности UObject не заменяются сведениями HTTP-клиента.
+## Разграничение параллельной работы
+
+По умолчанию доступ общий, как в dev.115: приобретать claim для development control не требуется. В dev.116 только явный `g1r_session_acquire(reason, protected_tools=[...])` включает protection для конкретных инструментов из разрешённого каталога. Например, `g1r_session_acquire(reason="Reload verification", protected_tools=["g1r_development_stop", "g1r_development_key"])` ограничивает чужие stop/key, сохраняя остальные операции общими. Уже допущенные вызовы завершаются; protection их не отменяет. Одновременно действует один владелец защищённого списка. Отсутствующий `protected_tools` (`None`) обновляет только информационную запись и не меняет активную protection; пустой список отклоняется. `g1r_session_status` всегда доступен; protection содержит `claim_id`, `owner_id`, `reason`, `protected_tools`, `claimed_at`, а верхний уровень — `protected_tools` и `caller_owns_protection`. `control_required` всегда false; `ownership_enforced` true только для активной protection со scope `optional_tool_protection`, иначе scope информационный. Protection не включается автоматически; TTL и автоматического приоритета нет. [Адресные проверки dev.116](../../tests/G1R_MCP/README.md) прошли.
+
+Разрешены только следующие 24 имени; остальные и пустой список отклоняются. Актуальный список возвращает `g1r_capabilities.parallel_work.protectable_tools`, точные контракты — `tool_contracts`; check_point равен `dispatch_admission`, уже допущенные вызовы не отменяются. `g1r_save_list` включает обновление меню и потому входит в список. У `g1r_modlist_dialog` guard действует только на continue; status свободен. Session status/acquire/release не защищаются этим механизмом.
+
+| Область | Допустимые protected_tools |
+| --- | --- |
+| Пакеты | `g1r_create_package`, `g1r_create_package_directory`, `g1r_write_package_file`, `g1r_export_package` |
+| Development/native | `g1r_development_start`, `g1r_development_stop`, `g1r_development_key`, `g1r_native_load`, `g1r_native_enable`, `g1r_apply_staged_file`, `g1r_movieplayer_finish`, `g1r_invoke` |
+| Watches | `g1r_watch_start`, `g1r_watch_stop`, `g1r_watch_forget`, `g1r_watch_resume` |
+| Debugger | `g1r_debug_attach`, `g1r_debug_detach`, `g1r_debug_breakpoints`, `g1r_debug_control`, `g1r_debug_evaluate` |
+| Сохранения и меню | `g1r_save_list`, `g1r_save_load`, `g1r_modlist_dialog` |
+
+При отказе возвращается `session_protected`, `outcome_unknown=false` и receipt с protection, точным tool, `release_tool=g1r_session_release` и `takeover_parameter=takeover`; операция не допущена к исполнению. Release возвращает previous_protection. Owner — стабильная идентичность MCP-сессии, а не ID чата Codex. Disconnect не закрывает игру или общий native-канал и не снимает protection. Если reconnect создаёт новую MCP-сессию, нужно прочитать status и явно вызвать `g1r_session_release`, доступный любому клиенту, либо `g1r_session_acquire(reason, protected_tools=[...], takeover=true)` со своей причиной и списком. Такая замена не происходит скрыто. Release не требует разрешения прежнего владельца или завершения PID и не останавливает игру.
+
+Это кооперативное разграничение вызовов через мост: оно не блокирует прямое редактирование исходников средствами ОС и не создаёт отдельный MCP-процесс. Подтверждённый development_stop очищает информационную запись и сохраняет active protection; её снимает только explicit release либо заменяет explicit acquire/takeover. Информационная запись завершённого процесса не привязывает новое управление к его PID. Проверки exact expected_process, native-поколений и действительности UObject сохраняются. Доступ к watches по watch_id общий по умолчанию; их native client-owner metadata остаются информационными независимо от явной MCP protection выбранных операций.
 
 ## Контракт invoke
 
