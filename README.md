@@ -29,6 +29,8 @@ The repository contains the Python MCP server and its game connection code, Wind
 
 Follow the [installation guide](docs/install.md) to install the included server, configure your paths, and connect your AI application. Give an AI agent the [agent guide](docs/agents.md) for tool usage and the game development workflow.
 
+The [game component guide](docs/game-component.md) explains the separate game-side package and how the external server uses its installed files.
+
 The shared MCP endpoint is `http://127.0.0.1:27124/mcp`. Start with `g1r_status` and `g1r_capabilities` to verify the connection. These tools report the server and its capabilities; they do not start the game or confirm live game readiness.
 
 ## License
