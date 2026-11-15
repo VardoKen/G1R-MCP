@@ -1,12 +1,14 @@
 # G1R MCP guide for AI agents
 
-G1R MCP 1.0.0 provides 64 MCP tools for researching, developing, and debugging official Gothic 1 Remake mods. Packages use `GothicMod.json`, AngelScript, and the official Modkit. This guide applies to any MCP client that supports Streamable HTTP. Human installation instructions are in [install.md](install.md).
+G1R MCP 1.0.0 provides 64 MCP tools for researching, developing, and debugging official Gothic 1 Remake mods. Packages use `GothicMod.json`, AngelScript, and the official Modkit. An MCP client is the external application or host in which the AI agent runs and which connects to the G1R MCP server. This guide applies to any such host that supports Streamable HTTP. Human installation instructions are in [install.md](install.md).
+
+The [G1R MCP repository](https://github.com/VardoKen/G1R-MCP) includes all of the bridge's own components: the Python MCP server, native DLL and loader, AngelScript development helper, and launch tools. The MCP client is the agent's host application, rather than an additional bridge component to obtain from this repository.
 
 ## Install and connect
 
 The runtime requires Windows x64, Gothic 1 Remake installed through Steam, Python 3.11 or later, and the [Microsoft Visual C++ x64 Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe). Obtain the [official G1R Modkit](https://github.com/AlkimiaInteractive/G1R-Modkit), including its `Script/` directory. Consult the [official documentation](https://alkimiainteractive.github.io/G1R-Modkit/) for package and scripting rules.
 
-Obtain this repository using the URL supplied by its GitHub page. Keep the source tree and its supplied native files together:
+Obtain [G1R MCP from GitHub](https://github.com/VardoKen/G1R-MCP). Keep the source tree and its supplied native files together:
 
 - `build/native/Release/G1R_MCP.dll`
 - `build/native/Release/g1r_mcp_loader.exe`
@@ -39,7 +41,7 @@ The launcher starts one background server and reuses its recorded process when c
 http://127.0.0.1:27124/mcp
 ```
 
-Use a URL connection in each client. A per-client command connection would create separate MCP processes. The shared server keeps one native TCP connection on `127.0.0.1:27123`, a shared debugger connection on port `27099`, and shared in-memory state for observations, save loading, and the debugger database. HTTP clients have separate MCP session identities while accessing these shared resources.
+The endpoint is local to the Windows computer running the server; the host's MCP connection must be able to reach it on that computer. Use a URL connection in each client. A per-client command connection would create separate MCP processes. The shared server keeps one native TCP connection on `127.0.0.1:27123`, a shared debugger connection on port `27099`, and shared in-memory state for observations, save loading, and the debugger database. HTTP clients have separate MCP session identities while accessing these shared resources.
 
 For a manually managed foreground server, the equivalent CLI is:
 
