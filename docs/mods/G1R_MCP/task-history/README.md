@@ -1,5 +1,9 @@
 # История задач G1R MCP
 
+## 15.11.2026 — публикация 1.0.0 на GitHub
+
+Принятый оператором выпуск опубликован в [VardoKen/G1R-MCP](https://github.com/VardoKen/G1R-MCP), ветка `master`; `origin` связан с `https://github.com/VardoKen/G1R-MCP.git`. Отправлена вся история собственного репозитория: 133 исходных коммита, включая релизный `3f7ddaf`, и один коммит документации публикации. Адрес и команда clone добавлены в инструкцию установки. Оператор разрешил последующую отправку связанных обновлений в `origin` после проверки и коммита. Дополнительный delivery-архив не создавался; несвязанный dirty helper сохранён.
+
 ## 15.11.2026 — 1.0.0: подготовка локального выпуска для GitHub
 
 Подготовлена поставка для проверки оператором: Python/native/helper version 1.0.0, 64 tools, готовые DLL/loader, English README/install/agent guide и MIT/third-party notices; shared launch принимает выбранные корни. Native CTest 39/39 PASS; полный разрешённый Python-прогон — 726 успешных из 727 и один timeout, после исправлений shared 5/5 и helper/probe 15/15 прошли отдельно. Чистая установка из staged checkout принята 57/57 checks; пользовательский Windows PowerShell 5 launch/HTTP/duplicate/stop — 15 checks PASS, один общий сервер; PowerShell 7 принят отдельно. [Точные результаты и границы](../../../tests/G1R_MCP/README.md). Dirty helper сохранён; новый игровой прогон, GitHub-публикация и отдельный delivery-архив не выполнялись. PLAN-001 R18 остаётся активным; номер 1.0.0 не закрывает функциональные границы плана.

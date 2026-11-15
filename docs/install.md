@@ -11,7 +11,14 @@ An internet connection is needed to install the Python dependencies. The game, M
 
 ## 2. Get and install the server
 
-Clone this repository using the HTTPS URL shown by GitHub's **Code** button, or download its files. Keep the repository layout intact. The native DLL and loader are already supplied in `build/native/Release/`; you do not need to compile them.
+Clone the [G1R MCP repository](https://github.com/VardoKen/G1R-MCP):
+
+```powershell
+git clone https://github.com/VardoKen/G1R-MCP.git
+cd G1R-MCP
+```
+
+You can also download the repository files from GitHub. Keep the repository layout intact. The native DLL and loader are already supplied in `build/native/Release/`; you do not need to compile them.
 
 Open PowerShell in the G1R MCP repository folder. Check that `python --version` reports Python 3.11 or later, then run:
 
