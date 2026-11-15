@@ -8,6 +8,9 @@ or changed identity is an error. Does not start the game or create autostart.
 [CmdletBinding()]
 param(
     [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
+    [string]$ModkitRoot,
+    [string]$WorkspaceRoot,
+    [string]$GameRoot,
     [ValidateRange(1, 60)][int]$StartupTimeoutSeconds = 20,
     [switch]$Json
 )
@@ -17,7 +20,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'game_process_common.ps1')
 
 function Get-G1RSharedConfiguration {
-    param([string]$Root)
+    param([string]$Root, [string]$ModkitPath, [string]$WorkspacePath, [string]$GamePath)
     $resolved = (Resolve-Path -LiteralPath $Root).ProviderPath
     $artifactRoot = Join-Path $resolved 'artifacts'
     foreach ($path in @($resolved, $artifactRoot)) {
@@ -35,10 +38,12 @@ function Get-G1RSharedConfiguration {
         if ($homes.Count -ne 1 -or $homes[0] -notmatch '^home\s*=\s*(.+)$') { throw 'shared_invalid_venv: base Python is not defined.' }
         $basePython = [IO.Path]::GetFullPath((Join-Path $Matches[1].Trim() 'python.exe'))
     }
-    $modkit = [IO.Path]::GetFullPath((Join-Path $resolved '..\G1R-Modkit'))
-    $arguments = '-B -m g1r_mcp.server --transport streamable-http --host 127.0.0.1 --port 27124 --modkit-root "' + $modkit + '" --workspace-root "' + $resolved + '" --native-port 27123 --runtime-root "' + $resolved + '"'
+    $modkit = if ($ModkitPath) { [IO.Path]::GetFullPath($ModkitPath) } else { [IO.Path]::GetFullPath((Join-Path $resolved '..\G1R-Modkit')) }
+    $workspace = if ($WorkspacePath) { [IO.Path]::GetFullPath($WorkspacePath) } else { $resolved }
+    $arguments = '-B -m g1r_mcp.server --transport streamable-http --host 127.0.0.1 --port 27124 --modkit-root "' + $modkit + '" --workspace-root "' + $workspace + '" --native-port 27123 --runtime-root "' + $resolved + '"'
+    if ($GamePath) { $arguments += ' --game-root "' + [IO.Path]::GetFullPath($GamePath) + '"' }
     [pscustomobject]@{
-        root = $resolved; artifacts = $artifactRoot; python = $python; modkit = $modkit
+        root = $resolved; artifacts = $artifactRoot; python = $python; modkit = $modkit; workspace = $workspace
         base_python = $basePython
         script = Join-Path $resolved 'src\g1r_mcp\server.py'; arguments = $arguments
         command_line = '"' + $python + '" ' + $arguments
@@ -60,7 +65,7 @@ function Assert-G1RSharedFile {
 }
 
 function Read-G1RSharedManifest {
-    param($Configuration)
+    param($Configuration, [switch]$UseRecordedArguments)
     Assert-G1RSharedFile $Configuration.manifest
     if (-not (Test-Path -LiteralPath $Configuration.manifest)) { return $null }
     if ((Get-Item -LiteralPath $Configuration.manifest).Length -gt 65536) {
@@ -80,15 +85,17 @@ function Read-G1RSharedManifest {
     if ($record.launcher.creation_time -is [DateTime]) {
         $record.launcher.creation_time = $record.launcher.creation_time.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'", [Globalization.CultureInfo]::InvariantCulture)
     }
+    $expectedArguments = if ($UseRecordedArguments) { $record.arguments } else { $Configuration.arguments }
+    $expectedCommandLine = '"' + $Configuration.python + '" ' + $expectedArguments
     if ($record.schema_version -ne 1 -or $record.owner -cne 'G1R_MCP_shared_server' -or
         $record.repository_root -ine $Configuration.root -or $record.server_script -ine $Configuration.script -or
-        $record.executable -ine $Configuration.base_python -or $record.arguments -cne $Configuration.arguments -or
-        $record.command_line -cne $Configuration.command_line -or
+        $record.executable -ine $Configuration.base_python -or $record.arguments -cne $expectedArguments -or
+        $record.command_line -cne $expectedCommandLine -or
         $record.host -cne $Configuration.host -or $record.port -ne $Configuration.port -or
         $record.native_port -ne $Configuration.native_port -or
         ($record.pid -isnot [int] -and $record.pid -isnot [long]) -or $record.pid -lt 1 -or $record.pid -gt [uint32]::MaxValue -or
         $record.creation_time -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{7}Z$' -or
-        $record.launcher.executable -ine $Configuration.python -or $record.launcher.command_line -cne $Configuration.command_line -or
+        $record.launcher.executable -ine $Configuration.python -or $record.launcher.command_line -cne $expectedCommandLine -or
         ($record.launcher.pid -isnot [int] -and $record.launcher.pid -isnot [long]) -or
         $record.launcher.pid -lt 1 -or $record.launcher.pid -gt [uint32]::MaxValue -or
         $record.launcher.creation_time -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{7}Z$' -or
@@ -288,7 +295,7 @@ function Invoke-G1RSharedLocked {
 
 if ($MyInvocation.InvocationName -ne '.') {
     try {
-        $configuration = Get-G1RSharedConfiguration $RepositoryRoot
+        $configuration = Get-G1RSharedConfiguration $RepositoryRoot $ModkitRoot $WorkspaceRoot $GameRoot
         $result = Invoke-G1RSharedLocked { Invoke-G1RSharedStart $configuration $StartupTimeoutSeconds }
         if ($Json) { $result | ConvertTo-Json -Depth 6 } else { $result }
     } catch {

@@ -1,3 +1,3 @@
-"""Local G1R MCP tools; the game channel is not implemented yet."""
+"""MCP tools for official Gothic 1 Remake mod development."""
 
-__version__ = "1.0.0-dev.116"
+__version__ = "1.0.0"

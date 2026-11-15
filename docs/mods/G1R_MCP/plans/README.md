@@ -5,7 +5,7 @@ Dev.112: `g1r_debug_database` получил полную runtime-базу: 5 26
 
 | Номер | Документ | Состояние |
 | --- | --- | --- |
-| PLAN-001 | [Активный план реализации](PLAN-001-active-implementation.md) | R18; 09.11.2026: Python116/native115, 64 инструмента, build 26394867. Explicit opt-in protection при shared default принята адресными unit/HTTP/bootstrap/catalog и SDK coverage24; status читается всеми, release/takeover явные. Обновление общего HTTP runtime до Python116 подтверждено через status/capabilities. Последняя общая Э8 — dev.114. PLAN активен по публичному release Э9 и указанным границам интерфейсов |
+| PLAN-001 | [Активный план реализации](PLAN-001-active-implementation.md) | R18; 15.11.2026: Python/native/helper 1.0.0, 64 инструмента; последняя игровая среда build 26394867. Локальный выпуск для GitHub подготовлен: native39/39, clean install57/57, WindowsPowerShell5 маршрут15checks и PowerShell7 отдельно; первичный Python и адресные повторы сохранены раздельно. Публикация не выполнялась. Shared default dev.115 и opt-in protection dev.116 сохраняются; PLAN активен по Э9 и указанным границам интерфейсов |
 
 Последний зарегистрированный номер: **PLAN-001**. Основной документ содержит текущую последовательность, развилки, статусы и краткую историю существенных редакций. Новые результаты уточняют его, а не создают конкурирующие копии плана.
 

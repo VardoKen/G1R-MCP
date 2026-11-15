@@ -91,19 +91,42 @@ class SharedMCPScriptsTests(unittest.TestCase):
             (fake_root / ".venv" / "Scripts" / "python.exe").write_bytes(b"isolated")
             (fake_root / "src" / "g1r_mcp").mkdir(parents=True)
             (fake_root / "src" / "g1r_mcp" / "server.py").write_bytes(b"isolated")
-            (fake_root.parent / "G1R-Modkit").mkdir()
+            custom_modkit = fake_root.parent / "custom Modkit"
+            custom_workspace = fake_root.parent / "custom workspace"
+            custom_game = fake_root.parent / "custom game"
+            for path in (custom_modkit, custom_workspace, custom_game):
+                path.mkdir()
             result = self.run_script(
+                "$defaultConfiguration=$configuration; "
+                "$configuration=Get-G1RSharedConfiguration " + quote(str(fake_root)) + " "
+                + quote(str(custom_modkit)) + " " + quote(str(custom_workspace)) + " "
+                + quote(str(custom_game)) + "; "
                 "$null=New-Item -ItemType Directory -Path $configuration.artifacts; "
                 "$record=[pscustomobject]@{schema_version=1;owner='G1R_MCP_shared_server';repository_root=$configuration.root;server_script=$configuration.script;host=$configuration.host;port=$configuration.port;native_port=$configuration.native_port;arguments=$configuration.arguments;command_line=$configuration.command_line;pid=456;creation_time='2026-10-31T00:00:00.0000000Z';executable=$configuration.base_python;launcher=[pscustomobject]@{pid=455;creation_time='2026-10-31T00:00:00.0000000Z';executable=$configuration.python;command_line=$configuration.command_line}}; Write-G1RSharedManifest $configuration $record; "
-                "function Open-G1RSharedProcess {$l=[pscustomobject]@{};$l|Add-Member ScriptMethod Dispose {};return $l}; "
+                "$loaded=Read-G1RSharedManifest $defaultConfiguration -UseRecordedArguments; "
+                "$mismatch=''; try {Read-G1RSharedManifest $defaultConfiguration} catch {$mismatch=$_.Exception.Message}; "
+                "function Open-G1RSharedProcess {param($Configuration,$Record,[switch]$ForTermination); "
+                "if($Record.command_line -cne $loaded.command_line){throw 'wrong_recorded_command'}; "
+                "$l=[pscustomobject]@{};$l|Add-Member ScriptMethod Dispose {};return $l}; "
                 "function Get-G1RSharedListeners {@([pscustomobject]@{LocalPort=27124;LocalAddress='127.0.0.1';OwningProcess=456})}; "
                 "function Start-Process {throw 'unexpected_duplicate'}; "
                 "function Stop-G1RCheckedProcess {param($Lease,$GraceMilliseconds,$ForceWaitMilliseconds,[switch]$AllowForce); if($null -eq $Lease -or -not $AllowForce){throw 'wrong_lease'};[pscustomobject]@{state='stopped';mode='forced'}}; "
-                "$first=Invoke-G1RSharedStart $configuration 1; $second=Invoke-G1RSharedStart $configuration 1; $stop=Invoke-G1RSharedStop $configuration; "
-                "@{first=$first.state;second=$second.state;stop=$stop.state;manifest_exists=(Test-Path -LiteralPath $configuration.manifest)} | ConvertTo-Json -Compress",
+                "$first=Invoke-G1RSharedStart $configuration 1; $second=Invoke-G1RSharedStart $configuration 1; "
+                "$stop=Invoke-G1RSharedStop $defaultConfiguration; "
+                "@{first=$first.state;second=$second.state;stop=$stop.state;"
+                "manifest_exists=(Test-Path -LiteralPath $configuration.manifest);"
+                "recorded_arguments=$loaded.arguments;configured_arguments=$configuration.arguments;"
+                "default_arguments=$defaultConfiguration.arguments;configuration_mismatch=$mismatch} | ConvertTo-Json -Compress",
                 fake_root=fake_root,
             )
-            self.assertEqual(result, {"first": "already_running", "second": "already_running", "stop": "stopped", "manifest_exists": False})
+            self.assertEqual({key: result[key] for key in ("first", "second", "stop", "manifest_exists")},
+                             {"first": "already_running", "second": "already_running", "stop": "stopped", "manifest_exists": False})
+            self.assertEqual(result["recorded_arguments"], result["configured_arguments"])
+            self.assertNotEqual(result["default_arguments"], result["configured_arguments"])
+            for flag, path in (("--modkit-root", custom_modkit), ("--workspace-root", custom_workspace),
+                               ("--game-root", custom_game)):
+                self.assertIn(flag + ' "' + str(path) + '"', result["configured_arguments"])
+            self.assertIn("shared_invalid_manifest", result["configuration_mismatch"])
 
     def test_real_venv_redirector_listener_is_tracked_and_both_owned_processes_stop(self):
         if not (ROOT / ".venv" / "Scripts" / "python.exe").exists():

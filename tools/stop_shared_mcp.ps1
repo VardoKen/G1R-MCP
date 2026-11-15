@@ -16,7 +16,7 @@ $ErrorActionPreference = 'Stop'
 
 function Invoke-G1RSharedStop {
     param($Configuration)
-    $record = Read-G1RSharedManifest $Configuration
+    $record = Read-G1RSharedManifest $Configuration -UseRecordedArguments
     if ($null -eq $record) {
         Assert-G1RSharedPort $Configuration @(Get-G1RSharedListeners $Configuration)
         Assert-G1RSharedNoUntrackedProcess $Configuration

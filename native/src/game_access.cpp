@@ -628,7 +628,7 @@ json GameAccess::status() const {
                               {"operation",active_job_->request.value("op",std::string{})},
                               {"state","running"}};
     }
-    return {{"version","1.0.0-dev.115"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
+    return {{"version","1.0.0"},{"native_route","standalone_in_process"},{"hook_installed",enabled_.load()},
             {"movieplayer",movieplayer_status({})},
             {"as_exception_capture",{{"hook_installed",enabled_.load()},{"source","observed_logging_entry"},
                 {"scope","current_thread_process_event"},{"historical_errors_available",false},{"stack_capture_available",enabled_.load()},{"stack_captured",false}}},

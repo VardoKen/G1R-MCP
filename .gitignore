@@ -1,6 +1,12 @@
 **/nppBackup/
 /artifacts/
-/build/
+/build/*
+!/build/native/
+/build/native/*
+!/build/native/Release/
+/build/native/Release/*
+!/build/native/Release/G1R_MCP.dll
+!/build/native/Release/g1r_mcp_loader.exe
 /.venv/
 **/__pycache__/
 /*.egg-info/

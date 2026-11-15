@@ -1,5 +1,21 @@
 # Проверки G1R MCP: локальные инструменты и нативный маршрут
 
+## Подготовка 1.0.0 для GitHub — 15.11.2026
+
+Python/server, native status и helper version согласованы как **1.0.0**, каталог содержит **64 инструмента**. Подготовлены файлы репозитория с устанавливаемым Python-сервером, готовыми DLL/loader, English-инструкциями и лицензиями. Это локальная подготовка для проверки оператором; публикация и новый игровой прогон не выполнялись. Исторические результаты dev.116/dev.115/dev.114 ниже не переименованы в релизные.
+
+| Проверка | Подтверждённый результат | Источник |
+| --- | --- | --- |
+| Native build и CTest | **39/39 PASS**, 9,54 с; canonical DLL/loader совпадают с результатом сборки | [CTest log](../../../artifacts/build-dev64/Testing/Temporary/LastTest.log) |
+| Полный разрешённый Python-прогон | Обнаружено 743, выбрано и выполнено **727**; **726 успешных**, 0 failures, 1 error, 0 skips, 280,934 с. Исключены 7 bundle- и 9 ZIP-generating тестов; безопасные dependency/descriptor/source-changed проверки оставлены | [Python log](../../../artifacts/1.0.0-python-tests.txt) |
+| Адресные проверки после исправлений | Shared scripts **5/5 PASS**, 12,967 с; helper package/probe после синхронизации версии **15/15 PASS**, 0,182 с. Это отдельные прогоны, не единый новый 727/727 PASS | [Python log](../../../artifacts/1.0.0-python-tests.txt) |
+| Чистая установка из staged checkout | **57/57 PASS**, 6,569 с: новый venv, `pip install .`, импорт из site-packages, 23 точных Python-модуля, 64 tools, status/capabilities/schema/source/package/recipe, собственные корни, prebuilt PE и лицензии/ссылки | [Install receipt](../../../artifacts/acceptance-1.0.0/install-acceptance.json) |
+| Пользовательская команда Windows PowerShell 5 | **15 checks PASS**: реальный launch-script, установленный HTTP-клиент, повторный запуск с `already_running` и теми же process IDs, остановка одного общего сервера и освобождение порта; HTTP-секция **11/11 PASS**. PowerShell 7 маршрут принят отдельно | [Launcher receipt](../../../artifacts/acceptance-1.0.0/launcher-install-acceptance.json), [Windows PowerShell 5 HTTP receipt](../../../artifacts/acceptance-1.0.0/launcher-windows-powershell-http.json), [PowerShell 7 receipt](../../../artifacts/acceptance-1.0.0/launcher-powershell7-acceptance.json) |
+
+Первичная Python-ошибка — timeout существующего теста real-venv redirector: дополнительная проверка префикса recorded arguments не принимала тестовый listener. После её удаления точная process identity сохраняется, пять связанных тестов прошли. Первые попытки install/launcher acceptance завершились ошибками собственного проверочного subprocess-adapter; пользовательские Windows PowerShell 5 и PowerShell 7 команды приняты отдельно, без требования PowerShell 7 и без изменения production-кода по этим попыткам. Первичные отчёты сохранены. Dirty helper descriptor не менялся: проверка пакета использовала committed descriptor в памяти. Финальная сверка helper/notices с staged index после обновления — **4/4 PASS** с нормализацией LF, [receipt](../../../artifacts/acceptance-1.0.0/final-refreshed-files.json).
+
+Поставочные бинарники: `G1R_MCP.dll` — **1 550 336 байт**, SHA-256 `c223e03b57a9f510696e47b3b508a2172f3072925c4e7a6170e1bf3d630b8ed2`; `g1r_mcp_loader.exe` — **64 512 байт**, SHA-256 `bdb692238c8d79c089a018cf284ed067802909cb8e362e31fc1f8051d0f30705`. Тестовые серверы завершены. Игра не запускалась, DLL в игру этим циклом не загружалась; прежняя live-приёмка остаётся доказательством своих версий и сценариев. Произвольная VM-компиляция/eval, общий delegate ingress, editor/cooking и native Steam-autoload не подтверждены выпускным номером.
+
 ## Явная protection — 09.11.2026, dev.116
 
 Python/server dev.116, native DLL dev.115. Новый контракт сохраняет shared default: acquire без protected_tools — информационная запись, явный список защищает только перечисленные MCP-операции от другого клиента. Status доступен всем; reason/owner/protected_tools видны, release и takeover явные, без PID prerequisite, TTL и автоматического приоритета. Owner — MCP-сессия; после disconnect protection сохраняется, новая сессия восстанавливает управление явным release/takeover. Уже допущенные операции не отменяются. Исторические результаты dev.115 ниже не считаются проверкой dev.116.

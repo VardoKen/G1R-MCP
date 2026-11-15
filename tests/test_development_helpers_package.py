@@ -1,7 +1,10 @@
 """Рабочий AS-пакет использует официальный формат и согласованный контракт без probe-состояния."""
+import io
 import re
 from pathlib import Path
+import subprocess
 import unittest
+from unittest.mock import patch
 
 from g1r_mcp.packages import validate_package
 
@@ -12,7 +15,20 @@ SCRIPT = ROOT / PACKAGE_RELATIVE / "Script/G1RMCPDevelopmentHelpers.as"
 
 class DevelopmentHelpersPackageTests(unittest.TestCase):
     def test_actual_package_validation_preserves_runtime_boundary(self):
-        result = validate_package(ROOT, PACKAGE_RELATIVE)
+        descriptor = ROOT / PACKAGE_RELATIVE / "GothicMod.json"
+        local_descriptor = descriptor.read_bytes()
+        committed = subprocess.run(["git", "show", "HEAD:" + PACKAGE_RELATIVE + "/GothicMod.json"],
+                                   cwd=ROOT, capture_output=True, check=True).stdout
+        original_open = Path.open
+
+        def open_committed(path, mode="r", *arguments, **keywords):
+            if path == descriptor and mode == "rb":
+                return io.BytesIO(committed)
+            return original_open(path, mode, *arguments, **keywords)
+
+        with patch.object(Path, "open", open_committed):
+            result = validate_package(ROOT, PACKAGE_RELATIVE)
+        self.assertEqual(descriptor.read_bytes(), local_descriptor)
         self.assertTrue(result["valid_structure"])
         self.assertEqual(result["metadata"]["name"], "G1RMCPDevelopmentHelpers")
         self.assertEqual(result["metadata"]["modVersion"], "1.0.0")
@@ -21,7 +37,7 @@ class DevelopmentHelpersPackageTests(unittest.TestCase):
         source = SCRIPT.read_text(encoding="utf-8")
         version = re.search(r'FString\s+GetHelperVersion\(\)\s*\{\s*return\s+"([^"]+)";', source)
         self.assertIsNotNone(version)
-        self.assertEqual(version.group(1), "1.0.0-dev.49")
+        self.assertEqual(version.group(1), "1.0.0")
 
     def test_public_helper_surface_and_world_guard(self):
         source = SCRIPT.read_text(encoding="utf-8")

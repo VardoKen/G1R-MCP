@@ -1,108 +1,34 @@
 # G1R MCP
 
-G1R MCP — инструмент **исследования, разработки и отладки официальных модов Gothic 1 Remake**: игровой API и исходники, объекты и состояние, наблюдения, игровые вызовы, скрипты, пакеты и диагностика. Цель — законченный инструмент с воспроизводимой установкой и готовностью к публичной поставке.
+G1R MCP 1.0.0 connects MCP clients to Gothic 1 Remake for researching, developing, and debugging official mods built with `GothicMod.json` and AngelScript.
 
-**Перенос пользовательских модов с UE4SS — промежуточный рубеж разработки, а не назначение инструмента и не критерий завершения проекта.**
+It provides tools to:
 
-Текущая разработка Python/server — **1.0.0-dev.116**, native DLL — **1.0.0-dev.115**, целевая публичная версия — **1.0.0**. [PLAN-001](docs/mods/G1R_MCP/plans/PLAN-001-active-implementation.md) остаётся активным: наличие 64 инструмента и успешные локальные тесты не означают выполнения всех его критериев.
+- Search Modkit source code and API declarations.
+- Create and edit mod packages, prepare ScriptPatches, and inspect compiler diagnostics.
+- Inspect game objects and reflected functions, read state, compare snapshots, and monitor selected properties.
+- Call supported reflected functions and use the AngelScript debugger.
+- Manage a development game session and load saves from the main menu.
 
-Доступ по умолчанию общий. В dev.116 `g1r_session_acquire(reason, protected_tools=[...])` явно защищает только перечисленные операции моста от другого MCP-клиента; без `protected_tools` запись остаётся информационной и не снимает protection. `g1r_session_status` всегда показывает причину, владельца и список. Любой клиент может явно снять protection через `g1r_session_release` либо заменить её через `g1r_session_acquire(..., takeover=true)` со своей причиной и списком. Автоматического включения, приоритета и TTL нет. [Контракт и восстановление после reconnect](docs/mods/G1R_MCP/local-tools.md#разграничение-параллельной-работы). Адресные проверки dev.116 прошли; обновление общего HTTP runtime до Python116 подтверждено через status/capabilities. Общие watches и результаты dev.115 ниже сохраняют свою версию.
+One local Streamable HTTP server serves all connected clients. Optional protection lets a client reserve selected operations while other work remains shared.
 
-Dev.115 принят адресно **08.11.2026**: общий доступ к watches и resume со старыми client metadata подтверждены [live-приёмкой](artifacts/dev115-cross-client-watch-live.json), своя игра закрыта. Затронутые session/HTTP/watch/bootstrap-проверки и native build прошли; CTest observations — 1/1 PASS. [Точные результаты и границы](docs/tests/G1R_MCP/README.md). Общая приёмка dev.114 ниже сохраняет свою версию; полного нового прогона dev.115 не было.
+## Requirements
 
-## Общая приёмка на 06.11.2026 — dev.114
+- Windows x64 and an installed Steam copy of Gothic 1 Remake.
+- Python 3.11 or later and the Microsoft Visual C++ x64 runtime.
+- The official [G1R Modkit](https://github.com/AlkimiaInteractive/G1R-Modkit).
+- An MCP client that supports Streamable HTTP.
 
-Python/server и native DLL — **1.0.0-dev.114**, **64 инструмента**, Steam build **26394867**. Общая live-приёмка принята: загрузка сохранения из главного меню до MainMap и готового персонажа (`BP_IsGameplayReady=true`), debugger breakpoint/stack/locals/evaluate `Sum` 0→1 после `step_over`/continue6/detach, **50/50 типизированных вызовов** и **10/10 итоговых проверок**. Перезагрузка marker 71→72→72→71, восстановление source/staging и закрытие своей игры подтверждены. [Границы проверок](docs/tests/G1R_MCP/README.md).
+## Included components
 
-Последняя принятая типизированная приёмка — Python/shared server и native DLL **dev.114**: **50/50 вызовов**, **10/10 проверок**, включая pure output FString-массивы с пустыми/Unicode/newline/дублирующимися значениями и смешанные scalar return/output. CTest — **39/39 PASS, 11,33 с**. Первичный полный Python-прогон: 740 тестов за 394,235 с, 730 успешных, 9 errors прежнего toolcount и 1 failure dirty helper. После актуализации девять затронутых методов прошли адресно; committed helper принят отдельно, dirty-файл сохранён. Это раздельные результаты, общий новый 740/740 PASS не заявляется. Текущая Э8 завершена в подтверждённом контракте; PLAN-001 остаётся открытым по публичному выпуску и указанным границам интерфейсов.
+The repository contains the Python MCP server, Windows launch tools, ready-to-use native DLL and loader in `build/native/Release/`, and an AngelScript development helper. The game and Modkit are obtained separately. No additional delivery archive is required.
 
-Dev.112: `g1r_debug_database` получил полную runtime-базу: 5 262 chunks, 20 151 types, 119 789 flat entries, 9 470 492 bytes, 1,394 с; settings type31/version5/float64=true, отдельного type33 не было. Общий cache принадлежит серверу; query не открывает TCP и работает после закрытия игры. Это raw debugger catalog, не доказательство UFunction-доступности или полного каталога собственных AS-пакетов. [Подтверждения](artifacts/dev112-debug-database-live-complete.json).
+## Getting started
 
+Follow the [installation guide](docs/install.md) to install the server, configure your paths, and connect your MCP client. Give an AI agent the [agent guide](docs/agents.md) for tool usage and the game development workflow.
 
-| Область | Что готово | Что ещё не завершено или не подтверждено |
-|---|---|---|
-| Подключение | Общий HTTP MCP-сервер, 64 инструмента; Codex подключён к одному серверу для всех чатов | Финальный публичный выпуск 1.0.0 |
-| Исходники и пакеты | Поиск API и исходников, точное чтение/редактирование файлов, проверка структуры и экспорт пакетов; локально проверено | Структурная проверка не подтверждает компиляцию и работу любого пакета. Editor/cooking ресурсов мостом не реализованы |
-| Объекты и состояние | Поиск и reflection, чтение свойств и вложенных DTO, массивов, set/map, snapshots/diff и watch. Есть игровые приёмки выбранных сценариев до dev.96 | Поддержка типов определяется реализацией; все возможные Unreal-типы и сигнатуры не покрыты |
-| Игровые действия | Типизированные вызовы существующих отражённых функций для поддержанных типов; выбранные вызовы и cleanup подтверждены в игре | Произвольное исполнение AngelScript (eval/VM) и универсальное подключение delegates не реализованы |
-| Диагностика и reload | Native compiler reports и ScriptPatches подтверждены прежними сериями; dev.114 подтвердил reload 71→72→72→71 и debugger breakpoint/stack/locals/evaluate `Sum`/step_over/continue/detach | Произвольная арифметика, `this`, step_in/step_out этим сценарием не подтверждены. Пустой compiler report не доказывает успешную компиляцию. Изменения классов/свойств/defaults требуют restart |
-| Сохранения | dev.114: загрузка из главного меню, Continue в окне несовпадения модов, завершение MoviePlayer и `loaded` с готовым персонажем MainMap | Gameplay reload без страниц главного меню этим маршрутом не подтверждён |
-| Приёмка | Э8 завершена: dev.114 live 50/50 typed и 10/10 checks; CTest 39/39; installed wheel 12 вызовов/9 checks; Python 730 исходных успешных + 9 адресных + committed helper | Первоначальный полный Python-прогон сохраняет ошибки; численный диапазон stdio dev.96 принят для последовательной development-работы и не является гарантией HTTP dev.114 |
-Runtime-комплект dev.114 структурно проверен: 84 payload-файла, Python/native dev.114. Установленный wheel dev.114 принят в отдельном окружении: 12 MCP-вызовов, 9/9 проверок, 64 инструмента, точное совпадение 23 Python-модулей с wheel, string-output metadata, внешний runtime-root и очистка проверочного сервера. Игра не запускалась, общий сервер не менялся. [Consumer dev.114](artifacts/dev114-wheel-installed-acceptance.json).
+The shared MCP endpoint is `http://127.0.0.1:27124/mcp`. Start with `g1r_status` and `g1r_capabilities` to verify the connection. These tools report the server and its capabilities; they do not start the game or confirm live game readiness.
 
-Численная оценка Э8 приняла измеренный dev.96 диапазон для последовательной разработки: 17 объектов/561 поле, снимки по 5 141 033 байта, строки по 300 000 символов; максимум задержки малых запросов 221,046 мс, объёмных — 1079,454 мс, потерь watches нет, конечная очередь пуста и cleanup подтверждён. Это историческая stdio-серия; текущая HTTP dev.114 имеет отдельную функциональную приёмку. CPU/FPS не измерялись, caps не вводятся. [Точные границы замеров](docs/tests/G1R_MCP/README.md).
+## License
 
-Игровой маршрут — общий MCP-сервер → локальный TCP → собственная `G1R_MCP.dll` → очередь игрового Tick → отражённый вызов. UE4SS для этого не используется. Создание нового чата не запускает новый shared-сервер.
-
-Wheel содержит Python-сервер; DLL, загрузчик, PowerShell-инструменты и development-helper находятся в отдельном runtime-комплекте, задаваемом через `--runtime-root`. Официальный AS-helper и внешний native runtime — разные компоненты поставки.
-
-[Подробная матрица возможностей](docs/mods/G1R_MCP/README.md), [этапы и остаток плана](docs/mods/G1R_MCP/plans/PLAN-001-active-implementation.md), [проверки с точными границами подтверждения](docs/tests/G1R_MCP/README.md). Старые результаты относятся к указанным версиям, а не автоматически к текущей разработке. В частности, общий результат dev.96 DTO-сценария содержит ошибку ожидания `Skillpoints`; подтверждены выбранные разделы и отдельная объёмная приёмка, а не полный PASS этого сценария.
-
-## Подключение MCP
-
-В текущей установке Codex используется общий адрес `http://127.0.0.1:27124/mcp`.
-
-Из корня подпроекта:
-
-```powershell
-uv sync --locked
-.\tools\start_shared_mcp.ps1 -Json
-```
-
-Повторный запуск использует уже работающий сервер. У текущего Windows-окружения могут быть два связанных процесса Python: загрузчик виртуального окружения и сервер. Эта пара общая для всех чатов. После перезагрузки Windows сервер запускается указанной командой; автозапуск этим скриптом не устанавливается.
-
-Начало работы через MCP: `g1r_status` → `g1r_capabilities`. Они проверяют сервер и каталог, но не живую игру. Для игрового состояния используется `g1r_native_status`; для нового development-сеанса — `g1r_development_recipe` и `g1r_development_processes`, затем необходимые операции запуска, загрузки DLL и проверки готовности. [Подробный маршрут и совместная работа](docs/mods/G1R_MCP/native-route.md).
-
-Отдельный stdio-клиент также поддерживается:
-
-```powershell
-.venv\Scripts\python.exe -B -m g1r_mcp.server `
-  --modkit-root '..\G1R-Modkit' `
-  --workspace-root '.' `
-  --runtime-root '.'
-```
-
-Этот режим запускает отдельный дочерний сервер и не является конфигурацией общего HTTP-подключения Codex. MCP-сервер сам по себе игру не запускает.
-
-## Работа с сохранениями
-
-Текущий маршрут начинается из главного меню игры и использует общий сервер. Загрузка из gameplay без страниц главного меню этим маршрутом не подтверждена:
-
-| Команда | Назначение |
-|---|---|
-| `g1r_save_list(profile_id=2)` | В главном меню выбирает профиль и возвращает `slot_name` существующих сохранений; файлы сохранений не изменяет |
-| `g1r_save_load(slot_name, profile_id=2, accept_mod_mismatch=true, timeout=120)` | Из главного меню один раз запрашивает загрузку, при разрешённом выборе публикует Continue и ожидает `BP_IsGameplayReady`; dev.114 подтвердил `loaded` с персонажем MainMap |
-| `g1r_save_status()` | Возвращает общий результат загрузки; после завершения вызова повторно проверяет текущий мир и готовность персонажа без повторной загрузки |
-| `g1r_modlist_dialog(action="status", process_id=null)` | Обнаруживает активное окно; `action="continue"` публикует Continue после свежего обнаружения |
-
-`profile_id=2` обозначает третий профиль. Обнаружение нативного окна выводит адреса из текущего машинного кода и не использует таблицу версий, SHA или фиксированные RVA. Предупреждение о несовпадении модов сохраняется в результате загрузки.
-
-## Сборка и внутренняя поставка
-
-Python **3.11+**, SDK **mcp 2.3.0**; зависимости фиксируются `uv.lock`. Python packaging нормализует текущий номер исходников `1.0.0-dev.113` до `1.0.0.dev113`; wheel и runtime-комплект dev.113 собраны и структурно проверены.
-
-В текущей рабочей базе для нативной разработки используется существующий incremental-каталог `artifacts/build-dev64`. Сборку DLL проводят одной группой после изменений, без повторного configure для каждого исправления. Сборка удерживаемой игрой DLL требует завершения соответствующей игровой сессии. Команды первоначальной сборки, загрузки и runtime-зависимости описаны в [нативном маршруте](docs/mods/G1R_MCP/native-route.md).
-
-`tools/prepare_bridge_bundle.py` подготавливает внутренний runtime-комплект с проверяемым manifest; `--verify-root` сверяет его содержимое без запуска игры. `tools/export_script_package.py` упаковывает официальный скриптовый пакет. Упаковка и структурная проверка не заменяют компиляцию и загрузку выбранного пакета игрой.
-
-ZIP-пакеты создаются и пересобираются ТОЛЬКО по прямой просьбе оператора. Просьба «подготовить релиз» включает ZIP-упаковку. Разработка, исправления, проверки и повышение `dev.N` сами по себе не разрешают создавать или пересобирать ZIP, включая промежуточные и диагностические пакеты.
-
-## Язык текстов инструмента
-
-По [языковому правилу проекта](../AGENTS.md#язык) комментарии исходников, нелокализованные ответы CLI/MCP, ошибки, логи, диагностика, описания инструментов и параметров, метаданные и документация поставки — только на английском. Общение с оператором и внутренняя рабочая документация — на русском. Полученные игровые данные и локализованные тексты сохраняют исходный язык.
-
-## Очистка локальных артефактов — 09.11.2026
-
-Перед копированием моста в Unreal Game Runtime MCP из `artifacts/` в проектную `.trash/G1R MCP/artifacts/` перенесены старые development-сеансы целиком, повторные пакеты замеров каталога MEGA Spawner, заменённые runtime-комплекты до dev.114, старые wheel и промежуточные native-сборки. Объём `artifacts/` уменьшен с 6 308 491 116 до 690 590 484 байт. Отчёты приёмок, текущие build/runtime, комплекты dev.114/dev.115, исходные исследовательские материалы и файлы работающего общего сервера сохранены. Код и механика создания сеансов не изменены.
-
-## Рабочая база и документация
-
-`G1R MCP/` — самостоятельный локальный Git-репозиторий, исключённый из родительского `G1R Mods`; это не Git-подмодуль. Правила проекта находятся в [AGENTS.md](../AGENTS.md). Клон официального Modkit расположен отдельно в `../G1R-Modkit` и не входит в поставку сервера.
-
-- [Назначение и архитектура](docs/mods/G1R_MCP/README.md).
-- [Локальные инструменты и рабочие пакеты](docs/mods/G1R_MCP/local-tools.md).
-- [Нативный маршрут, HTTP-подключение и ограничения](docs/mods/G1R_MCP/native-route.md).
-- [План реализации и индекс планов](docs/mods/G1R_MCP/plans/README.md).
-- [Источники исследования](docs/mods/G1R_MCP/references/README.md).
-- [Проверки](docs/tests/G1R_MCP/README.md).
-- [История завершённых задач](docs/mods/G1R_MCP/task-history/README.md).
+G1R MCP is licensed under the [MIT License](LICENSE). Third-party components retain their own licenses; see [third-party notices](THIRD_PARTY_NOTICES.md).
