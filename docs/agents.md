@@ -1,6 +1,6 @@
 # G1R MCP guide for AI agents
 
-G1R MCP 1.0.0 provides 64 MCP tools for researching, developing, and debugging official Gothic 1 Remake mods. Packages use `GothicMod.json`, AngelScript, and the official Modkit. An MCP client is the external application or host in which the AI agent runs and which connects to the G1R MCP server. This guide applies to any such host that supports Streamable HTTP. Human installation instructions are in [install.md](install.md).
+G1R MCP 1.0.0 provides 64 MCP tools for researching, developing, and debugging official Gothic 1 Remake mods. Packages use `GothicMod.json`, AngelScript, and the official [Modkit](https://github.com/AlkimiaInteractive/G1R-Modkit). An MCP client is the external application or host in which the AI agent runs and which connects to the G1R MCP server. This guide applies to any such host that supports Streamable HTTP. Human installation instructions are in [install.md](install.md).
 
 The [G1R MCP repository](https://github.com/VardoKen/G1R-MCP) includes all of the bridge's own components: the Python MCP server, native DLL and loader, AngelScript development helper, and launch tools. The MCP client is the agent's host application, rather than an additional bridge component to obtain from this repository.
 
@@ -79,9 +79,9 @@ Follow the operator's task and project rules. Tool availability, successful stru
 
 Use source and workspace tools independently of the game channel:
 
-1. Read `g1r_source_identity()` to identify the Modkit checkout. `g1r_verify_source_game()` compares local Modkit scripts with installed game files; matching bytes do not prove an API's runtime behavior.
-2. Find files with `g1r_find_source_files(query=...)`, then search literal source lines with `g1r_search_source(query=...)`. Their optional `relative_package` selects a workspace package instead of Modkit sources. Follow `next_offset` for subsequent pages.
-3. Use `g1r_list_source_types` and `g1r_list_source_functions` to inspect declarations and prototypes. These are lexical indexes, not runtime signature validation. Source paths are relative to Modkit and use forward slashes, such as `Script/...` or `Examples/.../Script/...`; obtain exact paths from search results.
+1. Read `g1r_source_identity()` to identify the [Modkit](https://github.com/AlkimiaInteractive/G1R-Modkit) checkout. `g1r_verify_source_game()` compares local [Modkit](https://github.com/AlkimiaInteractive/G1R-Modkit) scripts with installed game files; matching bytes do not prove an API's runtime behavior.
+2. Find files with `g1r_find_source_files(query=...)`, then search literal source lines with `g1r_search_source(query=...)`. Their optional `relative_package` selects a workspace package instead of [Modkit](https://github.com/AlkimiaInteractive/G1R-Modkit) sources. Follow `next_offset` for subsequent pages.
+3. Use `g1r_list_source_types` and `g1r_list_source_functions` to inspect declarations and prototypes. These are lexical indexes, not runtime signature validation. Source paths are relative to [Modkit](https://github.com/AlkimiaInteractive/G1R-Modkit) and use forward slashes, such as `Script/...` or `Examples/.../Script/...`; obtain exact paths from search results.
 4. Use `g1r_read_source_exact(relative_path=...)` when bytes, BOM, line endings, or SHA-256 matter. For workspace files use `g1r_read_package_file_exact(relative_path=..., file_path=...)`.
 5. Create or edit packages only within the selected workspace. `g1r_create_package` requires metadata fields `name`, `title`, `author`, and `modVersion`. Supported package components are `Script`, `ScriptPatches`, `Config`, `Content`, and `Story`.
 6. Replace a text file through `g1r_write_package_file(relative_path=..., file_path=..., content=..., expected_sha256=...)` using the hash just read. Omitting the hash creates a new file and does not permit overwriting an existing file. `g1r_build_script_patch(source_path=..., replacement_content=..., expected_source_sha256=...)` returns a verified unified diff without writing it.
@@ -127,7 +127,7 @@ For value inspection, `g1r_read_struct` and structure elements in `g1r_read_arra
 
 `g1r_snapshot(targets=[{"handle": "...", "properties": ["..."]}])` copies selected values on one Tick. `g1r_compare_snapshots(before=..., after=...)` compares caller-supplied copies without game access. Retain provenance and session identity when interpreting changes.
 
-Generic execution of arbitrary AngelScript source, an Unreal editor, asset cooking, and Steam Workshop publishing are not implemented by this bridge. `g1r_debug_evaluate` evaluates an expression in a debugger frame; it is a separate feature and can have effects. Follow the official Modkit workflow for cooking and publication. Capability pagination defaults are request sizes, not universal engine or API limits.
+Generic execution of arbitrary AngelScript source, an Unreal editor, asset cooking, and Steam Workshop publishing are not implemented by this bridge. `g1r_debug_evaluate` evaluates an expression in a debugger frame; it is a separate feature and can have effects. Follow the official [Modkit](https://github.com/AlkimiaInteractive/G1R-Modkit) workflow for cooking and publication. Capability pagination defaults are request sizes, not universal engine or API limits.
 
 ## Hot reload, debugger, saves, and loading
 

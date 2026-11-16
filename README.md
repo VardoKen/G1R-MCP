@@ -6,7 +6,7 @@ You work with your AI agent in an AI application. That application is called the
 
 It provides tools to:
 
-- Search Modkit source code and API declarations.
+- Search [Modkit](https://github.com/AlkimiaInteractive/G1R-Modkit) source code and API declarations.
 - Create and edit mod packages, prepare ScriptPatches, and inspect compiler diagnostics.
 - Inspect game objects and reflected functions, read state, compare snapshots, and monitor selected properties.
 - Call supported reflected functions and use the AngelScript debugger.
@@ -23,7 +23,7 @@ One local server serves all connected AI applications and chats through Streamab
 
 ## Included components
 
-The repository contains the Python MCP server and its game connection code, Windows launch tools, ready-to-use native DLL and loader in `build/native/Release/`, and an AngelScript development helper. The AI application, game, Modkit, Python, and Visual C++ runtime are external requirements. Installing the Python server also installs its Python dependencies. No additional bridge download or delivery archive is required.
+The repository contains the Python MCP server and its game connection code, Windows launch tools, ready-to-use native DLL and loader in `build/native/Release/`, and an AngelScript development helper. The AI application, game, [Modkit](https://github.com/AlkimiaInteractive/G1R-Modkit), Python, and Visual C++ runtime are external requirements. Installing the Python server also installs its Python dependencies. No additional bridge download or delivery archive is required.
 
 ## Getting started
 

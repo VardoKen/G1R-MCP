@@ -20,7 +20,7 @@ or enabling this package does not automatically load the DLL.
   and an AI application with support for local Streamable HTTP MCP connections.
 
 The supplied DLL and loader are ready to use. A C++ compiler and UE4SS are not
-required. The Python server, AI application, Modkit, and game are not included
+required. The Python server, AI application, [Modkit](https://github.com/AlkimiaInteractive/G1R-Modkit), and game are not included
 in this game component.
 
 ## Package location
@@ -72,8 +72,8 @@ These are example paths. Set all four roots to your own folders:
 
 | Root | Contents |
 |---|---|
-| `modkit-root` | The official Modkit, including `Script/` |
-| `workspace-root` | Your working mod packages, outside the game and Modkit |
+| `modkit-root` | The official [Modkit](https://github.com/AlkimiaInteractive/G1R-Modkit), including `Script/` |
+| `workspace-root` | Your working mod packages, outside the game and [Modkit](https://github.com/AlkimiaInteractive/G1R-Modkit) |
 | `game-root` | The installed game directory containing `G1R/` |
 | `runtime-root` | This installed package, containing `build/native/Release/` and `tools/` |
 

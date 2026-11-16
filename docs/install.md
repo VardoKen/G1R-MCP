@@ -12,7 +12,7 @@ The **MCP client** is the AI application in which you work with your agent. The 
 - Get the official [G1R Modkit repository](https://github.com/AlkimiaInteractive/G1R-Modkit). Keep its `Script/` directory and supporting files together.
 - Use an AI application with MCP support over Streamable HTTP, as described above.
 
-An internet connection is needed to install the Python dependencies. The game, Modkit, mod workspace, and G1R MCP repository can be in separate folders.
+An internet connection is needed to install the Python dependencies. The game, [Modkit](https://github.com/AlkimiaInteractive/G1R-Modkit), mod workspace, and G1R MCP repository can be in separate folders.
 
 ## 2. Get and install the server
 
@@ -40,7 +40,7 @@ Use the full path to each folder:
 
 | Parameter | Folder |
 | --- | --- |
-| `ModkitRoot` | The official Modkit root containing `Script/` |
+| `ModkitRoot` | The official [Modkit](https://github.com/AlkimiaInteractive/G1R-Modkit) root containing `Script/` |
 | `WorkspaceRoot` | Your working mod packages; create this folder if needed |
 | `GameRoot` | The installed `Gothic 1 Remake` root containing `G1R/` |
 
@@ -68,7 +68,7 @@ This address is local to the Windows computer running the server; your AI applic
 
 Ask your AI agent to call `g1r_status`, then `g1r_capabilities`, and check the reported version and configured folders. This verifies the server connection and available tools. Live game readiness is checked separately with `g1r_native_status` after the development game and bridge have been started.
 
-Give your AI agent [docs/agents.md](agents.md). It describes the tools, development launch, native loading, and optional protection for parallel work. Package development uses the official Modkit; this bridge does not use UE4SS.
+Give your AI agent [docs/agents.md](agents.md). It describes the tools, development launch, native loading, and optional protection for parallel work. Package development uses the official [Modkit](https://github.com/AlkimiaInteractive/G1R-Modkit); this bridge does not use UE4SS.
 
 ## Stop or update
 
